@@ -1,8 +1,5 @@
 """Base classes for declaring API methods."""
 
-import io
-import string
-import types
 from abc import ABC
 from collections.abc import Mapping
 from typing import (
@@ -10,16 +7,13 @@ from typing import (
     ClassVar,
     Final,
     TypeVar,
-    Union,
     cast,
-    get_args,
-    get_origin,
 )
-from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, PydanticUserError, TypeAdapter
 
 from ai_api.client.api.protocols import Query
+from ai_api.client.api.url.parse import encode_path_value, parse_path_params
 from ai_api.client.response.parse.buffered import BufferedResponseParser
 from ai_api.client.response.parse.protocols import (
     IResponseParser,
@@ -28,7 +22,13 @@ from ai_api.client.response.parse.protocols import (
 from ai_api.client.response.parse.sse import ServerSentEvent
 from ai_api.client.response.parse.stream import StreamResponseParser
 from ai_api.methods.enums import BodyFormat, ResponseFormat, ResponseMode
-from ai_api.types.files import InputFile, IOFile
+from ai_api.methods.resolve import (
+    has_one_shot_file,
+    is_mapping_type,
+    query_value,
+    resolve_response_type,
+    wrap_streams,
+)
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
     str: ResponseFormat.TEXT,
@@ -46,218 +46,34 @@ _EVENT_FORMATS: Final[frozenset[ResponseFormat]] = frozenset(
     {ResponseFormat.SSE, ResponseFormat.NDJSON}
 )
 
-_DOT_SEGMENTS: Final[frozenset[str]] = frozenset({".", ".."})
+_TYPE_BY_FORMAT: Final[dict[ResponseFormat, type[Any]]] = {
+    response_format: response_type
+    for response_type, response_format in _FORMAT_BY_TYPE.items()
+}
+
+_STREAM_TYPE_BY_FORMAT: Final[dict[ResponseFormat, type[Any]]] = {
+    ResponseFormat.BYTES: bytes,
+    ResponseFormat.TEXT: str,
+}
 
 
-def _parse_path_params(template: str) -> frozenset[str]:
-    """Extract the placeholder names of a request path template.
-
-    Args:
-        template: A path such as ``"/models/{model_id}"``. Literal braces
-            are written as ``{{`` and ``}}``.
-
-    Returns:
-        The placeholder names.
-
-    Raises:
-        ValueError: If the template is malformed or a placeholder is not
-            a plain name (``{}``, ``{a.b}``, ``{a[0]}``, ``{a:>5}`` and
-            ``{a!r}`` are rejected).
-    """
-    names: set[str] = set()
-
-    for _, name, spec, conversion in string.Formatter().parse(template):
-        if name is None:
-            continue
-
-        if not name.isidentifier() or spec or conversion:
-            raise ValueError(
-                f"Path placeholder {{{name}}} must be a plain field name"
-            )
-
-        names.add(name)
-
-    return frozenset(names)
-
-
-def _encode_path_value(name: str, value: Any, safe: str, raw: Any) -> str:
-    """Convert a path parameter to an escaped path segment.
+def _type_name(response_type: Any) -> str:
+    """Name a result or item type for error messages.
 
     Args:
-        name: The parameter name, for error messages.
-        value: The JSON-mode dump of the field value.
-        safe: Characters left unescaped, e.g. ``"/"``.
-        raw: The field value itself, for error messages.
+        response_type: A class or another generic argument.
 
     Returns:
-        The percent-encoded value.
-
-    Raises:
-        ValueError: If the value is ``None``, dumps to ``null`` (such as
-            NaN), is empty, or is a ``.``/``..`` segment, which would
-            change the request path.
+        The class name, ``None`` for ``NoneType`` and the ``repr`` of
+        anything else.
     """
-    if value is None:
-        if raw is not None:
-            raise ValueError(
-                f"Path parameter {name!r} has an unsafe value: {raw!r}"
-            )
+    if response_type is type(None):
+        return "None"
 
-        raise ValueError(f"Path parameter {name!r} is not set")
+    if isinstance(response_type, type):
+        return response_type.__name__
 
-    text = str(value).lower() if isinstance(value, bool) else str(value)
-    segments = text.split("/") if "/" in safe else [text]
-
-    if any(not segment or segment in _DOT_SEGMENTS for segment in segments):
-        raise ValueError(
-            f"Path parameter {name!r} has an unsafe value: {text!r}"
-        )
-
-    return quote(text, safe=safe)
-
-
-def _is_mapping_type(annotation: Any) -> bool:
-    """Check whether a field annotation allows mappings or models.
-
-    Args:
-        annotation: The annotation of a field, unions included.
-
-    Returns:
-        ``True`` if the annotation or a member of its union is a mapping
-        or a Pydantic model.
-    """
-    origin = get_origin(annotation)
-
-    if origin in {Union, types.UnionType}:
-        return any(_is_mapping_type(arg) for arg in get_args(annotation))
-
-    target = origin or annotation
-
-    return isinstance(target, type) and issubclass(
-        target, (Mapping, BaseModel)
-    )
-
-
-def _query_item(name: str, value: Any) -> str:
-    """Convert one dumped query value to a string.
-
-    Args:
-        name: The parameter name, for error messages.
-        value: A JSON-mode dump of the value.
-
-    Returns:
-        The value as a string; booleans as ``"true"``/``"false"``.
-
-    Raises:
-        TypeError: If the value is an object or a nested list.
-    """
-    if isinstance(value, (dict, list)):
-        raise TypeError(
-            f"Query parameter {name!r} must be a scalar or a list of scalars"
-        )
-
-    return str(value).lower() if isinstance(value, bool) else str(value)
-
-
-def _query_value(name: str, value: Any) -> str | list[str]:
-    """Convert a dumped query field to a string or a list of strings.
-
-    Args:
-        name: The parameter name, for error messages.
-        value: A JSON-mode dump of the field.
-
-    Returns:
-        A string, or a list of strings sent as repeated keys; ``None``
-        items are dropped.
-
-    Raises:
-        TypeError: If the value is an object or contains one.
-    """
-    if isinstance(value, list):
-        return [_query_item(name, item) for item in value if item is not None]
-
-    return _query_item(name, value)
-
-
-def _resolve_response_type(arg: Any) -> type[Any] | None:
-    """Turn a generic argument into a runtime class.
-
-    Args:
-        arg: The argument of ``BaseMethod[...]``.
-
-    Returns:
-        ``NoneType`` for ``None``, the class itself for classes and
-        ``None`` for anything else (type variables, unions, aliases).
-    """
-    if arg is None:
-        return type(None)
-
-    if isinstance(arg, type):
-        return arg
-
-    return None
-
-
-def _wrap_streams(value: Any) -> Any:
-    """Wrap raw binary streams into ``IOFile``, recursing into containers.
-
-    Args:
-        value: A field value of a method.
-
-    Returns:
-        The value with every binary stream replaced by an ``IOFile``;
-        the same object if it contains no streams.
-
-    Raises:
-        ValueError: If a text stream is found.
-    """
-    if isinstance(value, (io.BufferedIOBase, io.RawIOBase)):
-        return IOFile(value)
-
-    if isinstance(value, io.IOBase):
-        raise ValueError("Only binary streams can be uploaded")
-
-    if type(value) in {list, tuple}:
-        items = [_wrap_streams(item) for item in value]
-
-        if all(new is old for new, old in zip(items, value, strict=True)):
-            return value
-
-        return type(value)(items)
-
-    if type(value) is dict:
-        wrapped = {key: _wrap_streams(item) for key, item in value.items()}
-
-        if all(wrapped[key] is item for key, item in value.items()):
-            return value
-
-        return wrapped
-
-    return value
-
-
-def _has_one_shot_file(value: Any) -> bool:
-    """Check whether a value contains a file that can be read only once.
-
-    Args:
-        value: A method, model, container or field value.
-
-    Returns:
-        ``True`` if any nested ``InputFile`` is not reusable.
-    """
-    if isinstance(value, InputFile):
-        return not value.reusable
-
-    if isinstance(value, BaseModel):
-        return any(_has_one_shot_file(item) for _, item in value)
-
-    if isinstance(value, Mapping):
-        return any(_has_one_shot_file(item) for item in value.values())
-
-    if isinstance(value, (list, tuple)):
-        return any(_has_one_shot_file(item) for item in value)
-
-    return False
+    return repr(response_type)
 
 
 class BaseMethod[ResponseT](BaseModel, ABC):
@@ -345,7 +161,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         if template is not None:
             try:
-                params = _parse_path_params(template)
+                params = parse_path_params(template)
             except ValueError as exc:
                 raise TypeError(
                     f"{cls.__name__}: invalid __request_path__ "
@@ -386,7 +202,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             )
 
         for name in sorted(query):
-            if _is_mapping_type(cls.model_fields[name].annotation):
+            if is_mapping_type(cls.model_fields[name].annotation):
                 raise TypeError(
                     f"{cls.__name__}: query parameter {name!r} cannot be "
                     "a mapping or a model"
@@ -400,7 +216,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         if not args:
             return
 
-        response_type = _resolve_response_type(args[0])
+        response_type = resolve_response_type(args[0])
 
         if response_type is None:
             return
@@ -435,7 +251,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             ValueError: If a field holds a text stream.
         """
         for name, value in self:
-            wrapped = _wrap_streams(value)
+            wrapped = wrap_streams(value)
 
             if wrapped is not value:
                 setattr(self, name, wrapped)
@@ -494,7 +310,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         return self.__request_path__.format_map(
             {
-                name: _encode_path_value(
+                name: encode_path_value(
                     name,
                     values.get(name),
                     self.__path_safe__,
@@ -521,7 +337,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         ``False`` when ``__retryable__`` is not set or the request carries
         a file that can be read only once.
         """
-        return self.__retryable__ and not _has_one_shot_file(self)
+        return self.__retryable__ and not has_one_shot_file(self)
 
     @property
     def response_format(self) -> ResponseFormat:
@@ -560,7 +376,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             mode="json",
         )
 
-        return {key: _query_value(key, value) for key, value in data.items()}
+        return {key: query_value(key, value) for key, value in data.items()}
 
     def get_body_map(self) -> Mapping[str, Any]:
         """Return the body fields.
@@ -616,6 +432,50 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
             return ResponseFormat.JSON
 
         return super()._infer_response_format(response_type)
+
+    @classmethod
+    def _validate_response_type(cls) -> None:
+        """Check that the default parser produces the result class.
+
+        TEXT gives ``str``, BYTES ``bytes``, NONE ``None`` and JSON a
+        model, so an explicit format that contradicts the generic argument
+        would return a value of another type than the one declared.
+
+        Raises:
+            TypeError: If ``__returning__`` is known,
+                ``__response_parser__`` is not set explicitly and the
+                format is a stream format or produces another type.
+        """
+        returning = cls.__returning__
+
+        # Unknown for type variables and generic aliases, and for
+        # BaseAPIMethod itself, defined before _BASE_METHODS.
+        if returning is None or cls._defines("__response_parser__"):
+            return
+
+        response_format = cls.__response_format__
+
+        if response_format in _EVENT_FORMATS:
+            raise TypeError(
+                f"{cls.__name__}: {response_format.name} responses can "
+                "only be streamed; subclass BaseStreamMethod instead"
+            )
+
+        if response_format is ResponseFormat.JSON:
+            produced = "a model"
+            valid = issubclass(returning, BaseModel)
+        else:
+            expected = _TYPE_BY_FORMAT[response_format]
+            produced = _type_name(expected)
+            valid = returning is expected
+
+        if not valid:
+            raise TypeError(
+                f"{cls.__name__}: {response_format.name} responses are "
+                f"parsed into {produced}, not {_type_name(returning)}; "
+                "change the generic argument or the format, or set "
+                "__response_parser__ explicitly"
+            )
 
     @property
     def response_parser(self) -> IResponseParser:
@@ -690,9 +550,11 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
 
         Raises:
             TypeError: If the default parser cannot produce the item type
-                and neither the format nor the parser is set explicitly,
-                or if Pydantic cannot validate the item type of an SSE or
-                NDJSON stream.
+                and neither the format nor the parser is set explicitly;
+                if, without an explicit parser, the format is not a stream
+                format or BYTES/TEXT is set for items other than
+                ``bytes``/``str``; or if Pydantic cannot validate the item
+                type of an SSE or NDJSON stream.
         """
         item = cls.__stream_item__
 
@@ -715,6 +577,9 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
                 "NDJSON) or __stream_parser__ explicitly"
             )
 
+        if not cls._defines("__stream_parser__"):
+            cls._validate_stream_format(item)
+
         if cls.__response_format__ not in _EVENT_FORMATS or (
             item is ServerSentEvent
             and cls.__response_format__ is ResponseFormat.SSE
@@ -729,6 +594,41 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
                 f"{cls.__name__}: cannot validate stream items of type "
                 f"{item!r}: {exc}"
             ) from exc
+
+    @classmethod
+    def _validate_stream_format(cls, item: Any) -> None:
+        """Check that the default parser yields items of the item type.
+
+        SSE and NDJSON validate each event into any item type; BYTES
+        yields only ``bytes`` and TEXT only ``str``.
+
+        Args:
+            item: The generic argument as written.
+
+        Raises:
+            TypeError: If the format is not a stream format, or BYTES or
+                TEXT is set for another item type.
+        """
+        response_format = cls.__response_format__
+
+        if response_format in _EVENT_FORMATS:
+            return
+
+        expected = _STREAM_TYPE_BY_FORMAT.get(response_format)
+
+        if expected is None:
+            raise TypeError(
+                f"{cls.__name__}: {response_format.name} is not a stream "
+                "format; use BYTES, TEXT, SSE or NDJSON"
+            )
+
+        if item is not expected:
+            raise TypeError(
+                f"{cls.__name__}: {response_format.name} streams yield "
+                f"{_type_name(expected)} items, not {_type_name(item)}; "
+                "change the generic argument or the format, or set "
+                "__stream_parser__ explicitly"
+            )
 
     @property
     def stream_parser(self) -> IStreamParser:

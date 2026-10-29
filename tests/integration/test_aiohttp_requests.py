@@ -18,7 +18,7 @@ from pytest_mock import MockerFixture
 from yarl import URL
 
 from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
 from ai_api.client.exceptions.http import (
     NotFoundError,
     RateLimitError,

@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Protocol
 
-from ai_api.client.exceptions.errror_resolver.protocols import (
+from ai_api.client.exceptions.error_resolver.protocols import (
     IErrorResolver,
 )
 from ai_api.client.response.base import BufferedResponse

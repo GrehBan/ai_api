@@ -1,7 +1,8 @@
 """The object returned to callers of ``session.stream()``."""
 
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Self
 
 import aiofiles
@@ -104,3 +105,46 @@ class Stream[T]:
                 written += len(chunk)
 
         return written
+
+
+@asynccontextmanager
+async def map_stream[T, R](
+    source: AbstractAsyncContextManager[Stream[T]],
+    convert: Callable[[T], R],
+) -> AsyncGenerator[Stream[R]]:
+    """Open a stream and convert each of its items.
+
+    Meant for adapters that turn a provider's stream into another item
+    type. On exit, including ``break`` and exceptions, the converted
+    stream is closed first and the source after it; iterating the result
+    after the block raises ``RuntimeError``.
+
+    Args:
+        source: The stream to open, e.g. ``session.stream(method)``.
+        convert: Turns one source item into one result item.
+
+    Yields:
+        A stream of converted items.
+
+    Example:
+        >>> async with map_stream(session.stream(Deltas()), to_event) as s:
+        ...     async for event in s:
+        ...         handle(event)
+    """
+    async with source as stream:
+
+        async def items() -> AsyncGenerator[R]:
+            """Convert the source items one by one.
+
+            Yields:
+                The converted items.
+            """
+            async for item in stream:
+                yield convert(item)
+
+        mapped = Stream(items())
+
+        try:
+            yield mapped
+        finally:
+            await mapped.aclose()

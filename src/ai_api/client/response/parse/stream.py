@@ -6,8 +6,8 @@ from typing import Any, Final, cast
 
 from pydantic import TypeAdapter
 
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.errror_resolver.protocols import (
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.protocols import (
     IErrorResolver,
 )
 from ai_api.client.exceptions.http import APIError

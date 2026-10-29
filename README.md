@@ -4,7 +4,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 
 You describe each API call as a small declarative class. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming.
 
-> **Status: pre-alpha (0.0.3).** The core abstractions are in place, but the public API may still change without notice. There are no ready-made provider clients yet. See [Limitations](#limitations-and-roadmap).
+> **Status: pre-alpha (0.0.4).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` sets up the connection to OpenAI, but there are no ready-made OpenAI methods yet. See [Limitations](#limitations-and-roadmap).
 
 ## Features
 
@@ -13,6 +13,7 @@ You describe each API call as a small declarative class. The library sends it ov
 - **File uploads.** Upload from bytes, a path on disk, an open binary stream or an async iterator. Each retry resends the full content.
 - **Retries.** Transient failures are retried with exponential backoff and jitter, and `Retry-After` is honored up to a cap.
 - **Structured errors.** One exception class per HTTP status, plus transport errors. Each error carries the provider error code, request id and a `transient` flag.
+- **Provider clients.** `OpenAIClient("sk-...")` builds a session with OpenAI's URL, authentication and error mapping; `BaseClient` and `SessionFactory` are the base for other providers.
 - **Pluggable parts.** Sessions depend on protocols, so the API, authentication, error mapping, headers and JSON codec can each be replaced.
 
 ## Installation
@@ -40,7 +41,7 @@ from yarl import URL
 
 from ai_api.client.api.protocols import Query
 from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
 from ai_api.client.session.aiohttp import AiohttpSession
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.methods.enums import BodyFormat
@@ -133,7 +134,7 @@ The generic argument sets both the result type and the response format:
 | `BaseAPIMethod[bytes]` | `bytes` | Raw body |
 | `BaseAPIMethod[None]` | `None` | Empty body expected |
 
-Setting `__response_format__` explicitly, in the method or in an intermediate base class, overrides the inferred value.
+Setting `__response_format__` explicitly, in the method or in an intermediate base class, overrides the inferred value. It must still produce the declared type: `TEXT` gives `str`, `BYTES` gives `bytes`, `NONE` gives `None` and `JSON` gives a model, while `SSE` and `NDJSON` are for stream methods only. A format that contradicts the generic argument, such as `BaseAPIMethod[SomeModel]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__response_parser__`.
 
 Query parameters are listed in `__request_query__`:
 
@@ -266,6 +267,7 @@ async with session.stream(Generate(prompt="Hi")) as stream:
 - **Cleanup.** The connection is released when the block exits, including on `break` or an exception. Iterating the stream after the block, even through an iterator taken inside it, raises `RuntimeError`.
 - **Text decoding.** It is incremental, so a multi-byte character split between two chunks still decodes correctly. A charset that is not a text encoding (`base64`, `zlib`) raises `APIResponseError`.
 - **Type safety.** Passing a stream method to `send_request`, or a buffered method to `stream`, is a type error.
+- **Format and item type.** `BYTES` streams yield `bytes` and `TEXT` streams yield `str`, so an explicit `__response_format__` that contradicts the generic argument, such as `BaseStreamMethod[str]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`.
 
 ### Events: SSE and NDJSON
 
@@ -369,7 +371,7 @@ Error responses are mapped by an error resolver. `BaseErrorResolver` reads the c
 
 ```python
 from ai_api.client.exceptions.http import APIError, QuotaExceededError
-from ai_api.providers.enums import Provider
+from ai_api.enums import Provider
 
 
 class ExampleErrorResolver(BaseErrorResolver):
@@ -415,34 +417,56 @@ class ExampleErrorResolver(BaseErrorResolver):
 | `max_body_size` | `None` | Largest buffered response or error body, in bytes; streamed bodies are not limited |
 | `trust_env` | `False` | Use proxy settings and `.netrc` from the environment |
 | `follow_redirects` | `False` | Follow redirects within the origin of the request |
-| `loop` | running loop | Event loop the session is bound to |
+| `loop` | `None` | Event loop the session is bound to; `None` binds the loop of its first use |
 
 The authentication header is produced on every request, so an `IAuth` that rotates its token takes effect at once.
 
 Redirects are not followed by default: API providers do not redirect, and aiohttp strips only `Authorization` on a redirect to another host, so a key in `x-api-key` or in the default headers would leak there. A redirect raises `APIRedirectError`. With `follow_redirects=True`, redirects within the same origin (scheme, host and port) are followed; one to another origin still raises `APIRedirectError` before anything is sent there.
 
-A session is bound to one event loop: the loop running when it is created, or the one passed as `loop=`. Create it inside a coroutine (for example, in `main()`); created outside one, it raises `RuntimeError`, and so does using or closing it from another loop (such as a second `asyncio.run`). Close it before its loop ends, ideally with `async with`.
+A session is bound to one event loop: the one passed as `loop=`, or else the loop of its first request (or `async with`). It can be created anywhere, even at module level, but using or closing it from another loop (such as a second `asyncio.run`) raises `RuntimeError`. The `session.loop` property only reports the bound loop (`None` before first use) and never binds one. Close the session before its loop ends, ideally with `async with`.
 
 Long SSE or NDJSON lines can be limited with `StreamResponseParser(max_line_size=...)`, and the data of one SSE event with `max_event_size=...`, set as a method's `__stream_parser__`.
 
 Timeouts are `aiohttp.ClientTimeout` objects. The default `timeout` is longer than aiohttp's 5 minutes, because long model generations exceed that.
+
+## Provider clients
+
+`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 with the code `insufficient_quota` into a `QuotaExceededError` that is not retried. The client owns its session, so close it, ideally with `async with`:
+
+```python
+from ai_api.providers.openai.client.openai import OpenAIClient
+
+
+async def list_models() -> ModelList:
+    async with OpenAIClient("sk-...") as client:
+        return await client.send_request(ListModels())
+```
+
+- **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` with the generic `BaseErrorResolver`, or with authentication outside the `Authorization` header, gets a `UserWarning`. `session_factory(token, max_body_size=...)` from the same module builds a session with OpenAI's settings and your own options; type checkers check those options against `AiohttpSession`.
+- **Other providers.** Subclass `BaseClient`, which delegates `send_request`, `stream`, `close` and `async with` to its session, and build the session with a `SessionFactory` (`client/factory/`). `BaseClient` is generic in the session type: `BaseClient(AiohttpSession(...)).session` is typed as `AiohttpSession`, while `OpenAIClient`, which accepts any session, is a `BaseClient[ISession]`.
 
 ## Project layout
 
 ```text
 src/ai_api/
 ├── client/
-│   ├── api/            IAPI: base URL and URL building
+│   ├── base.py         BaseClient; IClient in protocols.py
+│   ├── factory/        SessionFactory; validators.py checks client arguments
+│   ├── resources/      resources and use cases over shared types
+│   ├── api/            IAPI: base URL, URL building, path templates
 │   ├── auth/           BearerAuth, APIKeyAuth
 │   ├── exceptions/     HTTP and transport errors, error resolvers
 │   ├── headers/        default headers
-│   ├── response/       BufferedResponse, Stream and the parsers
+│   ├── response/       BufferedResponse, Stream, map_stream, parsers
 │   ├── retry/          retry condition and backoff
 │   ├── serialization/  JSON codec, body value normalization
 │   └── session/        BaseSession, AiohttpSession, body builders
 ├── methods/            BaseAPIMethod, BaseStreamMethod, protocols, enums
-├── providers/          provider identifiers
-└── types/              BaseAPIType, InputFile and its subclasses
+├── providers/
+│   └── openai/         OpenAIClient, OPENAI_API, OpenAIErrorResolver
+├── types/              BaseAPIType, InputFile; requests/ and responses/
+│                       hold the shared GenerationRequest/Response, events
+└── enums.py            Provider
 ```
 
 `BaseSession` holds the logic that doesn't depend on the HTTP client: retries, error mapping and parsing. A transport such as `AiohttpSession` implements only `_execute` (send the request and read the whole body), `_open_stream` (send the request and leave the body unread) and `close`.
@@ -466,7 +490,8 @@ The code uses Google-style docstrings and PEP 695 generics. pyright is configure
 
 - Streams are not resumed: SSE `id` and `retry` are parsed, but a dropped stream is not reconnected with `Last-Event-ID`.
 - There is no raw binary request body (an upload without multipart).
-- There are no provider clients (OpenAI, Anthropic) yet, only the building blocks.
+- `OpenAIClient` only sets up the connection: there are no OpenAI method classes yet, and no Anthropic client.
+- Resources and use cases (`client/resources/`) and the shared request, response and event types (`types/requests/`, `types/responses/`) are the base of a provider-neutral API; no provider implements them yet.
 
 ## License
 

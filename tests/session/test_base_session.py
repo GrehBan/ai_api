@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 from tenacity import RetryCallState
 
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.errror_resolver.protocols import (
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.protocols import (
     IErrorResolver,
 )
 from ai_api.client.exceptions.http import (
@@ -24,6 +24,7 @@ from ai_api.client.exceptions.transport import (
     APITLSError,
 )
 from ai_api.client.response.base import BufferedResponse
+from ai_api.client.response.parse.stream import StreamResponseParser
 from ai_api.client.response.protocols import IStreamResponse
 from ai_api.client.serialization.json import JsonLoads, loads
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
@@ -508,7 +509,10 @@ async def test_exception_in_block_closes_and_propagates() -> None:
 async def test_unsupported_format_still_closes_response() -> None:
     response = FakeStreamResponse([b"x"])
     transport = FakeTransport(stream_responses=[response])
-    method = stream_method(__response_format__=ResponseFormat.JSON)
+    method = stream_method(
+        __response_format__=ResponseFormat.JSON,
+        __stream_parser__=StreamResponseParser(),
+    )
 
     with pytest.raises(ValueError, match="Unsupported stream"):
         async with transport.stream(method):

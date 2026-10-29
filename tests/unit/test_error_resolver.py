@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from multidict import CIMultiDict
 
-from ai_api.client.exceptions.errror_resolver.base import (
+from ai_api.client.exceptions.error_resolver.base import (
     BaseErrorResolver,
     get_header,
     optional_str,
@@ -20,7 +20,7 @@ from ai_api.client.exceptions.http import (
     QuotaExceededError,
     RateLimitError,
 )
-from ai_api.providers.enums import Provider
+from ai_api.enums import Provider
 from tests.conftest import NOW
 
 

@@ -200,7 +200,7 @@ def test_error_resolver_protocols_import_in_fresh_interpreter() -> None:
         [
             sys.executable,
             "-c",
-            "import ai_api.client.exceptions.errror_resolver.protocols",
+            "import ai_api.client.exceptions.error_resolver.protocols",
         ],
         capture_output=True,
         text=True,

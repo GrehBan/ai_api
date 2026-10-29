@@ -140,8 +140,14 @@ def test_custom_decoder_errors_propagate() -> None:
     ids=["generic-alias", "not-a-model"],
 )
 def test_json_without_model_is_rejected(argument: Any) -> None:
+    # An explicit parser skips the class-definition check, so the parser's
+    # own guard is reached.
     with pytest.raises(TypeError, match="requires a response model"):
-        parse(argument, b"[1]")
+        parse(
+            argument,
+            b"[1]",
+            __response_parser__=BufferedResponseParser(),
+        )
 
 
 def test_text_uses_response_charset() -> None:
@@ -190,4 +196,9 @@ def test_stream_formats_are_unsupported(
     response_format: ResponseFormat,
 ) -> None:
     with pytest.raises(ValueError, match="Unsupported buffered"):
-        parse(bytes, b"", __response_format__=response_format)
+        parse(
+            bytes,
+            b"",
+            __response_format__=response_format,
+            __response_parser__=BufferedResponseParser(),
+        )

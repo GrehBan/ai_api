@@ -8,7 +8,7 @@ from http import HTTPStatus
 from typing import Any, ClassVar
 
 from ai_api.client.exceptions.http import HTTP_ERRORS, APIError
-from ai_api.providers.enums import Provider
+from ai_api.enums import Provider
 
 
 def optional_str(value: Any) -> str | None:

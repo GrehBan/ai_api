@@ -1,4 +1,4 @@
-"""Identifiers of the supported API providers."""
+"""Identifiers shared by all layers: the supported API providers."""
 
 from enum import StrEnum, unique
 

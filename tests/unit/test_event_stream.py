@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import Field, ValidationError
 
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
 from ai_api.client.exceptions.http import APIError
 from ai_api.client.exceptions.transport import APIResponseError
 from ai_api.client.response.parse.sse import ServerSentEvent

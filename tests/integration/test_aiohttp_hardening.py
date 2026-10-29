@@ -18,7 +18,7 @@ from yarl import URL
 
 from ai_api.client.auth.api_key import APIKeyAuth
 from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
 from ai_api.client.exceptions.http import ServiceUnavailableError
 from ai_api.client.exceptions.transport import (
     APIRedirectError,
@@ -27,6 +27,7 @@ from ai_api.client.exceptions.transport import (
 )
 from ai_api.client.headers.headers import Headers
 from ai_api.client.session.aiohttp import AiohttpSession
+from ai_api.client.session.loop import bind_loop
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.methods.enums import BodyFormat
 from ai_api.types.files import IOFile, PathFile, StreamFile
@@ -446,9 +447,74 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_session_outside_a_coroutine_is_an_error() -> None:
-    with pytest.raises(RuntimeError, match="no running event loop"):
-        make_session(LocalAPI(URL("http://127.0.0.1/")))
+def test_session_outside_a_coroutine_binds_on_first_use() -> None:
+    port = free_port()
+    session = make_session(LocalAPI(URL(f"http://127.0.0.1:{port}/")))
+
+    assert session.loop is None
+
+    async def pong(_: web.Request) -> web.Response:
+        return web.Response(body=b"pong")
+
+    async def run_once() -> tuple[bytes, asyncio.AbstractEventLoop | None]:
+        app = web.Application()
+        app.router.add_get("/v1/ping", pong)
+
+        async with TestServer(app, port=port), session:
+            return await session.send_request(Ping()), session.loop
+
+    loop = asyncio.new_event_loop()
+
+    try:
+        body, bound = loop.run_until_complete(run_once())
+    finally:
+        loop.close()
+
+    assert body == b"pong"
+    assert bound is loop
+    assert session.loop is loop
+
+
+def test_reading_the_loop_does_not_bind_it() -> None:
+    port = free_port()
+    session = make_session(LocalAPI(URL(f"http://127.0.0.1:{port}/")))
+
+    async def peek() -> asyncio.AbstractEventLoop | None:
+        return session.loop
+
+    assert asyncio.run(peek()) is None
+
+    async def pong(_: web.Request) -> web.Response:
+        return web.Response(body=b"pong")
+
+    async def run_once() -> bytes:
+        app = web.Application()
+        app.router.add_get("/v1/ping", pong)
+
+        async with TestServer(app, port=port), session:
+            return await session.send_request(Ping())
+
+    # A second loop can still use the session: peeking bound nothing.
+    assert asyncio.run(run_once()) == b"pong"
+
+
+def test_bind_loop_outside_a_coroutine_is_an_error() -> None:
+    with pytest.raises(RuntimeError, match="^Owner can only be used inside"):
+        bind_loop(None, "Owner")
+
+
+async def test_bind_loop_binds_and_checks_the_running_loop() -> None:
+    running = asyncio.get_running_loop()
+    other = asyncio.new_event_loop()
+
+    try:
+        assert bind_loop(None, "Owner") is running
+        assert bind_loop(running, "Owner") is running
+
+        with pytest.raises(RuntimeError, match="^Owner is bound to another"):
+            bind_loop(other, "Owner")
+    finally:
+        other.close()
 
 
 def test_session_from_another_loop_is_an_error() -> None:
@@ -458,9 +524,11 @@ def test_session_from_another_loop_is_an_error() -> None:
 
     session = asyncio.run(create())
 
-    for use in (session.send_request(Ping()), session.close()):
-        with pytest.raises(RuntimeError, match="another event loop"):
-            asyncio.run(use)
+    with pytest.raises(RuntimeError, match="another event loop"):
+        asyncio.run(session.send_request(Ping()))
+
+    with pytest.raises(RuntimeError, match="another event loop"):
+        asyncio.run(session.close())
 
 
 def test_session_bound_to_an_explicit_loop() -> None:
