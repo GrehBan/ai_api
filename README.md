@@ -4,7 +4,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 
 You describe each API call as a small declarative class. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming.
 
-> **Status: pre-alpha (0.0.2).** The core abstractions are in place, but the public API may still change without notice. There are no ready-made provider clients yet. See [Limitations](#limitations-and-roadmap).
+> **Status: pre-alpha (0.0.3).** The core abstractions are in place, but the public API may still change without notice. There are no ready-made provider clients yet. See [Limitations](#limitations-and-roadmap).
 
 ## Features
 
