@@ -1,6 +1,7 @@
 """Block H2: the stream parser and ``Stream``."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ import pytest
 
 from ai_api.client.exceptions.transport import APIResponseError
 from ai_api.client.response.parse.stream import StreamResponseParser
-from ai_api.client.response.stream import Stream
+from ai_api.client.response.stream import Stream, map_stream
 from ai_api.methods.base import BaseStreamMethod
 from ai_api.methods.enums import ResponseFormat
 from tests.conftest import FakeStreamResponse, make_method
@@ -123,8 +124,14 @@ async def test_text_decoding_errors(chunks: list[bytes]) -> None:
 def test_unsupported_format_fails_on_parse_call(
     response_format: ResponseFormat,
 ) -> None:
+    # An explicit parser skips the class-definition check.
     with pytest.raises(ValueError, match="Unsupported stream"):
-        parse(bytes, [b"x"], __response_format__=response_format)
+        parse(
+            bytes,
+            [b"x"],
+            __response_format__=response_format,
+            __stream_parser__=StreamResponseParser(),
+        )
 
 
 async def test_stream_iterates_items() -> None:
@@ -217,3 +224,88 @@ async def test_stream_save_accepts_str_path(tmp_path: Path) -> None:
 
     assert await Stream(parse(bytes, [b"x"])).save(str(target)) == 1
     assert target.read_bytes() == b"x"
+
+
+class Source:
+    """A source stream that records when its parts are closed."""
+
+    def __init__(self, items: list[int]) -> None:
+        self.items = items
+        self.log: list[str] = []
+
+    async def generate(self) -> AsyncGenerator[int]:
+        try:
+            for item in self.items:
+                yield item
+        finally:
+            self.log.append("source items closed")
+
+    @asynccontextmanager
+    async def open(self) -> AsyncGenerator[Stream[int]]:
+        stream = Stream(self.generate())
+
+        try:
+            yield stream
+        finally:
+            await stream.aclose()
+            self.log.append("source closed")
+
+
+async def test_map_stream_converts_every_item() -> None:
+    source = Source([1, 2, 3])
+
+    async with map_stream(source.open(), str) as stream:
+        assert await collect(stream) == ["1", "2", "3"]
+
+    assert source.log == ["source items closed", "source closed"]
+
+
+async def test_map_stream_closes_both_layers_on_break() -> None:
+    source = Source([1, 2, 3])
+    log = source.log
+
+    def convert(item: int) -> int:
+        log.append(f"item {item}")
+        return item * 10
+
+    async with map_stream(source.open(), convert) as stream:
+        async for item in stream:
+            assert item == 10
+            break
+
+        log.append("block ends")
+
+    # The converted stream is closed before the source, inside the block.
+    assert log == [
+        "item 1",
+        "block ends",
+        "source items closed",
+        "source closed",
+    ]
+
+
+async def test_map_stream_closes_both_layers_on_error() -> None:
+    source = Source([1, 2])
+
+    def convert(item: int) -> int:
+        if item == 2:
+            raise ValueError("bad item")
+
+        return item
+
+    with pytest.raises(ValueError, match="bad item"):
+        async with map_stream(source.open(), convert) as stream:
+            await collect(stream)
+
+    assert source.log == ["source items closed", "source closed"]
+
+
+async def test_map_stream_fails_after_the_block() -> None:
+    source = Source([1, 2])
+
+    async with map_stream(source.open(), str) as stream:
+        items = aiter(stream)
+        assert await anext(items) == "1"
+
+    with pytest.raises(RuntimeError, match="Stream is closed"):
+        await anext(items)

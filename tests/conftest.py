@@ -29,8 +29,8 @@ from yarl import URL
 from ai_api.client.api.protocols import IAPI, Query
 from ai_api.client.auth.bearer import BearerAuth
 from ai_api.client.auth.protocols import IAuth
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.errror_resolver.protocols import IErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.protocols import IErrorResolver
 from ai_api.client.response.base import BufferedResponse
 from ai_api.client.session.aiohttp import AiohttpSession
 from ai_api.client.session.base import BaseSession
@@ -117,7 +117,7 @@ def frozen_now(mocker: MockerFixture) -> datetime.datetime:
         ``NOW``.
     """
     mocker.patch(
-        "ai_api.client.exceptions.errror_resolver.base.datetime",
+        "ai_api.client.exceptions.error_resolver.base.datetime",
         _FrozenDatetime,
     )
     mocker.patch(

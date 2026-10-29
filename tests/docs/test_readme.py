@@ -18,6 +18,7 @@ from ai_api.client.exceptions.http import (
 )
 from ai_api.client.session.aiohttp import AiohttpSession
 from ai_api.methods.enums import ResponseFormat
+from ai_api.providers.openai.client.openai import session_factory
 from ai_api.types.base import BaseAPIType
 from tests.conftest import LocalAPI, Recorder, Reply
 
@@ -33,7 +34,8 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
     STREAMING,
     EVENTS,
     RESOLVER,
-) = range(8)
+    CLIENT,
+) = range(9)
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -134,7 +136,7 @@ def examples(
 
 def test_every_example_is_tested() -> None:
     # A new ```python block needs a test here.
-    assert len(BLOCKS) == 8
+    assert len(BLOCKS) == 9
 
 
 def test_quick_start_ends_with_asyncio_run() -> None:
@@ -315,3 +317,18 @@ async def test_error_resolver(examples: Examples) -> None:
     assert quota.transient is False
     assert quota.provider == "openai"
     assert type(rate) is RateLimitError
+
+
+async def test_openai_client(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, QUERY, CLIENT)
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(Reply(json={"data": ["gpt-x"]}))
+
+    assert await examples.list_models() == ModelList(data=["gpt-x"])
+    assert recorder.last.raw_path == "/v1/models"
+    assert recorder.last.headers["Authorization"] == "Bearer sk-..."

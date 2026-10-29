@@ -56,24 +56,26 @@ Oct 29, 2026 · @Max
 
 ## Блоки кода
 
-Код делится на 12 блоков трёх уровней. Восемь тестируются без сети и дают большую часть покрытия, остальным нужен фейковый транспорт или локальный сервер.
+Код делится на 13 блоков трёх уровней. Восемь тестируются без сети и дают большую часть покрытия, остальным нужен фейковый транспорт или локальный сервер.
 
 | Блок | Модули | Уровень | Этап | Риск, если не покрыть |
 | --- | --- | --- | --- | --- |
 | A. Исключения | `exceptions.py`, `client/exceptions/http.py`, `transport.py` | unit | 1 | Неверный флаг `transient` меняет поведение повторов |
-| B. Резолвер ошибок | `client/exceptions/errror_resolver/` | unit | 1 | Ошибки провайдера превращаются не в тот класс, теряется `Retry-After` |
+| B. Резолвер ошибок | `client/exceptions/error_resolver/` | unit | 1 | Ошибки провайдера превращаются не в тот класс, теряется `Retry-After` |
 | C. Стратегия повторов | `client/retry/startegy.py` | unit | 1 | Повторы без учёта `Retry-After` |
 | D. Сериализация | `client/serialization/` | unit | 1 | Даты, enum и вложенные модели уходят в тело в неверном виде |
 | E. Заголовки и auth | `client/headers/`, `client/auth/` | unit | 1 | Токен попадает в `repr` и логи |
 | F. Файлы | `types/files.py` | unit | 2 | При повторе уходит обрезанный файл |
-| G. Методы | `methods/base.py`, `methods/enums.py` | unit | 2 | Неверный формат ответа, инъекция в путь запроса |
+| G. Методы | `methods/base.py`, `methods/resolve.py`, `methods/enums.py`, `client/api/url/` | unit | 2 | Неверный формат ответа, инъекция в путь запроса |
 | H. Парсеры и `Stream` | `client/response/` | unit | 3 | Обрезанный текст на границах чанков, strict-поля не проходят |
 | I. Построитель тела aiohttp | `client/session/builders/aiohttp.py` | unit | 3 | Файл в JSON-теле или потерянные `filename` / `content_type` |
 | J. `BaseSession` | `client/session/base.py` | фейковый транспорт | 4 | Повтор стрима после старта, незакрытые ответы |
-| K. `AiohttpSession` | `client/session/aiohttp.py` | integration | 5 | Неправильное сопоставление ошибок aiohttp, утечка соединений |
+| K. `AiohttpSession` | `client/session/aiohttp.py`, `client/exceptions/aiohttp.py`, `client/response/aiohttp.py` | integration | 5 | Неправильное сопоставление ошибок aiohttp, утечка соединений |
 | L. Типы и README | публичное API, `README.md` | typing / docs | 6 | `send_request` теряет тип, примеры в README перестают работать |
+| M. Клиенты и провайдеры | `client/base.py`, `client/factory/`, `client/validators.py`, `providers/` | unit, фейковый транспорт | после 7 | Клиент не закрывает сессию, OpenAI-ошибки квоты повторяются, фабрика молча принимает лишний аргумент |
+| N. Ресурсы, use cases и общие типы | `client/resources/`, `types/requests/`, `types/responses/` | unit, фейковый транспорт | после 7 | Use case теряет поток провайдера незакрытым, `raw` молча пустеет, запрос с опечаткой проходит |
 
-Протоколы (`protocols.py`) и `providers/enums.py` отдельных тестов не получают. Первые проверяются статически на этапе 6, второй — через резолвер в блоке B.
+Протоколы (`protocols.py`) и `enums.py` отдельных тестов не получают. Первые проверяются статически на этапе 6, второй — через резолвер в блоке B.
 
 ## Этап 0: инфраструктура
 
@@ -137,7 +139,7 @@ tests/
 - [ ] `APIError`: все атрибуты сохраняются; `transient` по умолчанию `False`.
 - [ ] `HTTP_ERRORS`: каждый статус ведёт на свой класс, все классы — подклассы `APIError` с `default_message`.
 - [ ] Транспортные ошибки: `APIConnectionError` и `APITimeoutError` временные, `APITLSError` нет; `APIResponseError` хранит `status`.
-- [ ] Регрессия: `ai_api.client.exceptions.errror_resolver.protocols` импортируется без ошибки.
+- [ ] Регрессия: `ai_api.client.exceptions.error_resolver.protocols` импортируется без ошибки.
 
 **B. Резолвер ошибок**
 
@@ -184,6 +186,7 @@ tests/
 - [ ] Явный `__response_format__` и явный `__returning__` сильнее вывода; формат, заданный в промежуточном `Mid[T]`, наследуется.
 - [ ] Аргумент не класс (`list[int]`, `TypeVar`) не ломает определение класса; сами базовые классы не меняют свои значения по умолчанию.
 - [ ] Стрим: `[bytes]` / `[str]` принимаются; `[Model]`, `[None]`, `[int]` — `TypeError` при определении; явный формат или свой `__stream_parser__`, в том числе в собственном базовом `SseBase[T]`, снимает ошибку.
+- [ ] Формат должен давать объявленный тип: `BaseAPIMethod[int]` (JSON), `[bytes]` + JSON, `[Model]` + BYTES, `[int]` + TEXT, `[str]` + NONE, `[None]` + TEXT, SSE/NDJSON у буферного метода, явный `__returning__`, лист `BytesBase[Model]` → `TypeError`; стрим `[str]` + BYTES, `[bytes]` + TEXT, `[ServerSentEvent]` + BYTES, JSON, NONE → `TypeError`, а `[str]` + NDJSON и `[bytes]` + SSE принимаются. Свой `__response_parser__` / `__stream_parser__` снимает проверку.
 
 **G2. Параметры пути**
 
@@ -219,6 +222,7 @@ tests/
 - [ ] TEXT: неизвестный charset и оборванная последовательность в конце потока → `APIResponseError`.
 - [ ] Неподдерживаемый формат → `ValueError` сразу при вызове `parse`, до итерации.
 - [ ] `Stream.aclose()` закрывает генератор и не падает на обычном итераторе; `Stream.save()` пишет файл в `tmp_path` и возвращает число байтов.
+- [ ] `map_stream`: каждый элемент проходит через `convert`; при `break` и при исключении в `convert` сначала закрывается преобразованный поток, потом источник, и всё это внутри блока; после блока итерация даёт `RuntimeError`.
 
 **I. `AiohttpBodyBuilder`**
 
@@ -267,6 +271,7 @@ tests/
 - [ ] Транспорт: закрытый порт → `APIConnectionError`; сервер обрывает тело с `Content-Length` → `APIResponseError`.
 - [ ] TLS: сервер с самоподписанным сертификатом → `APITLSError`. Сертификат генерируется в фикстуре; если нужная библиотека недоступна, тест пропускается, см. риски.
 - [ ] Жизненный цикл: сессия создаётся лениво, `close()` можно вызвать дважды, после `close()` следующий запрос создаёт новую `ClientSession`.
+- [ ] Цикл событий: сессия, созданная вне корутины, привязывается к циклу первого использования; чтение `session.loop` ничего не привязывает (`None`, и другой цикл потом работает); другой цикл после привязки и явный `loop=` → `RuntimeError`; `bind_loop` вне корутины и с чужим циклом → `RuntimeError`.
 
 **Загрузки (`test_aiohttp_uploads.py`)**
 
@@ -291,6 +296,8 @@ tests/
 - [ ] `assert_type(await session.send_request(Method()), Model)` для модели, `str`, `bytes`, `None`; `assert_type(stream, Stream[bytes])` и `Stream[str]` в `async with session.stream(...)`.
 - [ ] Негативные случаи: `send_request(stream_method)`, `stream(buffered_method)`, `Stream[str].save()`. Каждая строка помечена `# type: ignore[arg-type]` (или `[misc]`). С `warn_unused_ignores = true` неиспользованный ignore сам станет ошибкой, то есть пропавшая ошибка типа роняет проверку. Для pyright то же делает `# pyright: ignore[…]` с `reportUnnecessaryTypeIgnoreComment`.
 - [ ] `AiohttpSession` присваивается `ISession`; класс метода без аннотаций `ClassVar` присваивается `IAPIMethod[T]` — регрессия по проблеме с pyright.
+- [ ] `BaseClient(AiohttpSession(...)).session` имеет тип `AiohttpSession`, а `session.loop` — `AbstractEventLoop | None`; `BaseClient(object())` — ошибка `type-var`.
+- [ ] `map_stream(session.stream(Download()), len)` даёт `Stream[int]`; `BaseResource(session).session` сохраняет тип, `BaseResource(object())` и use case с запросом не от `BaseRequest` — ошибка `type-var`; use case без типа сессии получает `ISession` и подходит под `IUseCase`.
 - [ ] Запуск: `uv run pytest --mypy -m mypy tests/typing` (через `pytest-mypy`) и отдельный шаг pyright в CI. Локально на машине с заблокированным скомпилированным mypy этот шаг не запускается: `pytest-mypy` помечает свои элементы маркером `mypy`, и обычный `uv run pytest` без `--mypy` их не собирает.
 
 **README (`tests/docs/test_readme.py`)**
@@ -331,6 +338,23 @@ tests/
 ![Зависимости этапов: этапы 1–3 и 6 идут параллельно после этапа 0, этапы 4 и 5 — по очереди](testing-plan-stages.png)
 
 Критический путь — этапы 0 → 3 → 4 → 5. Блоки 1, 2 и 6 можно раздать другим людям или сессиям и делать параллельно.
+
+## После этапа 7: клиенты, ресурсы и общие типы (блоки M–N)
+
+Блоки появились вместе с кодом после этапа 7 и проверяются тем же порогом покрытия.
+
+**M. Клиенты и провайдеры (`tests/providers/test_clients.py`)**
+
+- [ ] Клиент делегирует `send_request`/`stream` сессии и закрывает её в `close()` и при выходе из `async with`, в том числе переданную через `session=`.
+- [ ] `OpenAIClient` из токена создаётся вне корутины; ни токена, ни сессии или оба сразу → `ValueError`; предупреждения про `BaseErrorResolver` и заголовок не `Authorization` указывают на строку вызова.
+- [ ] `OpenAIErrorResolver`: 429 с `insufficient_quota` → `QuotaExceededError` без повтора; фабрика передаёт сессии свои аргументы.
+
+**N. Ресурсы, use cases и общие типы (`tests/unit/test_resources.py`)**
+
+- [ ] Use case на фейковом транспорте: буферный ответ провайдера превращается в `GenerationResponse` с `raw`, тело запроса собрано из `GenerationRequest`.
+- [ ] Потоковый use case через `map_stream`: события SSE превращаются в `TextDeltaEvent`/`OtherEvent`/`CompletedEvent`; после выхода и после `break` ответ закрыт ровно один раз, итерация после блока → `RuntimeError`.
+- [ ] Ресурс и use case хранят ту же сессию и подходят под `IResource`/`ICompositeUseCase`; базовые use case абстрактные.
+- [ ] `GenerationRequest` отклоняет лишнее поле и `max_output_tokens=0`; `GenerationResponse` без параметра сохраняет `raw` как есть, с параметром валидирует его; `ResponseEvent[Raw]` различает события по `type`.
 
 ## Риски и открытые вопросы
 

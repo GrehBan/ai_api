@@ -2,38 +2,29 @@
 
 import asyncio
 import ssl
-from collections.abc import AsyncIterator, Generator, Mapping
-from contextlib import contextmanager
 from typing import Any, Final, Self
 
 import certifi
 from aiohttp import (
-    ClientConnectionError,
     ClientHandlerType,
     ClientMiddlewareType,
     ClientPayloadError,
     ClientRequest,
     ClientResponse,
-    ClientResponseError,
     ClientSession,
-    ClientSSLError,
     ClientTimeout,
-    ServerFingerprintMismatch,
     TCPConnector,
-    TooManyRedirects,
 )
 from yarl import URL
 
 from ai_api.client.api.protocols import IAPI
 from ai_api.client.auth.protocols import IAuth
-from ai_api.client.exceptions.errror_resolver.protocols import IErrorResolver
+from ai_api.client.exceptions.aiohttp import transport_errors
+from ai_api.client.exceptions.error_resolver.protocols import IErrorResolver
 from ai_api.client.exceptions.transport import (
-    APIConnectionError,
     APIRedirectError,
     APIRequestError,
     APIResponseError,
-    APITimeoutError,
-    APITLSError,
 )
 from ai_api.client.headers.names import (
     LOCATION,
@@ -41,6 +32,7 @@ from ai_api.client.headers.names import (
     USER_AGENT,
 )
 from ai_api.client.headers.protocols import IHeaders
+from ai_api.client.response.aiohttp import AiohttpStreamResponse, read_body
 from ai_api.client.response.base import BufferedResponse
 from ai_api.client.response.protocols import IStreamResponse
 from ai_api.client.retry.startegy import (
@@ -50,6 +42,7 @@ from ai_api.client.retry.startegy import (
 from ai_api.client.serialization.json import JsonDumps, JsonLoads, dumps, loads
 from ai_api.client.session.base import BaseSession
 from ai_api.client.session.builders.aiohttp import AiohttpBodyBuilder
+from ai_api.client.session.loop import bind_loop
 from ai_api.methods.protocols import IAPIMethod, IBaseMethod, IStreamMethod
 
 DEFAULT_TIMEOUT: Final[ClientTimeout] = ClientTimeout(
@@ -67,28 +60,6 @@ DEFAULT_STREAM_TIMEOUT: Final[ClientTimeout] = ClientTimeout(
 
 REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 """Statuses that redirect the request to the ``Location`` header."""
-
-
-def _find_request_error(exc: BaseException) -> APIRequestError | None:
-    """Find a failed upload source among the causes of an exception.
-
-    Args:
-        exc: The exception raised by aiohttp.
-
-    Returns:
-        The ``APIRequestError`` raised while reading an upload, if any.
-    """
-    seen: set[int] = set()
-    current = exc.__cause__ or exc.__context__
-
-    while current is not None and id(current) not in seen:
-        if isinstance(current, APIRequestError):
-            return current
-
-        seen.add(id(current))
-        current = current.__cause__ or current.__context__
-
-    return None
 
 
 def _same_origin(url: URL) -> ClientMiddlewareType:
@@ -132,182 +103,15 @@ def _same_origin(url: URL) -> ClientMiddlewareType:
     return middleware
 
 
-@contextmanager
-def _transport_errors() -> Generator[None]:
-    """Translate aiohttp exceptions raised in the block into library ones.
-
-    Yields:
-        Control to the wrapped block.
-
-    Raises:
-        APITimeoutError: On any timeout.
-        APITLSError: If TLS verification fails.
-        APIRedirectError: If the API redirects too many times.
-        APIRequestError: If an upload source fails while it is sent.
-        APIConnectionError: On other connection failures.
-        APIResponseError: If the response is not valid HTTP.
-        APIRequestError: If aiohttp rejects a header or the URL.
-    """
-    try:
-        yield
-    except TimeoutError as exc:
-        raise APITimeoutError() from exc
-
-    except (
-        ClientSSLError,
-        ServerFingerprintMismatch,
-    ) as exc:
-        raise APITLSError() from exc
-
-    except TooManyRedirects as exc:
-        raise APIRedirectError() from exc
-
-    except ClientConnectionError as exc:
-        # aiohttp reports a failing upload as a connection error, which
-        # would be retried: re-raise the source's own error instead.
-        if (source := _find_request_error(exc)) is not None:
-            raise source from source.__cause__
-
-        raise APIConnectionError() from exc
-
-    except ClientResponseError as exc:
-        raise APIResponseError(
-            "Invalid HTTP response",
-            status=exc.status or None,
-        ) from exc
-
-    # Last: certificate errors are ValueErrors too.
-    except ValueError as exc:
-        raise APIRequestError(f"Invalid request: {exc}") from exc
-
-
-async def _read_body(response: ClientResponse, limit: int | None) -> bytes:
-    """Read a whole body, refusing to buffer more than ``limit`` bytes.
-
-    Args:
-        response: The response to read.
-        limit: Largest body accepted, in bytes; ``None`` for no limit.
-
-    Returns:
-        The body.
-
-    Raises:
-        APIResponseError: If the body is larger than ``limit``.
-    """
-    if limit is None:
-        return await response.read()
-
-    too_large = APIResponseError(
-        f"Response body exceeds {limit} bytes",
-        status=response.status,
-    )
-
-    if (response.content_length or 0) > limit:
-        raise too_large
-
-    body = bytearray()
-
-    async for chunk in response.content.iter_any():
-        body += chunk
-
-        if len(body) > limit:
-            raise too_large
-
-    return bytes(body)
-
-
-class _AiohttpStreamResponse:
-    """``IStreamResponse`` over an open ``aiohttp.ClientResponse``."""
-
-    def __init__(
-        self,
-        response: ClientResponse,
-        max_body_size: int | None = None,
-    ) -> None:
-        """Wrap a response whose body has not been read.
-
-        Args:
-            response: The open aiohttp response.
-            max_body_size: Largest body ``read()`` accepts, in bytes;
-                ``None`` for no limit.
-        """
-        self._response = response
-        self._headers = response.headers.copy()
-        self._max_body_size = max_body_size
-
-    @property
-    def status(self) -> int:
-        """HTTP status code."""
-        return self._response.status
-
-    @property
-    def headers(self) -> Mapping[str, str]:
-        """Response headers."""
-        return self._headers
-
-    @property
-    def charset(self) -> str | None:
-        """Charset from the ``Content-Type`` header, if any."""
-        return self._response.charset
-
-    async def iter_chunks(self) -> AsyncIterator[bytes]:
-        """Yield the body as soon as data arrives.
-
-        Yields:
-            Chunks of the body, of arbitrary size.
-
-        Raises:
-            APITransportError: If the connection fails mid-stream.
-            APIResponseError: If the body ends before it is complete.
-        """
-        try:
-            with _transport_errors():
-                async for chunk in self._response.content.iter_any():
-                    yield chunk
-        except ClientPayloadError as exc:
-            raise APIResponseError(
-                "HTTP response stream ended unexpectedly",
-                status=self.status,
-            ) from exc
-
-    async def read(self) -> bytes:
-        """Read the whole remaining body.
-
-        Returns:
-            The body.
-
-        Raises:
-            APITransportError: If the connection fails.
-            APIResponseError: If the body ends before it is complete or
-                is larger than the limit.
-        """
-        try:
-            with _transport_errors():
-                return await _read_body(self._response, self._max_body_size)
-        except ClientPayloadError as exc:
-            raise APIResponseError(
-                "Failed to read HTTP response body",
-                status=self.status,
-            ) from exc
-
-    async def aclose(self) -> None:
-        """Release the connection.
-
-        A partially read body makes aiohttp close the connection instead
-        of returning it to the pool.
-        """
-        self._response.release()
-
-
 class AiohttpSession(BaseSession):
     """Session that sends requests with ``aiohttp``.
 
-    The session is bound to one event loop: the running loop at creation,
-    or ``loop``. Create it inside a coroutine (for example, in ``main()``)
-    and use it only from that loop. The underlying ``ClientSession`` is
-    created lazily on first use and re-created after ``close()``. Use it
-    as an async context manager to open and close it deterministically;
-    close it before its event loop ends.
+    The session is bound to one event loop: ``loop`` if given, otherwise
+    the loop of its first use. It can be created anywhere, even outside a
+    coroutine, but is then usable only from that loop. The underlying
+    ``ClientSession`` is created lazily on first use and re-created after
+    ``close()``. Use it as an async context manager to open and close it
+    deterministically; close it before its event loop ends.
 
     Example:
         >>> async with AiohttpSession(api, BearerAuth(key), resolver) as s:
@@ -363,12 +167,8 @@ class AiohttpSession(BaseSession):
                 never followed, so no header leaks to another host;
                 a redirect that is not followed raises
                 ``APIRedirectError``.
-            loop: Event loop the session is bound to; ``None`` for the
-                running loop.
-
-        Raises:
-            RuntimeError: If ``loop`` is ``None`` and no event loop is
-                running.
+            loop: Event loop the session is bound to; ``None`` to bind
+                the loop of its first use.
         """
         super().__init__(
             api,
@@ -394,9 +194,6 @@ class AiohttpSession(BaseSession):
         self._trust_env = trust_env
         self._follow_redirects = follow_redirects
         self._session: ClientSession | None = None
-
-        if loop is None:
-            loop = asyncio.get_running_loop()
         self._loop = loop
         self._body_builder = AiohttpBodyBuilder(json_dumps=self.json_dumps)
 
@@ -415,13 +212,21 @@ class AiohttpSession(BaseSession):
         Raises:
             RuntimeError: If called from another event loop.
         """
-        self._check_loop()
+        self._loop = bind_loop(self._loop, type(self).__name__)
         session = self._session
         self._session = None
 
         if session is not None and not session.closed:
             await session.close()
             await asyncio.sleep(0.25)
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop | None:
+        """The event loop the session is bound to; ``None`` until first use.
+
+        Reading it never binds a loop.
+        """
+        return self._loop
 
     async def create_session(self) -> ClientSession:
         """Return the ``ClientSession``, creating it if needed.
@@ -432,7 +237,9 @@ class AiohttpSession(BaseSession):
         Raises:
             RuntimeError: If called from another event loop.
         """
-        self._check_loop()
+        # Checked before the connector is created, so a wrong loop does
+        # not leave an unclosed connector behind.
+        self._loop = bind_loop(self._loop, type(self).__name__)
 
         if self._session is None or self._session.closed:
             self._session = ClientSession(
@@ -445,22 +252,6 @@ class AiohttpSession(BaseSession):
             )
 
         return self._session
-
-    def _check_loop(self) -> None:
-        """Ensure the session is used from the loop it is bound to.
-
-        A ``ClientSession`` and its connections belong to one event loop;
-        used from another, aiohttp fails with unclear errors such as
-        ``Event loop is closed``.
-
-        Raises:
-            RuntimeError: If the running loop is not the session's loop.
-        """
-        if asyncio.get_running_loop() is not self._loop:
-            raise RuntimeError(
-                "AiohttpSession is bound to another event loop; create "
-                "one session per loop, inside a coroutine"
-            )
 
     async def _execute(
         self,
@@ -483,8 +274,8 @@ class AiohttpSession(BaseSession):
 
         async with response:
             try:
-                with _transport_errors():
-                    raw = await _read_body(response, self._max_body_size)
+                with transport_errors():
+                    raw = await read_body(response, self._max_body_size)
             except ClientPayloadError as exc:
                 raise APIResponseError(
                     "Failed to read HTTP response body",
@@ -517,7 +308,7 @@ class AiohttpSession(BaseSession):
             method,
             timeout=self._stream_timeout,
         )
-        return _AiohttpStreamResponse(response, self._max_body_size)
+        return AiohttpStreamResponse(response, self._max_body_size)
 
     async def _request(
         self,
@@ -562,7 +353,7 @@ class AiohttpSession(BaseSession):
         )
 
         try:
-            with _transport_errors():
+            with transport_errors():
                 response = await session.request(
                     method=method.request_method,
                     url=url,

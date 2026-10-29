@@ -11,7 +11,7 @@ from tenacity.stop import stop_base
 
 from ai_api.client.api.protocols import IAPI
 from ai_api.client.auth.protocols import IAuth
-from ai_api.client.exceptions.errror_resolver.protocols import IErrorResolver
+from ai_api.client.exceptions.error_resolver.protocols import IErrorResolver
 from ai_api.client.exceptions.transport import APIResponseError
 from ai_api.client.headers.headers import Headers
 from ai_api.client.headers.protocols import IHeaders

@@ -9,7 +9,7 @@ import pytest
 from pydantic import Field
 
 from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
 from ai_api.client.exceptions.http import APIError
 from ai_api.client.response.parse.sse import ServerSentEvent
 from ai_api.client.session.aiohttp import AiohttpSession

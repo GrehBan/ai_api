@@ -9,7 +9,7 @@ import pytest
 from aiohttp import ClientTimeout
 
 from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
+from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
 from ai_api.client.exceptions.http import NotFoundError
 from ai_api.client.exceptions.transport import (
     APIResponseError,

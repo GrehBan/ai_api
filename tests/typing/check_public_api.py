@@ -7,20 +7,32 @@ Never run: mypy (through ``pytest --mypy``) and pyright check it. Every
 fail the check if that error disappears.
 """
 
+import asyncio
 from typing import Annotated, Literal, assert_type
 
 from pydantic import Field
 
 from ai_api.client.api.base import BaseAPI
 from ai_api.client.api.protocols import IAPI
+from ai_api.client.base import BaseClient
+from ai_api.client.protocols import IClient
+from ai_api.client.resources.base import BaseResource
+from ai_api.client.resources.usecases.base import BaseUseCase
+from ai_api.client.resources.usecases.protocols import IUseCase
 from ai_api.client.response.parse.sse import ServerSentEvent
-from ai_api.client.response.stream import Stream
+from ai_api.client.response.stream import Stream, map_stream
 from ai_api.client.session.aiohttp import AiohttpSession
 from ai_api.client.session.protocols import ISession
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.methods.enums import ResponseFormat
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
+from ai_api.providers.openai.client.openai import (
+    OpenAIClient,
+    session_factory,
+)
 from ai_api.types.base import BaseAPIType
+from ai_api.types.requests.generation import GenerationRequest
+from ai_api.types.responses.generation import GenerationResponse
 
 
 class Model(BaseAPIType):
@@ -160,3 +172,63 @@ def methods_implement_protocols() -> None:
     streamed: IStreamMethod[bytes] = Download()
     assert_type(buffered.response_type, type[Model] | None)
     assert_type(streamed.response_type, type[bytes] | None)
+
+
+async def client_infers_result(client: OpenAIClient) -> IClient:
+    assert_type(await client.send_request(GetModel(model_id="m")), Model)
+
+    async with client.stream(Download()) as chunks:
+        assert_type(chunks, Stream[bytes])
+
+    return client
+
+
+def client_keeps_the_session_type(session: AiohttpSession) -> IClient:
+    client = BaseClient(session)
+    assert_type(client.session, AiohttpSession)
+    assert_type(client.session.loop, asyncio.AbstractEventLoop | None)
+    BaseClient(object())  # type: ignore[type-var]
+
+    return client
+
+
+def session_factory_checks_session_arguments() -> None:
+    assert_type(session_factory("sk", max_body_size=1), AiohttpSession)
+    session_factory("sk", max_body_sizee=1)  # type: ignore[call-arg]
+
+
+async def map_stream_infers_the_item(session: AiohttpSession) -> None:
+    async with map_stream(session.stream(Download()), len) as sizes:
+        assert_type(sizes, Stream[int])
+
+
+class Echo(BaseUseCase[GenerationRequest, GenerationResponse[str]]):
+    """Use case without a session type: it defaults to ``ISession``."""
+
+    async def __call__(
+        self,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        assert_type(self.session, ISession)
+        return GenerationResponse[str].model_validate(
+            {"provider": "openai", "model": request.model, "raw": "x"}
+        )
+
+
+def use_case_implements_protocol(
+    session: AiohttpSession,
+) -> IUseCase[GenerationRequest, GenerationResponse[str]]:
+    return Echo(session)
+
+
+def resource_keeps_the_session_type(session: AiohttpSession) -> None:
+    resource = BaseResource(session)
+    assert_type(resource.session, AiohttpSession)
+    BaseResource(object())  # type: ignore[type-var]
+
+
+class WrongRequest(BaseUseCase[Model, GenerationResponse[str]]):  # type: ignore[type-var]
+    """A use case request must be a ``BaseRequest``."""
+
+    async def __call__(self, request: Model) -> GenerationResponse[str]:
+        raise NotImplementedError

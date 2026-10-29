@@ -5,6 +5,7 @@ from typing import Annotated, Any, ClassVar, Literal, TypeVar
 import pytest
 from pydantic import Field
 
+from ai_api.client.response.parse.buffered import BufferedResponseParser
 from ai_api.client.response.parse.sse import ServerSentEvent
 from ai_api.client.response.parse.stream import StreamResponseParser
 from ai_api.methods.base import BaseAPIMethod, BaseMethod, BaseStreamMethod
@@ -53,10 +54,12 @@ def test_buffered_inference(
 
 
 def test_explicit_format_beats_inference() -> None:
+    # Only an explicit parser may parse into another type than declared.
     class Raw(BaseAPIMethod[str]):
         __request_path__ = "/raw"
         __request_method__ = "GET"
         __response_format__ = ResponseFormat.BYTES
+        __response_parser__ = BufferedResponseParser()
 
     assert Raw.__response_format__ is ResponseFormat.BYTES
     assert Raw.__returning__ is str
@@ -75,6 +78,7 @@ def test_explicit_returning_beats_inference() -> None:
 def test_format_from_intermediate_generic_base_is_inherited() -> None:
     class TextBase[R](BaseAPIMethod[R]):
         __response_format__ = ResponseFormat.TEXT
+        __response_parser__ = BufferedResponseParser()
 
     class Leaf(TextBase[bytes]):
         __request_path__ = "/leaf"
@@ -98,10 +102,156 @@ def test_non_class_argument_keeps_defaults(argument: Any) -> None:
 
 
 def test_unknown_class_keeps_default_format() -> None:
-    method_cls = make_method(BaseAPIMethod[int])
+    method_cls = make_method(
+        BaseAPIMethod[int],
+        __response_parser__=BufferedResponseParser(),
+    )
 
     assert method_cls.__returning__ is int
     assert method_cls.__response_format__ is ResponseFormat.JSON
+
+
+@pytest.mark.parametrize(
+    ("argument", "response_format", "message"),
+    [
+        (int, None, "JSON responses are parsed into a model, not int"),
+        (bytes, ResponseFormat.JSON, "parsed into a model, not bytes"),
+        (
+            Model,
+            ResponseFormat.BYTES,
+            "BYTES responses are parsed into bytes, not Model",
+        ),
+        (
+            int,
+            ResponseFormat.TEXT,
+            "TEXT responses are parsed into str, not int",
+        ),
+        (str, ResponseFormat.NONE, "parsed into None, not str"),
+        (None, ResponseFormat.TEXT, "parsed into str, not None"),
+    ],
+    ids=[
+        "int",
+        "bytes-json",
+        "model-bytes",
+        "int-text",
+        "str-none",
+        "none-text",
+    ],
+)
+def test_buffered_format_must_match_the_result(
+    argument: Any,
+    response_format: ResponseFormat | None,
+    message: str,
+) -> None:
+    class_vars: dict[str, Any] = (
+        {}
+        if response_format is None
+        else {"__response_format__": response_format}
+    )
+
+    with pytest.raises(TypeError, match=f"^Method: .*{message}"):
+        make_method(BaseAPIMethod[argument], **class_vars)
+
+
+@pytest.mark.parametrize(
+    "response_format",
+    [ResponseFormat.SSE, ResponseFormat.NDJSON],
+    ids=["sse", "ndjson"],
+)
+def test_buffered_method_rejects_stream_formats(
+    response_format: ResponseFormat,
+) -> None:
+    with pytest.raises(TypeError, match="can only be streamed"):
+        make_method(
+            BaseAPIMethod[bytes],
+            __response_format__=response_format,
+        )
+
+
+def test_buffered_check_uses_explicit_returning() -> None:
+    with pytest.raises(TypeError, match="parsed into str, not Model"):
+        make_method(
+            BaseAPIMethod[str],
+            __returning__=Model,
+        )
+
+
+def test_buffered_check_on_leaf_of_generic_base() -> None:
+    class BytesBase[R](BaseAPIMethod[R]):
+        __response_format__ = ResponseFormat.BYTES
+
+    with pytest.raises(TypeError, match="parsed into bytes, not Model"):
+
+        class Leaf(BytesBase[Model]):  # pyright: ignore[reportUnusedClass]
+            __request_path__ = "/leaf"
+            __request_method__ = "GET"
+
+
+@pytest.mark.parametrize(
+    ("argument", "response_format", "message"),
+    [
+        (
+            str,
+            ResponseFormat.BYTES,
+            "BYTES streams yield bytes items, not str",
+        ),
+        (
+            bytes,
+            ResponseFormat.TEXT,
+            "TEXT streams yield str items, not bytes",
+        ),
+        (
+            ServerSentEvent,
+            ResponseFormat.BYTES,
+            "yield bytes items, not ServerSentEvent",
+        ),
+        (bytes, ResponseFormat.JSON, "JSON is not a stream format"),
+        (bytes, ResponseFormat.NONE, "NONE is not a stream format"),
+        (Model, ResponseFormat.TEXT, "yield str items, not Model"),
+        (list[int], ResponseFormat.TEXT, r"not list\[int\]"),
+    ],
+    ids=[
+        "str-bytes",
+        "bytes-text",
+        "event-bytes",
+        "json",
+        "none",
+        "model-text",
+        "alias-text",
+    ],
+)
+def test_stream_format_must_match_the_item(
+    argument: Any,
+    response_format: ResponseFormat,
+    message: str,
+) -> None:
+    with pytest.raises(TypeError, match=f"^Method: .*{message}"):
+        make_method(
+            BaseStreamMethod[argument],
+            __response_format__=response_format,
+        )
+
+
+@pytest.mark.parametrize(
+    ("argument", "response_format"),
+    [
+        (str, ResponseFormat.TEXT),
+        (bytes, ResponseFormat.BYTES),
+        (str, ResponseFormat.NDJSON),
+        (bytes, ResponseFormat.SSE),
+    ],
+    ids=["text", "bytes", "ndjson-str", "sse-bytes"],
+)
+def test_stream_format_matching_the_item_is_accepted(
+    argument: Any,
+    response_format: ResponseFormat,
+) -> None:
+    method_cls = make_method(
+        BaseStreamMethod[argument],
+        __response_format__=response_format,
+    )
+
+    assert method_cls.__response_format__ is response_format
 
 
 def test_base_classes_keep_their_defaults() -> None:
