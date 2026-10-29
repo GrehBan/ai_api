@@ -23,7 +23,7 @@ class IBaseMethod[ResponseT](Protocol):
 
     @property
     def request_path(self) -> str:
-        """Path appended to the API's base URL."""
+        """Path appended to the API's base URL, parameters filled in."""
         ...
 
     @property

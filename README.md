@@ -58,7 +58,12 @@ class ExampleAPI:
         method: str,
         query: Mapping[str, str] | None = None,
     ) -> str:
-        url = self.base_url / self.version / method.lstrip("/")
+        # `method` is already percent-encoded: do not encode it again.
+        url = self.base_url.joinpath(
+            self.version,
+            method.lstrip("/"),
+            encoded=True,
+        )
         return str(url.with_query(query or {}))
 
 
@@ -110,9 +115,10 @@ A method class declares the HTTP request in its dunder class attributes. Its fie
 
 | Attribute | Default | Meaning |
 |---|---|---|
-| `__request_path__` | required | Path appended to the API base URL |
+| `__request_path__` | required | Path appended to the API base URL; may contain `{field}` placeholders |
+| `__path_safe__` | `""` | Characters left unescaped in path parameters, e.g. `"/"` |
 | `__request_method__` | required | HTTP method, e.g. `"POST"` |
-| `__request_query__` | `None` | Names of fields sent as query parameters; every other field goes to the body |
+| `__request_query__` | `None` | Names of fields sent as query parameters; fields that are neither path nor query parameters go to the body |
 | `__request_body_format__` | `BodyFormat.NONE` | `JSON`, `FORM`, `MULTIPART` or `NONE` |
 | `__retryable__` | `False` | Retry transient failures (up to 4 attempts in total) |
 | `__returning__` | inferred | Result class, taken from the generic argument |
@@ -140,7 +146,26 @@ class ListModels(BaseAPIMethod[ModelList]):
     limit: int | None = None          # sent as ?limit=...
 ```
 
-Request paths are static: the library does not fill in placeholders such as `/models/{id}`. Pass identifiers as query parameters or body fields instead.
+### Path parameters
+
+Placeholders in `__request_path__` are filled from the fields of the same name. Those fields are not sent in the body:
+
+```python
+class RetrieveModel(BaseAPIMethod[Model]):
+    __request_path__ = "/models/{model_id}"
+    __request_method__ = "GET"
+
+    model_id: str
+
+
+RetrieveModel(model_id="example-1").request_path   # "/models/example-1"
+```
+
+- **Escaping.** Values are percent-encoded, including `/`, `?` and `#`, so `model_id="../admin"` cannot change the request path. Enums give their value, as in query parameters.
+- **`build_url` gets an encoded path.** Join it without encoding it again, e.g. with `URL.joinpath(..., encoded=True)` as in the quick start. yarl's `/` operator would turn `%2F` into `%252F`, and the server would see a different identifier.
+- **Rejected values.** `None`, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
+- **Identifiers with slashes.** For values such as `meta-llama/Llama-3`, set `__path_safe__ = "/"` on that method. Each segment is still checked for `.` and `..`.
+- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`) and a field that is also in `__request_query__` raise `TypeError` when the class is defined, not when the request is sent. Write literal braces as `{{` and `}}`.
 
 ## Uploading files
 
@@ -339,7 +364,6 @@ The code uses Google-style docstrings and PEP 695 generics. pyright is configure
 ## Limitations and roadmap
 
 - Server-sent events (`SSE`) and newline-delimited JSON (`NDJSON`) streams are declared but not parsed yet. Event models for streams, including discriminated unions, will come with them.
-- Request paths are static; there is no path-parameter templating.
 - There is no raw binary request body (an upload without multipart).
 - There are no provider clients (OpenAI, Anthropic) yet, only the building blocks.
 - There is no test suite yet.

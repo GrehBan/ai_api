@@ -1,9 +1,11 @@
 """Base classes for declaring API methods."""
 
 import io
+import string
 from abc import ABC
 from collections.abc import Mapping
 from typing import Any, ClassVar, Final, cast
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict
 
@@ -21,6 +23,68 @@ _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
     bytes: ResponseFormat.BYTES,
     type(None): ResponseFormat.NONE,
 }
+
+_DOT_SEGMENTS: Final[frozenset[str]] = frozenset({".", ".."})
+
+
+def _parse_path_params(template: str) -> frozenset[str]:
+    """Extract the placeholder names of a request path template.
+
+    Args:
+        template: A path such as ``"/models/{model_id}"``. Literal braces
+            are written as ``{{`` and ``}}``.
+
+    Returns:
+        The placeholder names.
+
+    Raises:
+        ValueError: If the template is malformed or a placeholder is not
+            a plain name (``{}``, ``{a.b}``, ``{a[0]}``, ``{a:>5}`` and
+            ``{a!r}`` are rejected).
+    """
+    names: set[str] = set()
+
+    for _, name, spec, conversion in string.Formatter().parse(template):
+        if name is None:
+            continue
+
+        if not name.isidentifier() or spec or conversion:
+            raise ValueError(
+                f"Path placeholder {{{name}}} must be a plain field name"
+            )
+
+        names.add(name)
+
+    return frozenset(names)
+
+
+def _encode_path_value(name: str, value: Any, safe: str) -> str:
+    """Convert a path parameter to an escaped path segment.
+
+    Args:
+        name: The parameter name, for error messages.
+        value: The JSON-mode dump of the field value.
+        safe: Characters left unescaped, e.g. ``"/"``.
+
+    Returns:
+        The percent-encoded value.
+
+    Raises:
+        ValueError: If the value is ``None``, empty, or a ``.``/``..``
+            segment, which would change the request path.
+    """
+    if value is None:
+        raise ValueError(f"Path parameter {name!r} is not set")
+
+    text = str(value).lower() if isinstance(value, bool) else str(value)
+    segments = text.split("/") if "/" in safe else [text]
+
+    if any(not segment or segment in _DOT_SEGMENTS for segment in segments):
+        raise ValueError(
+            f"Path parameter {name!r} has an unsafe value: {text!r}"
+        )
+
+    return quote(text, safe=safe)
 
 
 def _resolve_response_type(arg: Any) -> type[Any] | None:
@@ -107,7 +171,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     subclass sets it explicitly, ``__response_format__``.
 
     Attributes:
-        __request_path__: Path appended to the API's base URL.
+        __request_path__: Path appended to the API's base URL. It may
+            contain ``{field}`` placeholders, filled from the fields of
+            the same name and percent-encoded.
+        __request_path_params__: Names of the placeholders; derived from
+            ``__request_path__``.
+        __path_safe__: Characters left unescaped in path parameters.
+            Empty by default; set it to ``"/"`` for identifiers such as
+            ``"org/model"``.
         __request_method__: HTTP method, e.g. ``"POST"``.
         __request_query__: Names of fields sent as query parameters; all
             other fields go to the body.
@@ -127,6 +198,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     )
 
     __request_path__: ClassVar[str]
+    __request_path_params__: ClassVar[frozenset[str]] = frozenset()
+    __path_safe__: ClassVar[str] = ""
     __request_method__: ClassVar[str]
     __request_query__: ClassVar[set[str] | None] = None
     __returning__: ClassVar[type[Any] | None] = None
@@ -137,13 +210,58 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
-        """Infer ``__returning__`` and the response format.
+        """Validate the path template and infer the response type.
 
         Args:
             **kwargs: Class keyword arguments, forwarded to Pydantic.
         """
         super().__pydantic_init_subclass__(**kwargs)
+        cls._init_path_params()
+        cls._init_response_type()
 
+    @classmethod
+    def _init_path_params(cls) -> None:
+        """Derive ``__request_path_params__`` from the class's own path.
+
+        Classes that do not set ``__request_path__`` themselves keep the
+        inherited parameters. A placeholder's field must be declared in
+        the same class as the path or above it.
+
+        Raises:
+            TypeError: If the template is malformed, names a missing
+                field, or a placeholder is also a query parameter.
+        """
+        template = cls.__dict__.get("__request_path__")
+
+        if template is not None:
+            try:
+                params = _parse_path_params(template)
+            except ValueError as exc:
+                raise TypeError(
+                    f"{cls.__name__}: invalid __request_path__ "
+                    f"{template!r}: {exc}"
+                ) from exc
+
+            if missing := params - cls.model_fields.keys():
+                raise TypeError(
+                    f"{cls.__name__}: __request_path__ placeholders "
+                    f"{sorted(missing)} have no matching fields"
+                )
+
+            cls.__request_path_params__ = params
+
+        # Checked on every subclass: either side may be set further down.
+        query = cls.__request_query__ or set()
+
+        if overlap := cls.__request_path_params__ & query:
+            raise TypeError(
+                f"{cls.__name__}: fields {sorted(overlap)} cannot be both "
+                "path and query parameters"
+            )
+
+    @classmethod
+    def _init_response_type(cls) -> None:
+        """Infer ``__returning__`` and the response format."""
         args = cls.__pydantic_generic_metadata__["args"]
 
         if not args:
@@ -218,8 +336,32 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
     @property
     def request_path(self) -> str:
-        """Path appended to the API's base URL."""
-        return self.__request_path__
+        """Path appended to the API's base URL, placeholders filled in.
+
+        Each parameter is dumped in JSON mode (so enums give their value)
+        and percent-encoded; only ``__path_safe__`` characters are kept.
+
+        Raises:
+            ValueError: If a parameter is ``None``, empty, or a ``.``/``..``
+                segment.
+        """
+        params = self.__request_path_params__
+
+        if not params:
+            return self.__request_path__
+
+        values = self.model_dump(include=set(params), mode="json")
+
+        return self.__request_path__.format_map(
+            {
+                name: _encode_path_value(
+                    name,
+                    values.get(name),
+                    self.__path_safe__,
+                )
+                for name in params
+            }
+        )
 
     @property
     def request_method(self) -> str:
@@ -282,11 +424,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Return the body fields.
 
         Returns:
-            All fields except query parameters and ``None`` values, keyed
-            by alias.
+            All fields except path and query parameters and ``None``
+            values, keyed by alias.
         """
         return self.model_dump(
-            exclude=self.__request_query__ or set(),
+            exclude=(
+                (self.__request_query__ or set())
+                | self.__request_path_params__
+            ),
             exclude_none=True,
             by_alias=True,
             mode="python",

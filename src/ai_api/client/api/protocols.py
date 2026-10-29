@@ -28,9 +28,13 @@ class IAPI(Protocol):
         """Build the absolute URL for a request.
 
         Args:
-            method: Request path of the method, e.g. ``"/chat"``.
+            method: Request path of the method, e.g. ``"/models/m%2F1"``.
+                It is already percent-encoded and must not be encoded
+                again: join it with ``URL.joinpath(..., encoded=True)``,
+                not with yarl's ``/`` operator, which would turn ``%2F``
+                into ``%252F``.
             query: Query parameters to append, already converted to
-                strings.
+                strings; these are not encoded yet.
 
         Returns:
             The absolute URL to request.
