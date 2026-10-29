@@ -71,6 +71,44 @@ class APITLSError(APITransportError):
         super().__init__(message, transient=False)
 
 
+class APIRedirectError(APITransportError):
+    """A redirect was not followed; retrying will not help.
+
+    Raised when redirects are off (the default), lead to another origin,
+    lack a ``Location`` header or loop.
+    """
+
+    def __init__(
+        self,
+        message: str = "Too many redirects.",
+    ) -> None:
+        """Create a non-retryable redirect error.
+
+        Args:
+            message: Description of the failure.
+        """
+        super().__init__(message, transient=False)
+
+
+class APIRequestError(APITransportError):
+    """The request itself cannot be sent; retrying will not help.
+
+    Raised when an upload source fails (a missing file, a stream that
+    raises) or the HTTP client rejects a header or the URL.
+    """
+
+    def __init__(
+        self,
+        message: str = "Failed to send the request.",
+    ) -> None:
+        """Create a non-retryable request error.
+
+        Args:
+            message: Description of the failure.
+        """
+        super().__init__(message, transient=False)
+
+
 class APIResponseError(AIAPIError):
     """A response was received but its body could not be used.
 

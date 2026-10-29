@@ -4,6 +4,7 @@ import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from http import HTTPStatus
 from typing import Any, ClassVar
 
 from ai_api.client.exceptions.http import HTTP_ERRORS, APIError
@@ -68,15 +69,13 @@ def parse_retry_after(
     except ValueError:
         try:
             date = parsedate_to_datetime(value)
-        except (ValueError, TypeError, IndexError):
+        except ValueError, TypeError, IndexError:
             return None
 
         if date.tzinfo is None:
             date = date.replace(tzinfo=UTC)
 
-        seconds = (
-            date - datetime.now(UTC)
-        ).total_seconds()
+        seconds = (date - datetime.now(UTC)).total_seconds()
 
     if not math.isfinite(seconds):
         return None
@@ -88,8 +87,9 @@ class BaseErrorResolver:
     """Turns an HTTP error response into an ``APIError``.
 
     The body is expected in the common ``{"error": {"code", "type",
-    "message"}}`` shape. Provider-specific resolvers subclass this and
-    override ``provider``, ``get_error_code`` or ``classify``.
+    "message"}}`` shape; a string ``error`` (as Ollama sends) is taken as
+    the message. Provider-specific resolvers subclass this and override
+    ``provider``, ``get_error_code`` or ``classify``.
 
     Attributes:
         provider: Provider recorded on the created errors.
@@ -115,9 +115,7 @@ class BaseErrorResolver:
             The error to raise; it is returned, not raised, so the caller
             controls the traceback.
         """
-        payload: Mapping[str, Any] = (
-            body if isinstance(body, Mapping) else {}
-        )
+        payload: Mapping[str, Any] = body if isinstance(body, Mapping) else {}
 
         raw_error = payload.get("error")
         error: Mapping[str, Any] = (
@@ -126,7 +124,7 @@ class BaseErrorResolver:
 
         code = self.get_error_code(error)
         error_type = optional_str(error.get("type"))
-        message = optional_str(error.get("message"))
+        message = optional_str(error.get("message")) or optional_str(raw_error)
 
         request_id = (
             get_header(headers, "x-request-id")
@@ -181,7 +179,8 @@ class BaseErrorResolver:
         """Choose the error class and whether the error is transient.
 
         The default maps the status through ``HTTP_ERRORS`` and treats
-        timeouts, server errors and 529 (overloaded) as transient.
+        timeouts, server errors and 529 (overloaded) as transient, and
+        429 (rate limit) when the API said when to retry.
 
         Args:
             status: HTTP status code of the response.
@@ -196,7 +195,14 @@ class BaseErrorResolver:
         error_class = HTTP_ERRORS.get(status, APIError)
 
         transient = status in {
-            408, 500, 502, 503, 504, 529,
-        }
+            408,
+            500,
+            502,
+            503,
+            504,
+            529,
+        } or (
+            status == HTTPStatus.TOO_MANY_REQUESTS and retry_after is not None
+        )
 
         return error_class, transient

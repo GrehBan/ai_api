@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Test and type-check outputs
+.coverage
+coverage.xml
+report.html
+.mypy_cache/

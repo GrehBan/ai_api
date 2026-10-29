@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 from ai_api.methods.enums import BodyFormat, ResponseFormat, ResponseMode
 
 if TYPE_CHECKING:
+    from pydantic import TypeAdapter
+
+    from ai_api.client.api.protocols import Query
     from ai_api.client.response.parse.protocols import (
         IResponseParser,
         IStreamParser,
@@ -56,11 +59,12 @@ class IBaseMethod[ResponseT](Protocol):
         """Runtime class of the result; ties ``ResponseT`` to the method."""
         ...
 
-    def get_query_map(self) -> Mapping[str, str] | None:
+    def get_query_map(self) -> Query | None:
         """Return the query parameters.
 
         Returns:
-            Parameters as strings, or ``None`` if there are none.
+            Parameters as strings or lists of strings, or ``None`` if
+            there are none.
         """
         ...
 
@@ -94,4 +98,9 @@ class IStreamMethod[ResponseT](IBaseMethod[ResponseT], Protocol):
     @property
     def stream_parser(self) -> IStreamParser:
         """Parser of the stream."""
+        ...
+
+    @property
+    def response_adapter(self) -> TypeAdapter[ResponseT] | None:
+        """Validator of one SSE or NDJSON item; ``None`` when not used."""
         ...

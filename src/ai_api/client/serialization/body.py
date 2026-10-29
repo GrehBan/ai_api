@@ -4,31 +4,38 @@ import datetime
 import io
 from collections.abc import Mapping
 from enum import Enum
-from typing import Any
+from typing import Any, Final
 
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import InputFile
+
+MAX_DEPTH: Final = 256
+"""Deepest nesting of containers accepted in a request body."""
 
 
 class BodyNormalizer:
     """Prepares request body values for a transport-specific builder.
 
-    Nested models are dumped, enums are unwrapped, datetimes become Unix
-    timestamps and ``None`` values are dropped. Files are passed through
-    unchanged for the body builder to handle.
+    Nested models are dumped, enums are unwrapped and datetimes become
+    Unix timestamps. ``None`` fields are dropped from the body and from
+    nested models, but kept as ``null`` inside lists and dicts. Files are
+    passed through unchanged for the body builder to handle.
     """
 
     def normalize_mapping(
         self,
         body: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Normalize every value of a mapping, dropping ``None`` results.
+        """Normalize the fields of a body, dropping ``None`` results.
 
         Args:
             body: Body fields of a request.
 
         Returns:
             A new dict with normalized values.
+
+        Raises:
+            ValueError: If a value cannot be normalized.
         """
         return {
             key: normalized
@@ -43,11 +50,29 @@ class BodyNormalizer:
             value: Any value of a request body.
 
         Returns:
-            The normalized value, or ``None`` if it should be omitted.
+            The normalized value; ``None`` for ``None``.
 
         Raises:
-            ValueError: If a stream is closed or unreadable, or a datetime
-                is naive.
+            ValueError: If a stream is closed or unreadable, a datetime is
+                naive, or a container contains itself or is nested deeper
+                than ``MAX_DEPTH``.
+        """
+        return self._normalize(value, set())
+
+    def _normalize(self, value: Any, parents: set[int]) -> Any:
+        """Normalize a value inside the containers being normalized.
+
+        Args:
+            value: The value to normalize.
+            parents: Ids of the enclosing containers, to detect cycles.
+
+        Returns:
+            The normalized value.
+
+        Raises:
+            ValueError: If a stream is closed or unreadable, a datetime is
+                naive, or a container contains itself or is nested deeper
+                than ``MAX_DEPTH``.
         """
         if value is None:
             return None
@@ -62,15 +87,17 @@ class BodyNormalizer:
             return value
 
         if isinstance(value, BaseAPIType):
-            return self.normalize(
+            return self._normalize(
                 value.model_dump(
                     mode="python",
+                    exclude_none=True,
                     warnings=False,
-                )
+                ),
+                parents,
             )
 
         if isinstance(value, Enum):
-            return self.normalize(value.value)
+            return self._normalize(value.value, parents)
 
         if isinstance(value, datetime.datetime):
             if value.tzinfo is None:
@@ -82,14 +109,27 @@ class BodyNormalizer:
             now = datetime.datetime.now(datetime.UTC)
             return str(round((now + value).timestamp()))
 
-        if isinstance(value, Mapping):
-            return self.normalize_mapping(value)
+        if isinstance(value, (Mapping, list, tuple)):
+            if id(value) in parents:
+                raise ValueError("Request body contains a circular reference")
 
-        if isinstance(value, (list, tuple)):
-            return [
-                normalized
-                for item in value
-                if (normalized := self.normalize(item)) is not None
-            ]
+            # Deeper data would hit Python's recursion limit.
+            if len(parents) >= MAX_DEPTH:
+                raise ValueError(
+                    f"Request body is nested deeper than {MAX_DEPTH} levels"
+                )
+
+            parents.add(id(value))
+
+            try:
+                if isinstance(value, Mapping):
+                    return {
+                        key: self._normalize(item, parents)
+                        for key, item in value.items()
+                    }
+
+                return [self._normalize(item, parents) for item in value]
+            finally:
+                parents.discard(id(value))
 
         return value

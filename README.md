@@ -9,9 +9,9 @@ You describe each API call as a small declarative class. The library sends it ov
 ## Features
 
 - **Typed methods.** A method is a Pydantic model whose generic argument is its result type. `send_request(method)` returns that type, and both mypy and pyright infer it.
-- **Buffered and streamed responses.** Responses can be JSON models, text, bytes or empty. Streams yield byte chunks or text pieces through `async with session.stream(...)`.
+- **Buffered and streamed responses.** Responses can be JSON models, text, bytes or empty. Streams yield byte chunks, text pieces, or typed events from server-sent events (SSE) and newline-delimited JSON (NDJSON) through `async with session.stream(...)`.
 - **File uploads.** Upload from bytes, a path on disk, an open binary stream or an async iterator. Each retry resends the full content.
-- **Retries.** Transient failures are retried with exponential backoff and jitter, and `Retry-After` is honored.
+- **Retries.** Transient failures are retried with exponential backoff and jitter, and `Retry-After` is honored up to a cap.
 - **Structured errors.** One exception class per HTTP status, plus transport errors. Each error carries the provider error code, request id and a `transient` flag.
 - **Pluggable parts.** Sessions depend on protocols, so the API, authentication, error mapping, headers and JSON codec can each be replaced.
 
@@ -35,10 +35,10 @@ pip install -e .
 
 ```python
 import asyncio
-from collections.abc import Mapping
 
 from yarl import URL
 
+from ai_api.client.api.protocols import Query
 from ai_api.client.auth.bearer import BearerAuth
 from ai_api.client.exceptions.errror_resolver.base import BaseErrorResolver
 from ai_api.client.session.aiohttp import AiohttpSession
@@ -56,7 +56,7 @@ class ExampleAPI:
     def build_url(
         self,
         method: str,
-        query: Mapping[str, str] | None = None,
+        query: Query | None = None,
     ) -> str:
         # `method` is already percent-encoded: do not encode it again.
         url = self.base_url.joinpath(
@@ -111,14 +111,14 @@ asyncio.run(main())
 
 ## Defining methods
 
-A method class declares the HTTP request in its dunder class attributes. Its fields are the request parameters. Fields set to `None` are not sent.
+A method class declares the HTTP request in its dunder class attributes. Its fields are the request parameters. Fields set to `None` are not sent, and unknown fields raise `ValidationError`, so a misspelled parameter is not sent silently.
 
 | Attribute | Default | Meaning |
 |---|---|---|
 | `__request_path__` | required | Path appended to the API base URL; may contain `{field}` placeholders |
 | `__path_safe__` | `""` | Characters left unescaped in path parameters, e.g. `"/"` |
 | `__request_method__` | required | HTTP method, e.g. `"POST"` |
-| `__request_query__` | `None` | Names of fields sent as query parameters; fields that are neither path nor query parameters go to the body |
+| `__request_query__` | `None` | Names of fields sent as query parameters; fields that are neither path nor query parameters go to the body. Unknown names and mapping or model fields raise `TypeError` at class definition |
 | `__request_body_format__` | `BodyFormat.NONE` | `JSON`, `FORM`, `MULTIPART` or `NONE` |
 | `__retryable__` | `False` | Retry transient failures (up to 4 attempts in total) |
 | `__returning__` | inferred | Result class, taken from the generic argument |
@@ -144,6 +144,29 @@ class ListModels(BaseAPIMethod[ModelList]):
     __request_query__ = {"limit"}
 
     limit: int | None = None          # sent as ?limit=...
+```
+
+A list or tuple is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`.
+
+To send a field under another name, use `validation_alias` and `serialization_alias` rather than `alias`. The constructor then takes the field name in both mypy and pyright; with `alias`, mypy wants the field name and pyright the alias. At runtime both names are accepted.
+
+```python
+from pydantic import Field
+
+
+class ListFiles(BaseAPIMethod[ModelList]):
+    __request_path__ = "/files"
+    __request_method__ = "GET"
+    __request_query__ = {"page_size"}
+
+    page_size: int | None = Field(
+        default=None,
+        validation_alias="pageSize",
+        serialization_alias="pageSize",
+    )
+
+
+ListFiles(page_size=10)   # sent as ?pageSize=10
 ```
 
 ### Path parameters
@@ -201,13 +224,13 @@ Transcribe(file=StreamFile(chunks(), "s.wav"), model="x") # async iterator
 
 An `InputFile` field also accepts plain `bytes`, a `Path` or a binary stream and converts it to the matching class. The content type is guessed from the file name when you don't give one.
 
-A request whose files can be read only once is never retried, even if `__retryable__` is set. Text streams are rejected when the method is created, and files in a JSON or URL-encoded body raise `TypeError`.
+A request whose files can be read only once is never retried, even if `__retryable__` is set. Text streams are rejected when the method is created, and files in a JSON or URL-encoded body raise `TypeError`. A missing `PathFile` (or one that points to a directory), or a source that fails while it is sent, raises `APIRequestError` and is not retried.
 
 Files other than `BytesFile` are sent with chunked transfer encoding. If a server requires `Content-Length`, as some presigned upload URLs do, use `BytesFile`.
 
 ## Streaming responses
 
-Subclass `BaseStreamMethod`. The generic argument is the type of one streamed item, `bytes` or `str`. Any other item type, such as a model, raises `TypeError` when the class is defined, unless you set `__response_format__` or `__stream_parser__` yourself; model events will come with SSE and NDJSON support.
+Subclass `BaseStreamMethod`. The generic argument is the type of one streamed item: `bytes`, `str`, or an event type (see [Events](#events-sse-and-ndjson)).
 
 ```python
 from ai_api.methods.base import BaseStreamMethod
@@ -240,9 +263,65 @@ async with session.stream(Generate(prompt="Hi")) as stream:
 
 - **Errors before the stream starts.** An error status raises the matching `APIError` as you enter the `async with` block.
 - **Retries.** Only opening the stream is retried. A failure while iterating reaches your code, so it never receives duplicated data.
-- **Cleanup.** The connection is released when the block exits, including on `break` or an exception.
-- **Text decoding.** It is incremental, so a multi-byte character split between two chunks still decodes correctly.
+- **Cleanup.** The connection is released when the block exits, including on `break` or an exception. Iterating the stream after the block, even through an iterator taken inside it, raises `RuntimeError`.
+- **Text decoding.** It is incremental, so a multi-byte character split between two chunks still decodes correctly. A charset that is not a text encoding (`base64`, `zlib`) raises `APIResponseError`.
 - **Type safety.** Passing a stream method to `send_request`, or a buffered method to `stream`, is a type error.
+
+### Events: SSE and NDJSON
+
+For a stream of events, set `__response_format__` to `ResponseFormat.SSE` (`text/event-stream`) or `ResponseFormat.NDJSON` (one JSON value per line). The generic argument can be a model or a discriminated union of models, and each event is validated into it.
+
+```python
+from typing import Annotated, Literal
+
+from pydantic import Field
+
+from ai_api.client.response.parse.sse import ServerSentEvent
+from ai_api.methods.enums import ResponseFormat
+
+
+class TextDelta(BaseAPIType):
+    type: Literal["text_delta"]
+    text: str
+
+
+class MessageStop(BaseAPIType):
+    type: Literal["message_stop"]
+
+
+type MessageEvent = Annotated[
+    TextDelta | MessageStop,
+    Field(discriminator="type"),
+]
+
+
+class StreamMessage(BaseStreamMethod[MessageEvent]):
+    __request_path__ = "/messages"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+    __response_format__ = ResponseFormat.SSE
+
+    prompt: str
+    stream: bool = True
+
+
+class RawEvents(BaseStreamMethod[ServerSentEvent]):  # SSE, not validated
+    __request_path__ = "/events"
+    __request_method__ = "GET"
+
+
+async with session.stream(StreamMessage(prompt="Hi")) as events:
+    async for event in events:                 # TextDelta | MessageStop
+        if isinstance(event, TextDelta):
+            print(event.text, end="")
+```
+
+- **Content type.** An SSE response must have `Content-Type: text/event-stream`; anything else (such as a proxy's HTML login page with status 200) raises `APIResponseError` instead of giving an empty stream. For a server that sends another type, use `StreamResponseParser(require_event_stream=False)` as the method's `__stream_parser__`.
+- **Format.** It must be set for models and unions: the item type alone doesn't tell SSE from NDJSON. Without it the class definition raises `TypeError`. `ServerSentEvent` items imply SSE.
+- **Parsing.** SSE follows the HTML standard: multi-line `data`, comments, `event`, `id` and `retry`, and `\n`, `\r\n` or `\r` line endings. An event split across chunks is held back until it is complete, and an unfinished event at the end of the body is dropped. NDJSON skips blank lines.
+- **End of stream.** `data: [DONE]` (OpenAI) ends the stream and is not yielded.
+- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIError` built by the session's error resolver, so a provider's `classify` can mark it transient. So does JSON data whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama). An event with another `type` may carry an `error` field as data (a failed tool call, for example). Override `StreamResponseParser.is_error_event` for other rules. An event that doesn't match the item type raises `APIResponseError`.
+- **Raw events.** `BaseStreamMethod[ServerSentEvent]` yields events as they are. `[DONE]` and error events are handled the same way.
 
 ## Errors and retries
 
@@ -266,7 +345,9 @@ AIAPIError
 ├── APITransportError           no valid HTTP response
 │   ├── APIConnectionError
 │   ├── APITimeoutError
-│   └── APITLSError
+│   ├── APITLSError
+│   ├── APIRedirectError        redirect not followed
+│   └── APIRequestError         failed upload source, invalid header or URL
 └── APIResponseError            body could not be read, decoded or validated
 ```
 
@@ -277,9 +358,12 @@ An `APIError` carries:
 
 A retry happens only when `transient` is true. By default that means:
 - statuses 408, 500, 502, 503, 504 and 529;
+- status 429 when the response has `Retry-After`;
 - connection errors and timeouts.
 
-Waits use random exponential backoff of up to 30 s, but never less than `Retry-After`.
+Waits use random exponential backoff of up to 30 s, but never less than `Retry-After`. When the API asks to wait longer than `max_retry_after` (60 s by default), the error is raised at once instead. No retry starts after `retry_deadline` (15 minutes from the first attempt by default), and a wait that would end later is not started; an attempt in progress is limited by its own timeout.
+
+`BaseErrorResolver` also takes a string `error` (`{"error": "model not found"}`) as the message. Library errors can be pickled and copied, for example to pass them between processes.
 
 Error responses are mapped by an error resolver. `BaseErrorResolver` reads the common `{"error": {"code", "type", "message"}}` body shape. Subclass it to handle a provider's specifics:
 
@@ -319,13 +403,27 @@ class ExampleErrorResolver(BaseErrorResolver):
 | Argument | Default | Meaning |
 |---|---|---|
 | `api` | required | Builds request URLs (`IAPI`) |
-| `auth` | required | Produces the `Authorization` header (`IAuth`), e.g. `BearerAuth` |
+| `auth` | required | Produces the authentication header (`IAuth`): `BearerAuth` for `Authorization: Bearer ...`, `APIKeyAuth` for a key in its own header (`x-api-key` by default) |
 | `error_resolver` | required | Maps error responses to exceptions (`IErrorResolver`) |
 | `headers` | `None` | Extra default headers (`Headers({...})`) |
 | `json_loads` / `json_dumps` | `orjson` | JSON codec |
 | `limit` | `100` | Maximum number of simultaneous connections |
 | `timeout` | 600 s total, 30 s connect | Timeout of buffered requests |
 | `stream_timeout` | no total limit, 30 s connect, 600 s between chunks | Timeout of streamed requests |
+| `max_retry_after` | `60` | Longest `Retry-After` to wait for, in seconds |
+| `retry_deadline` | `900` | Seconds after the first attempt after which no retry starts; `None` for no limit |
+| `max_body_size` | `None` | Largest buffered response or error body, in bytes; streamed bodies are not limited |
+| `trust_env` | `False` | Use proxy settings and `.netrc` from the environment |
+| `follow_redirects` | `False` | Follow redirects within the origin of the request |
+| `loop` | running loop | Event loop the session is bound to |
+
+The authentication header is produced on every request, so an `IAuth` that rotates its token takes effect at once.
+
+Redirects are not followed by default: API providers do not redirect, and aiohttp strips only `Authorization` on a redirect to another host, so a key in `x-api-key` or in the default headers would leak there. A redirect raises `APIRedirectError`. With `follow_redirects=True`, redirects within the same origin (scheme, host and port) are followed; one to another origin still raises `APIRedirectError` before anything is sent there.
+
+A session is bound to one event loop: the loop running when it is created, or the one passed as `loop=`. Create it inside a coroutine (for example, in `main()`); created outside one, it raises `RuntimeError`, and so does using or closing it from another loop (such as a second `asyncio.run`). Close it before its loop ends, ideally with `async with`.
+
+Long SSE or NDJSON lines can be limited with `StreamResponseParser(max_line_size=...)`, and the data of one SSE event with `max_event_size=...`, set as a method's `__stream_parser__`.
 
 Timeouts are `aiohttp.ClientTimeout` objects. The default `timeout` is longer than aiohttp's 5 minutes, because long model generations exceed that.
 
@@ -335,7 +433,7 @@ Timeouts are `aiohttp.ClientTimeout` objects. The default `timeout` is longer th
 src/ai_api/
 ├── client/
 │   ├── api/            IAPI: base URL and URL building
-│   ├── auth/           BearerAuth
+│   ├── auth/           BearerAuth, APIKeyAuth
 │   ├── exceptions/     HTTP and transport errors, error resolvers
 │   ├── headers/        default headers
 │   ├── response/       BufferedResponse, Stream and the parsers
@@ -353,20 +451,22 @@ src/ai_api/
 
 ```bash
 uv sync --all-groups                 # runtime, dev and test dependencies
-uv run ruff check src                # lint
-uv run ruff format src               # format
+uv run ruff check src tests          # lint
+uv run ruff format src tests         # format
 uv run mypy src                      # strict type checking
-uv run pytest                        # tests (tests/ does not exist yet)
+uv run pyright                       # strict type checking of src and tests
+uv run pytest --cov                  # tests with branch coverage
+uv run pytest --mypy -m mypy tests/typing   # type inference of the public API
+uv run pre-commit install            # git hooks
 ```
 
 The code uses Google-style docstrings and PEP 695 generics. pyright is configured in `pyproject.toml` too; the few rules it disables are explained there.
 
 ## Limitations and roadmap
 
-- Server-sent events (`SSE`) and newline-delimited JSON (`NDJSON`) streams are declared but not parsed yet. Event models for streams, including discriminated unions, will come with them.
+- Streams are not resumed: SSE `id` and `retry` are parsed, but a dropped stream is not reconnected with `Last-Event-ID`.
 - There is no raw binary request body (an upload without multipart).
 - There are no provider clients (OpenAI, Anthropic) yet, only the building blocks.
-- There is no test suite yet.
 
 ## License
 

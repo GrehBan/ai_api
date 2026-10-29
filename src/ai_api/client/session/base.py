@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, NoReturn, Self
 
-from tenacity import AsyncRetrying, stop_after_attempt
+from tenacity import AsyncRetrying, stop_after_attempt, stop_before_delay
+from tenacity.stop import stop_base
 
 from ai_api.client.api.protocols import IAPI
 from ai_api.client.auth.protocols import IAuth
@@ -17,7 +18,12 @@ from ai_api.client.headers.protocols import IHeaders
 from ai_api.client.response.base import BufferedResponse
 from ai_api.client.response.protocols import IStreamResponse
 from ai_api.client.response.stream import Stream
-from ai_api.client.retry.startegy import RETRY_CONDITION, calculate_wait
+from ai_api.client.retry.startegy import (
+    DEFAULT_MAX_RETRY_AFTER,
+    DEFAULT_RETRY_DEADLINE,
+    calculate_wait,
+    retry_condition,
+)
 from ai_api.client.serialization.json import JsonDumps, JsonLoads, dumps, loads
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 
@@ -34,11 +40,16 @@ class BaseSession(ABC):
 
     Attributes:
         api: Builds request URLs.
-        auth: Produces the ``Authorization`` header.
+        auth: Produces the authentication header.
         error_resolver: Turns error responses into exceptions.
         headers: Default headers sent with every request.
         json_loads: JSON decoder for response bodies.
         json_dumps: JSON encoder for request bodies.
+        max_retry_after: Longest ``Retry-After`` the session waits for,
+            in seconds; a transient error asking for a longer wait is
+            raised without retrying.
+        retry_deadline: Seconds since the first attempt after which no
+            retry starts; ``None`` for no limit.
     """
 
     def __init__(
@@ -48,17 +59,26 @@ class BaseSession(ABC):
         error_resolver: IErrorResolver,
         headers: IHeaders | None = None,
         json_loads: JsonLoads = loads,
-        json_dumps: JsonDumps = dumps
+        json_dumps: JsonDumps = dumps,
+        *,
+        max_retry_after: float = DEFAULT_MAX_RETRY_AFTER,
+        retry_deadline: float | None = DEFAULT_RETRY_DEADLINE,
     ) -> None:
         """Store the session's collaborators.
 
         Args:
             api: Builds request URLs.
-            auth: Produces the ``Authorization`` header.
+            auth: Produces the authentication header.
             error_resolver: Turns error responses into exceptions.
             headers: Default headers; an empty set is used when ``None``.
             json_loads: JSON decoder for response bodies.
             json_dumps: JSON encoder for request bodies.
+            max_retry_after: Longest ``Retry-After`` to wait for, in
+                seconds.
+            retry_deadline: Seconds since the first attempt after which
+                no retry starts; a wait that would end later is not
+                started. An attempt in progress is not interrupted (its
+                own timeout limits it). ``None`` for no limit.
         """
         self.api = api
         self.auth = auth
@@ -66,6 +86,8 @@ class BaseSession(ABC):
         self.headers = headers or Headers()
         self.json_loads = json_loads
         self.json_dumps = json_dumps
+        self.max_retry_after = max_retry_after
+        self.retry_deadline = retry_deadline
 
     @abstractmethod
     async def close(self) -> None:
@@ -102,7 +124,9 @@ class BaseSession(ABC):
         """Send a method and return its parsed response.
 
         If ``method.retryable`` is true, transient failures are retried up
-        to four attempts in total.
+        to four attempts in total, unless the API asks to wait longer than
+        ``max_retry_after`` or the retry would start after
+        ``retry_deadline``.
 
         Args:
             method: The method to send.
@@ -160,6 +184,7 @@ class BaseSession(ABC):
                     method,
                     response,
                     self.json_loads,
+                    self.error_resolver,
                 )
             )
 
@@ -187,10 +212,15 @@ class BaseSession(ABC):
         if not retryable:
             return await call()
 
+        stop: stop_base = stop_after_attempt(4)
+
+        if self.retry_deadline is not None:
+            stop |= stop_before_delay(self.retry_deadline)
+
         async for attempt in AsyncRetrying(
-            retry=RETRY_CONDITION,
+            retry=retry_condition(self.max_retry_after),
             wait=calculate_wait,
-            stop=stop_after_attempt(4),
+            stop=stop,
             reraise=True,
         ):
             with attempt:
@@ -281,7 +311,7 @@ class BaseSession(ABC):
         """
         try:
             body = self.json_loads(buffered.body)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             body = None
 
         raise self.error_resolver.resolve(

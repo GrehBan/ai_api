@@ -5,6 +5,9 @@ from typing import Protocol
 
 from yarl import URL
 
+type Query = Mapping[str, str | list[str]]
+"""Query parameters; a list is sent as a repeated key."""
+
 
 class IAPI(Protocol):
     """Builds request URLs for one API.
@@ -23,7 +26,7 @@ class IAPI(Protocol):
     def build_url(
         self,
         method: str,
-        query: Mapping[str, str] | None = None,
+        query: Query | None = None,
     ) -> str:
         """Build the absolute URL for a request.
 
@@ -34,7 +37,8 @@ class IAPI(Protocol):
                 not with yarl's ``/`` operator, which would turn ``%2F``
                 into ``%252F``.
             query: Query parameters to append, already converted to
-                strings; these are not encoded yet.
+                strings, not encoded yet; a list value becomes a repeated
+                key (``ids=a&ids=b``).
 
         Returns:
             The absolute URL to request.

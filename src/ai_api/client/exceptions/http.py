@@ -60,31 +60,25 @@ class APIError(AIAPIError):
         super().__init__(message)
 
 
-
 class BadRequestError(APIError):
     """HTTP 400: the request parameters are invalid."""
 
     default_message = (
-        "Bad request: Invalid request parameters "
-        "or malformed data."
+        "Bad request: Invalid request parameters or malformed data."
     )
 
 
 class AuthenticationError(APIError):
     """HTTP 401: the credentials are missing or invalid."""
 
-    default_message = (
-        "Authentication failed: "
-        "Invalid or missing credentials."
-    )
+    default_message = "Authentication failed: Invalid or missing credentials."
 
 
 class BillingError(APIError):
     """HTTP 402: payment is required."""
 
     default_message = (
-        "Billing error: Payment is required "
-        "to access this resource."
+        "Billing error: Payment is required to access this resource."
     )
 
 
@@ -92,8 +86,7 @@ class PermissionDeniedError(APIError):
     """HTTP 403: the credentials lack the required permissions."""
 
     default_message = (
-        "Permission denied: Insufficient permissions "
-        "to access this resource."
+        "Permission denied: Insufficient permissions to access this resource."
     )
 
 
@@ -101,8 +94,7 @@ class NotFoundError(APIError):
     """HTTP 404: the resource does not exist."""
 
     default_message = (
-        "Not found: The requested resource "
-        "does not exist or is unavailable."
+        "Not found: The requested resource does not exist or is unavailable."
     )
 
 
@@ -110,8 +102,7 @@ class RequestTimeoutError(APIError):
     """HTTP 408: the server timed out waiting for the request."""
 
     default_message = (
-        "Request timeout: The server did not respond "
-        "within the allowed time."
+        "Request timeout: The server did not respond within the allowed time."
     )
 
 
@@ -119,8 +110,7 @@ class ConflictError(APIError):
     """HTTP 409: the request conflicts with the resource state."""
 
     default_message = (
-        "Conflict: The request conflicts "
-        "with the current resource state."
+        "Conflict: The request conflicts with the current resource state."
     )
 
 
@@ -136,10 +126,7 @@ class UnprocessableEntityError(APIError):
 class RateLimitError(APIError):
     """HTTP 429: too many requests or tokens."""
 
-    default_message = (
-        "Rate limit exceeded: "
-        "Too many requests or tokens."
-    )
+    default_message = "Rate limit exceeded: Too many requests or tokens."
 
 
 class QuotaExceededError(APIError):
@@ -159,8 +146,7 @@ class InternalServerError(APIError):
     """HTTP 500: the API failed unexpectedly."""
 
     default_message = (
-        "Internal server error: "
-        "The API encountered an unexpected error."
+        "Internal server error: The API encountered an unexpected error."
     )
 
 
@@ -168,8 +154,7 @@ class BadGatewayError(APIError):
     """HTTP 502: an upstream server returned an invalid response."""
 
     default_message = (
-        "Bad gateway: The upstream server "
-        "returned an invalid response."
+        "Bad gateway: The upstream server returned an invalid response."
     )
 
 
@@ -177,8 +162,7 @@ class ServiceUnavailableError(APIError):
     """HTTP 503: the API is temporarily unavailable."""
 
     default_message = (
-        "Service unavailable: "
-        "The API is temporarily unavailable."
+        "Service unavailable: The API is temporarily unavailable."
     )
 
 
@@ -186,8 +170,7 @@ class GatewayTimeoutError(APIError):
     """HTTP 504: an upstream server did not respond in time."""
 
     default_message = (
-        "Gateway timeout: The upstream server "
-        "did not respond in time."
+        "Gateway timeout: The upstream server did not respond in time."
     )
 
 
