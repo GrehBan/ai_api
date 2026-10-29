@@ -1,3 +1,5 @@
+"""Conversion of request values into wire-ready values."""
+
 import datetime
 import io
 from collections.abc import Mapping
@@ -5,13 +7,29 @@ from enum import Enum
 from typing import Any
 
 from ai_api.types.base import BaseAPIType
+from ai_api.types.files import InputFile
 
 
 class BodyNormalizer:
+    """Prepares request body values for a transport-specific builder.
+
+    Nested models are dumped, enums are unwrapped, datetimes become Unix
+    timestamps and ``None`` values are dropped. Files are passed through
+    unchanged for the body builder to handle.
+    """
+
     def normalize_mapping(
         self,
         body: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Normalize every value of a mapping, dropping ``None`` results.
+
+        Args:
+            body: Body fields of a request.
+
+        Returns:
+            A new dict with normalized values.
+        """
         return {
             key: normalized
             for key, value in body.items()
@@ -19,8 +37,23 @@ class BodyNormalizer:
         }
 
     def normalize(self, value: Any) -> Any:
+        """Normalize a single value, recursing into containers.
+
+        Args:
+            value: Any value of a request body.
+
+        Returns:
+            The normalized value, or ``None`` if it should be omitted.
+
+        Raises:
+            ValueError: If a stream is closed or unreadable, or a datetime
+                is naive.
+        """
         if value is None:
             return None
+
+        if isinstance(value, InputFile):
+            return value
 
         if isinstance(value, io.IOBase):
             if value.closed or not value.readable():
