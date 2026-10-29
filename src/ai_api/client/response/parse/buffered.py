@@ -1,38 +1,70 @@
+"""Parser for fully read responses."""
+
 from typing import cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from ai_api.client.exceptions.transport import APIResponseError
+from ai_api.client.response.base import BufferedResponse
 from ai_api.client.serialization.json import JsonLoads, loads
 from ai_api.methods.enums import ResponseFormat
 from ai_api.methods.protocols import IAPIMethod
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.exceptions.transport import APIResponseError
 
 
 class BufferedResponseParser:
+    """Parses JSON, text, bytes and empty responses."""
+
     def __init__(self, json_loads: JsonLoads = loads) -> None:
+        """Create the parser.
+
+        Args:
+            json_loads: JSON decoder used when ``parse`` is not given one.
+        """
         self._json_loads = json_loads
 
     def parse[T](
         self,
         method: IAPIMethod[T],
         buffered: BufferedResponse,
+        json_loads: JsonLoads | None = None
     ) -> T:
+        """Parse the body according to ``method.response_format``.
+
+        Args:
+            method: The method that was sent.
+            buffered: The successful response.
+            json_loads: JSON decoder to use instead of the parser's own.
+
+        Returns:
+            A validated model for JSON, ``str`` for TEXT, ``bytes`` for
+            BYTES and ``None`` for NONE.
+
+        Raises:
+            APIResponseError: If the body fails validation or decoding, or
+                is not empty when NONE is expected.
+            TypeError: If a JSON method has no model response type.
+            ValueError: If the body is not valid JSON or the format is not
+                supported for buffered responses.
+        """
+        if json_loads is None:
+            json_loads = self._json_loads
+
         raw = buffered.body
 
-        match method.__response_format__:
+        match method.response_format:
             case ResponseFormat.JSON:
                 model_type = method.response_type
 
-                if model_type is None:
+                if model_type is None or not issubclass(
+                    model_type, BaseModel
+                ):
                     raise TypeError(
                         "JSON response requires a response model"
                     )
 
                 try:
-                    return cast(
-                        T,
-                        model_type.model_validate_json(raw),
+                    return model_type.model_validate(
+                        json_loads(raw)
                     )
                 except ValidationError as exc:
                     raise APIResponseError(
@@ -67,5 +99,5 @@ class BufferedResponseParser:
             case _:
                 raise ValueError(
                     "Unsupported buffered response format: "
-                    f"{method.__response_format__}"
+                    f"{method.response_format}"
                 )
