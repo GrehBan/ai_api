@@ -24,6 +24,11 @@ _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
     type(None): ResponseFormat.NONE,
 }
 
+_STREAM_FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
+    bytes: ResponseFormat.BYTES,
+    str: ResponseFormat.TEXT,
+}
+
 _DOT_SEGMENTS: Final[frozenset[str]] = frozenset({".", ".."})
 
 
@@ -219,6 +224,12 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         cls._init_path_params()
         cls._init_response_type()
 
+        # A parametrized class such as BaseStreamMethod[Event] is created
+        # before the subclass body that may set the format or parser, so
+        # only the classes users declare are validated.
+        if cls.__pydantic_generic_metadata__["origin"] is None:
+            cls._validate_response_type()
+
     @classmethod
     def _init_path_params(cls) -> None:
         """Derive ``__request_path_params__`` from the class's own path.
@@ -280,6 +291,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
             if response_format is not None:
                 cls.__response_format__ = response_format
+
+    @classmethod
+    def _validate_response_type(cls) -> None:
+        """Check that the result type can be produced by the parser.
+
+        The base implementation accepts everything; subclasses narrow it.
+        """
 
     def model_post_init(self, context: Any, /) -> None:
         """Wrap raw binary streams in any field into ``IOFile``.
@@ -488,6 +506,11 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
     chunks, the default) or ``str`` (decoded text). Send it with
     ``session.stream()``.
 
+    Other item types, such as models, raise ``TypeError`` at class
+    definition unless the class (or a base class of its own) sets
+    ``__response_format__`` or ``__stream_parser__`` explicitly; otherwise
+    the stream would yield ``bytes`` typed as the model.
+
     Attributes:
         __stream_parser__: Parser of the stream.
 
@@ -502,6 +525,45 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
     __response_format__ = ResponseFormat.BYTES
     __response_mode__ = ResponseMode.STREAM
     __stream_parser__: ClassVar[IStreamParser] = StreamResponseParser()
+
+    @classmethod
+    def _infer_response_format(
+        cls,
+        response_type: type[Any],
+    ) -> ResponseFormat | None:
+        """Pick the stream format; only ``bytes`` and ``str`` are known.
+
+        Args:
+            response_type: The class from the generic argument.
+
+        Returns:
+            BYTES or TEXT, or ``None`` for any other item type.
+        """
+        return _STREAM_FORMAT_BY_TYPE.get(response_type)
+
+    @classmethod
+    def _validate_response_type(cls) -> None:
+        """Reject item types the default stream parser cannot produce.
+
+        Raises:
+            TypeError: If the item type is neither ``bytes`` nor ``str``
+                and neither the format nor the parser is set explicitly.
+        """
+        item_type = cls.__returning__
+
+        if (
+            item_type is None
+            or cls._infer_response_format(item_type) is not None
+            or cls._defines("__response_format__")
+            or cls._defines("__stream_parser__")
+        ):
+            return
+
+        raise TypeError(
+            f"{cls.__name__}: stream items of type {item_type.__name__} "
+            "are not supported by the default parser; use bytes or str, "
+            "or set __response_format__ or __stream_parser__ explicitly"
+        )
 
     @property
     def stream_parser(self) -> IStreamParser:

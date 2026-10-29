@@ -34,17 +34,22 @@ class BufferedResponseParser:
             method: The method that was sent.
             buffered: The successful response.
             json_loads: JSON decoder to use instead of the parser's own.
+                With the default decoder the body is validated by Pydantic
+                directly in JSON mode; a custom decoder's result is
+                validated in Python mode, where strict fields reject JSON
+                strings for dates, UUIDs and enums.
 
         Returns:
             A validated model for JSON, ``str`` for TEXT, ``bytes`` for
             BYTES and ``None`` for NONE.
 
         Raises:
-            APIResponseError: If the body fails validation or decoding, or
-                is not empty when NONE is expected.
+            APIResponseError: If the body is not valid JSON or fails
+                validation, fails decoding, or is not empty when NONE is
+                expected.
             TypeError: If a JSON method has no model response type.
-            ValueError: If the body is not valid JSON or the format is not
-                supported for buffered responses.
+            ValueError: If a custom decoder rejects the body or the format
+                is not supported for buffered responses.
         """
         if json_loads is None:
             json_loads = self._json_loads
@@ -62,10 +67,15 @@ class BufferedResponseParser:
                         "JSON response requires a response model"
                     )
 
+                # Pydantic's JSON mode accepts JSON representations that
+                # Python mode rejects for strict fields (dates, UUIDs and
+                # enums as strings), so it is used whenever the decoder is
+                # the default one. A custom decoder needs Python mode.
                 try:
-                    return model_type.model_validate(
-                        json_loads(raw)
-                    )
+                    if json_loads is loads:
+                        return model_type.model_validate_json(raw)
+
+                    return model_type.model_validate(json_loads(raw))
                 except ValidationError as exc:
                     raise APIResponseError(
                         "Failed to validate JSON response",

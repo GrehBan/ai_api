@@ -207,7 +207,7 @@ Files other than `BytesFile` are sent with chunked transfer encoding. If a serve
 
 ## Streaming responses
 
-Subclass `BaseStreamMethod`. The generic argument is the type of one streamed item:
+Subclass `BaseStreamMethod`. The generic argument is the type of one streamed item, `bytes` or `str`. Any other item type, such as a model, raises `TypeError` when the class is defined, unless you set `__response_format__` or `__stream_parser__` yourself; model events will come with SSE and NDJSON support.
 
 ```python
 from ai_api.methods.base import BaseStreamMethod
