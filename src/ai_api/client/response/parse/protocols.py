@@ -3,6 +3,9 @@
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Protocol
 
+from ai_api.client.exceptions.errror_resolver.protocols import (
+    IErrorResolver,
+)
 from ai_api.client.response.base import BufferedResponse
 from ai_api.client.response.protocols import IStreamResponse
 from ai_api.client.serialization.json import JsonLoads
@@ -18,7 +21,7 @@ class IResponseParser(Protocol):
         self,
         method: IAPIMethod[T],
         buffered: BufferedResponse,
-        json_loads: JsonLoads | None = None
+        json_loads: JsonLoads | None = None,
     ) -> T:
         """Parse a successful response.
 
@@ -42,7 +45,8 @@ class IStreamParser(Protocol):
         self,
         method: IStreamMethod[T],
         response: IStreamResponse,
-        json_loads: JsonLoads | None = None
+        json_loads: JsonLoads | None = None,
+        error_resolver: IErrorResolver | None = None,
     ) -> AsyncIterator[T]:
         """Start parsing a successful streamed response.
 
@@ -52,6 +56,9 @@ class IStreamParser(Protocol):
             response: The response, with a status below 400.
             json_loads: JSON decoder of the session. The parser's own
                 default is used when ``None``.
+            error_resolver: Error resolver of the session, for errors
+                reported inside the stream. The parser's own default is
+                used when ``None``.
 
         Returns:
             An iterator over the stream's items.

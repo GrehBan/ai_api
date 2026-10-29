@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+from ai_api.client.headers.names import AUTHORIZATION
+
 
 @dataclass(frozen=True, slots=True)
 class BearerAuth:
@@ -25,6 +27,11 @@ class BearerAuth:
 
         if any(char.isspace() for char in self.token):
             raise ValueError("Bearer token cannot contain whitespace")
+
+    @property
+    def header_name(self) -> str:
+        """Name of the header: ``Authorization``."""
+        return AUTHORIZATION
 
     def encode(self) -> str:
         """Return the ``Authorization`` header value.

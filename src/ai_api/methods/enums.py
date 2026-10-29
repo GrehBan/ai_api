@@ -29,8 +29,8 @@ class ResponseFormat(StrEnum):
         TEXT: Decoded to ``str`` using the response charset.
         BYTES: Returned as raw ``bytes``.
         NONE: The body must be empty; ``None`` is returned.
-        SSE: Server-sent events. Not implemented yet.
-        NDJSON: Newline-delimited JSON. Not implemented yet.
+        SSE: Server-sent events (``text/event-stream``); streams only.
+        NDJSON: Newline-delimited JSON, one value per line; streams only.
     """
 
     JSON = "json"

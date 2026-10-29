@@ -14,3 +14,4 @@ SERVER_SOFTWARE: Final[str] = (
 """Value of the ``User-Agent`` header sent by the library."""
 CONTENT_TYPE: Final[istr] = istr("Content-Type")
 AUTHORIZATION: Final[istr] = istr("Authorization")
+LOCATION: Final[istr] = istr("Location")

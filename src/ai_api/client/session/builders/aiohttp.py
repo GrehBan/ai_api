@@ -1,23 +1,50 @@
 """Request body encoding for ``aiohttp``."""
 
 import io
-from collections.abc import Mapping
-from typing import Any
+import math
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, cast
 
-from aiohttp import FormData
+from aiohttp import BytesPayload, FormData
 
+from ai_api.client.exceptions.transport import APIRequestError
 from ai_api.client.serialization.body import BodyNormalizer
 from ai_api.client.serialization.json import JsonDumps, dumps
 from ai_api.methods.enums import BodyFormat
 from ai_api.types.files import BytesFile, InputFile
 
 
+async def _read_source(file: InputFile) -> AsyncIterator[bytes]:
+    """Read an upload, marking failures of its source.
+
+    aiohttp reports any error raised while it writes the body as a
+    connection error, which would be retried. Wrapping it here lets the
+    session tell a broken source from a broken connection.
+
+    Args:
+        file: The file to read.
+
+    Yields:
+        Chunks of the file.
+
+    Raises:
+        APIRequestError: If the source fails.
+    """
+    try:
+        async for chunk in file.open():
+            yield chunk
+    except Exception as exc:
+        raise APIRequestError(
+            f"Failed to read upload {file.filename!r}: {exc}"
+        ) from exc
+
+
 class AiohttpBodyBuilder:
     """Turns a method's body fields into ``aiohttp`` request arguments.
 
-    Values are normalized first, then encoded as ``json=`` or as
-    ``data=FormData``. Files become multipart parts with their file name
-    and content type.
+    Values are normalized first, then encoded as JSON bytes or as
+    ``FormData``, passed as ``data=``. Files become multipart parts with
+    their file name and content type.
     """
 
     def __init__(
@@ -28,7 +55,8 @@ class AiohttpBodyBuilder:
         """Create the builder.
 
         Args:
-            json_dumps: Encoder for mappings sent inside form fields.
+            json_dumps: Encoder for JSON bodies and for mappings sent
+                inside form fields.
             normalizer: Value normalizer; a default one is used when
                 ``None``.
         """
@@ -52,8 +80,11 @@ class AiohttpBodyBuilder:
 
         Raises:
             TypeError: If files or binary data are sent as JSON or as a
-                URL-encoded form, or a text stream is uploaded.
-            ValueError: If the body format is unknown.
+                URL-encoded form, a text stream is uploaded, or a value
+                cannot be encoded as JSON.
+            ValueError: If the body format is unknown or a JSON value is
+                NaN or infinite.
+            APIRequestError: If a file to upload does not exist.
         """
         if body_format == BodyFormat.NONE:
             return {}
@@ -63,7 +94,12 @@ class AiohttpBodyBuilder:
         match body_format:
             case BodyFormat.JSON:
                 self._check_json(normalized)
-                return {"json": normalized}
+                return {
+                    "data": BytesPayload(
+                        self._dumps(normalized),
+                        content_type="application/json",
+                    )
+                }
 
             case BodyFormat.FORM:
                 return {
@@ -81,9 +117,7 @@ class AiohttpBodyBuilder:
                     )
                 }
 
-        raise ValueError(
-            f"Unsupported body format: {body_format}"
-        )
+        raise ValueError(f"Unsupported body format: {body_format}")
 
     def _check_json(self, value: Any) -> None:
         """Reject values that cannot be represented in JSON.
@@ -94,14 +128,17 @@ class AiohttpBodyBuilder:
 
         Raises:
             TypeError: If the value is or contains a file or binary data.
+            ValueError: If the value is or contains NaN or infinity, which
+                JSON cannot represent.
         """
         if isinstance(
             value,
             (InputFile, io.IOBase, bytes, bytearray, memoryview),
         ):
-            raise TypeError(
-                "Binary data cannot be sent as JSON"
-            )
+            raise TypeError("Binary data cannot be sent as JSON")
+
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("NaN and infinity cannot be sent as JSON")
 
         if isinstance(value, Mapping):
             for item in value.values():
@@ -110,6 +147,33 @@ class AiohttpBodyBuilder:
         elif isinstance(value, (list, tuple)):
             for item in value:
                 self._check_json(item)
+
+    def _dumps(self, value: Any) -> bytes:
+        """Encode a checked value as JSON.
+
+        Args:
+            value: A normalized value.
+
+        Returns:
+            The encoded JSON; a ``str`` from an encoder such as
+            ``json.dumps`` is encoded as UTF-8.
+
+        Raises:
+            TypeError: If the encoder does not support a value, such as a
+                set, a ``Decimal``, a non-string key or an integer out of
+                range.
+        """
+        try:
+            encoded = cast(bytes | str, self._json_dumps(value))
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"Request body cannot be encoded as JSON: {exc}"
+            ) from exc
+
+        if isinstance(encoded, str):
+            return encoded.encode()
+
+        return encoded
 
     def _build_form(
         self,
@@ -155,8 +219,11 @@ class AiohttpBodyBuilder:
             multipart: Whether the form is multipart.
 
         Raises:
-            TypeError: If a file is added to a non-multipart form or a
-                text stream is uploaded.
+            TypeError: If a file is added to a non-multipart form, a text
+                stream is uploaded, or a mapping cannot be encoded as
+                JSON.
+            ValueError: If a mapping contains NaN or infinity.
+            APIRequestError: If a file to upload does not exist.
         """
         if value is None:
             return
@@ -170,16 +237,21 @@ class AiohttpBodyBuilder:
 
         if file is not None:
             if not multipart:
-                raise TypeError(
-                    "Files require multipart encoding"
-                )
+                raise TypeError("Files require multipart encoding")
+
+            try:
+                file.check()
+            except OSError as exc:
+                raise APIRequestError(
+                    f"Cannot read upload {file.filename!r}: {exc}"
+                ) from exc
 
             form.add_field(
                 key,
                 (
                     file.data
                     if isinstance(file, BytesFile)
-                    else file.open()
+                    else _read_source(file)
                 ),
                 filename=file.filename or key,
                 content_type=file.content_type,
@@ -187,14 +259,12 @@ class AiohttpBodyBuilder:
             return
 
         if isinstance(value, io.IOBase):
-            raise TypeError(
-                "Only binary streams can be uploaded"
-            )
+            raise TypeError("Only binary streams can be uploaded")
 
         if isinstance(value, Mapping):
             self._check_json(value)
 
-            value = self._json_dumps(value).decode("utf-8")
+            value = self._dumps(value).decode("utf-8")
 
         elif isinstance(value, bool):
             value = str(value).lower()

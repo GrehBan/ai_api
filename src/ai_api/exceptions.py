@@ -3,6 +3,19 @@
 from typing import Any, ClassVar
 
 
+def _rebuild(cls: type[AIAPIError], args: tuple[Any, ...]) -> AIAPIError:
+    """Create an error without running its ``__init__``.
+
+    Args:
+        cls: The error class.
+        args: The ``args`` of the original error.
+
+    Returns:
+        The error; its attributes are restored by unpickling.
+    """
+    return cls.__new__(cls, *args)
+
+
 class AIAPIError(Exception):
     """Base class for every error raised by the library.
 
@@ -43,3 +56,15 @@ class AIAPIError(Exception):
 
         self.message = " ".join(parts)
         super().__init__(self.message, *args)
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Support ``pickle`` and ``copy``.
+
+        Subclasses take other constructor arguments, and ``__init__``
+        composes the message, so a copy is rebuilt from ``args`` and the
+        attributes instead of calling ``__init__`` again.
+
+        Returns:
+            The rebuild function, its arguments and the attributes.
+        """
+        return (_rebuild, (type(self), self.args), self.__dict__)

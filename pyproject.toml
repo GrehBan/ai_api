@@ -38,6 +38,7 @@ dev = [
     "isort>=9.0.2",
     "mypy>=2.4.0",
     "pre-commit>=4.7.0",
+    "pyright>=1.1.414",
     "ruff>=0.17.3",
     "types-aiofiles>=25.1.0.20260518",
 ]
@@ -45,11 +46,12 @@ test = [
     "aresponses>=3.0.0",
     "pytest>=9.2.0",
     "pytest-aiohttp>=1.1.1",
+    "pytest-asyncio>=1.4.1",
     "pytest-cov>=7.1.0",
     "pytest-html>=4.2.0",
     "pytest-mock>=3.17.0",
     "pytest-mypy>=1.1.0",
-    "pytz>=2026.5",
+    "trustme>=1.2.1",
 ]
 
 [tool.ruff]
@@ -105,6 +107,12 @@ ignore = [
     "PLW3201",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "D", # docstrings are not required in tests
+    "PLR2004", # magic values are expected in asserts
+]
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
@@ -119,10 +127,16 @@ line-ending = "auto"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = [
     "-ra",
     "--strict-markers",
 ]
+markers = [
+    "integration: tests against a local aiohttp server",
+    "typing: static type checks",
+]
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
@@ -131,10 +145,12 @@ source = ["ai_api"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+fail_under = 98
 exclude_also = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
+    "^\\s*\\.\\.\\.$",
 ]
 
 [tool.mypy]
@@ -161,7 +177,7 @@ namespace_packages = true
 show_absolute_path = true
 
 [tool.pyright]
-include = ["src"]
+include = ["src", "tests"]
 pythonVersion = "3.15"
 venvPath = "."
 venv = ".venv"

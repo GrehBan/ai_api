@@ -4,12 +4,17 @@ from typing import Protocol
 
 
 class IAuth(Protocol):
-    """Produces the value of the ``Authorization`` header."""
+    """Produces the authentication header of every request."""
+
+    @property
+    def header_name(self) -> str:
+        """Name of the header, such as ``Authorization`` or ``x-api-key``."""
+        ...
 
     def encode(self) -> str:
-        """Return the ``Authorization`` header value.
+        """Return the header value.
 
         Returns:
-            The full header value, including the scheme.
+            The full header value, including the scheme if any.
         """
         ...

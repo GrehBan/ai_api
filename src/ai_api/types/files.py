@@ -1,6 +1,7 @@
 """Files to upload in multipart requests."""
 
 import asyncio
+import errno
 import io
 import mimetypes
 import os
@@ -74,6 +75,15 @@ class InputFile(ABC):
         A request carrying a non-reusable file is never retried.
         """
         return True
+
+    def check(self) -> None:  # noqa: B027
+        """Check, before sending, that the content can be read.
+
+        Called once per request; the default accepts every file.
+
+        Raises:
+            OSError: If the content cannot be read.
+        """
 
     @abstractmethod
     def open(self) -> AsyncIterator[bytes]:
@@ -228,6 +238,27 @@ class PathFile(InputFile):
         self.path = Path(path)
         super().__init__(filename or self.path.name, content_type)
         self.chunk_size = chunk_size
+
+    def check(self) -> None:
+        """Check that the path is an existing file.
+
+        Raises:
+            IsADirectoryError: If ``path`` is a directory.
+            FileNotFoundError: If there is no file at ``path``.
+        """
+        if self.path.is_dir():
+            raise IsADirectoryError(
+                errno.EISDIR,
+                "Is a directory",
+                str(self.path),
+            )
+
+        if not self.path.is_file():
+            raise FileNotFoundError(
+                errno.ENOENT,
+                "No such file",
+                str(self.path),
+            )
 
     async def open(self) -> AsyncIterator[bytes]:
         """Read the file from the beginning.

@@ -26,7 +26,7 @@ class BufferedResponseParser:
         self,
         method: IAPIMethod[T],
         buffered: BufferedResponse,
-        json_loads: JsonLoads | None = None
+        json_loads: JsonLoads | None = None,
     ) -> T:
         """Parse the body according to ``method.response_format``.
 
@@ -60,12 +60,8 @@ class BufferedResponseParser:
             case ResponseFormat.JSON:
                 model_type = method.response_type
 
-                if model_type is None or not issubclass(
-                    model_type, BaseModel
-                ):
-                    raise TypeError(
-                        "JSON response requires a response model"
-                    )
+                if model_type is None or not issubclass(model_type, BaseModel):
+                    raise TypeError("JSON response requires a response model")
 
                 # Pydantic's JSON mode accepts JSON representations that
                 # Python mode rejects for strict fields (dates, UUIDs and

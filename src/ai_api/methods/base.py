@@ -2,18 +2,30 @@
 
 import io
 import string
+import types
 from abc import ABC
 from collections.abc import Mapping
-from typing import Any, ClassVar, Final, cast
+from typing import (
+    Any,
+    ClassVar,
+    Final,
+    TypeVar,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PydanticUserError, TypeAdapter
 
+from ai_api.client.api.protocols import Query
 from ai_api.client.response.parse.buffered import BufferedResponseParser
 from ai_api.client.response.parse.protocols import (
     IResponseParser,
     IStreamParser,
 )
+from ai_api.client.response.parse.sse import ServerSentEvent
 from ai_api.client.response.parse.stream import StreamResponseParser
 from ai_api.methods.enums import BodyFormat, ResponseFormat, ResponseMode
 from ai_api.types.files import InputFile, IOFile
@@ -24,10 +36,15 @@ _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
     type(None): ResponseFormat.NONE,
 }
 
-_STREAM_FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
+_STREAM_FORMAT_BY_TYPE: Final[dict[Any, ResponseFormat]] = {
     bytes: ResponseFormat.BYTES,
     str: ResponseFormat.TEXT,
+    ServerSentEvent: ResponseFormat.SSE,
 }
+
+_EVENT_FORMATS: Final[frozenset[ResponseFormat]] = frozenset(
+    {ResponseFormat.SSE, ResponseFormat.NDJSON}
+)
 
 _DOT_SEGMENTS: Final[frozenset[str]] = frozenset({".", ".."})
 
@@ -63,22 +80,29 @@ def _parse_path_params(template: str) -> frozenset[str]:
     return frozenset(names)
 
 
-def _encode_path_value(name: str, value: Any, safe: str) -> str:
+def _encode_path_value(name: str, value: Any, safe: str, raw: Any) -> str:
     """Convert a path parameter to an escaped path segment.
 
     Args:
         name: The parameter name, for error messages.
         value: The JSON-mode dump of the field value.
         safe: Characters left unescaped, e.g. ``"/"``.
+        raw: The field value itself, for error messages.
 
     Returns:
         The percent-encoded value.
 
     Raises:
-        ValueError: If the value is ``None``, empty, or a ``.``/``..``
-            segment, which would change the request path.
+        ValueError: If the value is ``None``, dumps to ``null`` (such as
+            NaN), is empty, or is a ``.``/``..`` segment, which would
+            change the request path.
     """
     if value is None:
+        if raw is not None:
+            raise ValueError(
+                f"Path parameter {name!r} has an unsafe value: {raw!r}"
+            )
+
         raise ValueError(f"Path parameter {name!r} is not set")
 
     text = str(value).lower() if isinstance(value, bool) else str(value)
@@ -90,6 +114,69 @@ def _encode_path_value(name: str, value: Any, safe: str) -> str:
         )
 
     return quote(text, safe=safe)
+
+
+def _is_mapping_type(annotation: Any) -> bool:
+    """Check whether a field annotation allows mappings or models.
+
+    Args:
+        annotation: The annotation of a field, unions included.
+
+    Returns:
+        ``True`` if the annotation or a member of its union is a mapping
+        or a Pydantic model.
+    """
+    origin = get_origin(annotation)
+
+    if origin in {Union, types.UnionType}:
+        return any(_is_mapping_type(arg) for arg in get_args(annotation))
+
+    target = origin or annotation
+
+    return isinstance(target, type) and issubclass(
+        target, (Mapping, BaseModel)
+    )
+
+
+def _query_item(name: str, value: Any) -> str:
+    """Convert one dumped query value to a string.
+
+    Args:
+        name: The parameter name, for error messages.
+        value: A JSON-mode dump of the value.
+
+    Returns:
+        The value as a string; booleans as ``"true"``/``"false"``.
+
+    Raises:
+        TypeError: If the value is an object or a nested list.
+    """
+    if isinstance(value, (dict, list)):
+        raise TypeError(
+            f"Query parameter {name!r} must be a scalar or a list of scalars"
+        )
+
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def _query_value(name: str, value: Any) -> str | list[str]:
+    """Convert a dumped query field to a string or a list of strings.
+
+    Args:
+        name: The parameter name, for error messages.
+        value: A JSON-mode dump of the field.
+
+    Returns:
+        A string, or a list of strings sent as repeated keys; ``None``
+        items are dropped.
+
+    Raises:
+        TypeError: If the value is an object or contains one.
+    """
+    if isinstance(value, list):
+        return [_query_item(name, item) for item in value if item is not None]
+
+    return _query_item(name, value)
 
 
 def _resolve_response_type(arg: Any) -> type[Any] | None:
@@ -118,7 +205,8 @@ def _wrap_streams(value: Any) -> Any:
         value: A field value of a method.
 
     Returns:
-        The value with every binary stream replaced by an ``IOFile``.
+        The value with every binary stream replaced by an ``IOFile``;
+        the same object if it contains no streams.
 
     Raises:
         ValueError: If a text stream is found.
@@ -129,14 +217,21 @@ def _wrap_streams(value: Any) -> Any:
     if isinstance(value, io.IOBase):
         raise ValueError("Only binary streams can be uploaded")
 
-    if type(value) is list:
-        return [_wrap_streams(item) for item in value]
+    if type(value) in {list, tuple}:
+        items = [_wrap_streams(item) for item in value]
 
-    if type(value) is tuple:
-        return tuple(_wrap_streams(item) for item in value)
+        if all(new is old for new, old in zip(items, value, strict=True)):
+            return value
+
+        return type(value)(items)
 
     if type(value) is dict:
-        return {key: _wrap_streams(item) for key, item in value.items()}
+        wrapped = {key: _wrap_streams(item) for key, item in value.items()}
+
+        if all(wrapped[key] is item for key, item in value.items()):
+            return value
+
+        return wrapped
 
     return value
 
@@ -172,8 +267,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     and dunder class attributes describe the HTTP request. Subclass
     ``BaseAPIMethod`` or ``BaseStreamMethod`` rather than this class.
 
-    The generic argument determines ``__returning__`` and, unless a
-    subclass sets it explicitly, ``__response_format__``.
+    The generic argument determines ``__returning__`` and
+    ``__response_format__``, unless a subclass sets them explicitly.
 
     Attributes:
         __request_path__: Path appended to the API's base URL. It may
@@ -186,9 +281,11 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             ``"org/model"``.
         __request_method__: HTTP method, e.g. ``"POST"``.
         __request_query__: Names of fields sent as query parameters; all
-            other fields go to the body.
+            other fields go to the body. A list or tuple is sent as a
+            repeated key (``ids=a&ids=b``); mappings and models are
+            rejected.
         __returning__: Runtime class of the result; inferred from the
-            generic argument.
+            generic argument unless a subclass sets it explicitly.
         __request_body_format__: Encoding of the request body.
         __retryable__: Whether transient failures may be retried. Ignored
             when the request carries a file that can be read only once.
@@ -197,8 +294,9 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     """
 
     model_config = ConfigDict(
-        extra="allow",
-        populate_by_name=True,
+        extra="forbid",
+        validate_by_name=True,
+        validate_by_alias=True,
         arbitrary_types_allowed=True,
     )
 
@@ -222,6 +320,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """
         super().__pydantic_init_subclass__(**kwargs)
         cls._init_path_params()
+        cls._init_query_params()
         cls._init_response_type()
 
         # A parametrized class such as BaseStreamMethod[Event] is created
@@ -271,6 +370,29 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             )
 
     @classmethod
+    def _init_query_params(cls) -> None:
+        """Check that every query parameter is a field that fits a URL.
+
+        Raises:
+            TypeError: If a name in ``__request_query__`` has no field, or
+                the field is annotated as a mapping or a model.
+        """
+        query = cls.__request_query__ or set()
+
+        if unknown := query - cls.model_fields.keys():
+            raise TypeError(
+                f"{cls.__name__}: __request_query__ names {sorted(unknown)} "
+                "have no matching fields"
+            )
+
+        for name in sorted(query):
+            if _is_mapping_type(cls.model_fields[name].annotation):
+                raise TypeError(
+                    f"{cls.__name__}: query parameter {name!r} cannot be "
+                    "a mapping or a model"
+                )
+
+    @classmethod
     def _init_response_type(cls) -> None:
         """Infer ``__returning__`` and the response format."""
         args = cls.__pydantic_generic_metadata__["args"]
@@ -283,7 +405,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         if response_type is None:
             return
 
-        if "__returning__" not in cls.__dict__:
+        if not cls._defines("__returning__"):
             cls.__returning__ = response_type
 
         if not cls._defines("__response_format__"):
@@ -376,6 +498,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     name,
                     values.get(name),
                     self.__path_safe__,
+                    getattr(self, name),
                 )
                 for name in params
             }
@@ -415,13 +538,17 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Runtime class of the result, if known."""
         return cast(type[ResponseT] | None, self.__returning__)
 
-    def get_query_map(self) -> Mapping[str, str] | None:
+    def get_query_map(self) -> Query | None:
         """Return the query parameters.
 
         Returns:
             Fields listed in ``__request_query__`` converted to strings
-            (booleans as ``"true"``/``"false"``), or ``None`` if the
-            method has no query parameters.
+            (booleans as ``"true"``/``"false"``) or, for lists and tuples,
+            to lists of strings; ``None`` if the method has no query
+            parameters.
+
+        Raises:
+            TypeError: If a value is an object or contains one.
         """
         if self.__request_query__ is None:
             return None
@@ -433,10 +560,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             mode="json",
         )
 
-        return {
-            key: str(value).lower() if isinstance(value, bool) else str(value)
-            for key, value in data.items()
-        }
+        return {key: _query_value(key, value) for key, value in data.items()}
 
     def get_body_map(self) -> Mapping[str, Any]:
         """Return the body fields.
@@ -503,16 +627,22 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
     """A method whose response is consumed as a stream.
 
     ``ResponseT`` is the type of one streamed item: ``bytes`` (raw
-    chunks, the default) or ``str`` (decoded text). Send it with
-    ``session.stream()``.
+    chunks, the default), ``str`` (decoded text) or ``ServerSentEvent``
+    (server-sent events as they are). Send it with ``session.stream()``.
 
-    Other item types, such as models, raise ``TypeError`` at class
-    definition unless the class (or a base class of its own) sets
-    ``__response_format__`` or ``__stream_parser__`` explicitly; otherwise
-    the stream would yield ``bytes`` typed as the model.
+    Other item types, such as models and discriminated unions, need
+    ``__response_format__`` set to SSE or NDJSON: each event is then
+    validated into the item type. Without an explicit format or
+    ``__stream_parser__`` they raise ``TypeError`` at class definition;
+    otherwise the stream would yield ``bytes`` typed as the model.
 
     Attributes:
         __stream_parser__: Parser of the stream.
+        __stream_item__: The generic argument as written, including
+            unions and type aliases.
+        __response_adapter__: Validator of the item type for SSE and
+            NDJSON; ``None`` for ``ServerSentEvent`` items and other
+            formats.
 
     Example:
         >>> class Download(BaseStreamMethod[bytes]):
@@ -525,50 +655,93 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
     __response_format__ = ResponseFormat.BYTES
     __response_mode__ = ResponseMode.STREAM
     __stream_parser__: ClassVar[IStreamParser] = StreamResponseParser()
+    __stream_item__: ClassVar[Any] = None
+    __response_adapter__: ClassVar[TypeAdapter[Any] | None] = None
+
+    @classmethod
+    def _init_response_type(cls) -> None:
+        """Infer the response type and keep the item type as written."""
+        super()._init_response_type()
+        args = cls.__pydantic_generic_metadata__["args"]
+
+        if args:
+            item = args[0]
+            cls.__stream_item__ = type(None) if item is None else item
 
     @classmethod
     def _infer_response_format(
         cls,
         response_type: type[Any],
     ) -> ResponseFormat | None:
-        """Pick the stream format; only ``bytes`` and ``str`` are known.
+        """Pick the stream format from the item type.
 
         Args:
             response_type: The class from the generic argument.
 
         Returns:
-            BYTES or TEXT, or ``None`` for any other item type.
+            BYTES for ``bytes``, TEXT for ``str``, SSE for
+            ``ServerSentEvent``, or ``None`` for any other item type.
         """
         return _STREAM_FORMAT_BY_TYPE.get(response_type)
 
     @classmethod
     def _validate_response_type(cls) -> None:
-        """Reject item types the default stream parser cannot produce.
+        """Check the item type and build its validator.
 
         Raises:
-            TypeError: If the item type is neither ``bytes`` nor ``str``
-                and neither the format nor the parser is set explicitly.
+            TypeError: If the default parser cannot produce the item type
+                and neither the format nor the parser is set explicitly,
+                or if Pydantic cannot validate the item type of an SSE or
+                NDJSON stream.
         """
-        item_type = cls.__returning__
+        item = cls.__stream_item__
 
-        if (
-            item_type is None
-            or cls._infer_response_format(item_type) is not None
+        if item is None or isinstance(item, TypeVar):
+            return
+
+        # Identity, not ``in``: Annotated arguments may be unhashable.
+        known = any(item is cls_ for cls_ in _STREAM_FORMAT_BY_TYPE)
+
+        if not (
+            known
             or cls._defines("__response_format__")
             or cls._defines("__stream_parser__")
         ):
+            name = item.__name__ if isinstance(item, type) else item
+            raise TypeError(
+                f"{cls.__name__}: stream items of type {name} are not "
+                "supported by the default parser; use bytes, str or "
+                "ServerSentEvent, or set __response_format__ (SSE or "
+                "NDJSON) or __stream_parser__ explicitly"
+            )
+
+        if cls.__response_format__ not in _EVENT_FORMATS or (
+            item is ServerSentEvent
+            and cls.__response_format__ is ResponseFormat.SSE
+        ):
+            cls.__response_adapter__ = None
             return
 
-        raise TypeError(
-            f"{cls.__name__}: stream items of type {item_type.__name__} "
-            "are not supported by the default parser; use bytes or str, "
-            "or set __response_format__ or __stream_parser__ explicitly"
-        )
+        try:
+            cls.__response_adapter__ = TypeAdapter(item)
+        except PydanticUserError as exc:
+            raise TypeError(
+                f"{cls.__name__}: cannot validate stream items of type "
+                f"{item!r}: {exc}"
+            ) from exc
 
     @property
     def stream_parser(self) -> IStreamParser:
         """Parser of the stream."""
         return self.__stream_parser__
+
+    @property
+    def response_adapter(self) -> TypeAdapter[ResponseT] | None:
+        """Validator of one SSE or NDJSON item, if events are validated."""
+        return cast(
+            TypeAdapter[ResponseT] | None,
+            self.__response_adapter__,
+        )
 
 
 _BASE_METHODS: Final[frozenset[type[Any]]] = frozenset(

@@ -19,7 +19,8 @@ class IErrorResolver(Protocol):
         """Build the error for a failed response.
 
         Args:
-            status: HTTP status code, 400 or higher.
+            status: HTTP status code, 400 or higher; for an error event
+                inside a stream, the status of the stream itself.
             body: Decoded JSON body, or ``None`` if it was not valid JSON.
             headers: Response headers.
 
