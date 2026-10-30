@@ -1,5 +1,7 @@
 """Shared request for text generation."""
 
+from __future__ import annotations
+
 from pydantic import Field
 
 from ai_api.types.requests.base import BaseRequest

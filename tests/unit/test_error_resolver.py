@@ -1,5 +1,7 @@
 """Block B: the default error resolver."""
 
+from __future__ import annotations
+
 import datetime
 from collections.abc import Mapping
 from typing import Any
@@ -7,20 +9,16 @@ from typing import Any
 import pytest
 from multidict import CIMultiDict
 
-from ai_api.client.exceptions.error_resolver.base import (
-    BaseErrorResolver,
-    get_header,
-    optional_str,
-    parse_retry_after,
-)
-from ai_api.client.exceptions.http import (
+from ai_api.enums import Provider
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import (
     HTTP_ERRORS,
-    APIError,
+    APIStatusError,
     NotFoundError,
     QuotaExceededError,
     RateLimitError,
 )
-from ai_api.enums import Provider
+from ai_api.http.headers import get_header, parse_retry_after
 from tests.conftest import NOW
 
 
@@ -29,8 +27,17 @@ from tests.conftest import NOW
     [("abc", "abc"), ("", ""), (1, None), (None, None), ({"a": 1}, None)],
     ids=["str", "empty-str", "int", "none", "dict"],
 )
-def test_optional_str(value: Any, expected: str | None) -> None:
-    assert optional_str(value) == expected
+def test_error_fields_keep_only_strings(
+    value: Any,
+    expected: str | None,
+) -> None:
+    error = BaseErrorResolver().resolve(
+        status=400,
+        body={"error": {"type": value}},
+        headers={},
+    )
+
+    assert error.error_type == expected
 
 
 @pytest.mark.parametrize(
@@ -116,7 +123,7 @@ def resolve(
     body: Any = None,
     headers: Mapping[str, str] | None = None,
     resolver: BaseErrorResolver | None = None,
-) -> APIError:
+) -> APIStatusError:
     return (resolver or BaseErrorResolver()).resolve(
         status=status,
         body=body,
@@ -144,7 +151,7 @@ def test_resolve_reads_error_object() -> None:
     assert error.message.endswith("detail: No such model")
     assert error.request_id == "req-1"
     assert error.retry_after == 2.0
-    assert error.provider == Provider.NONE
+    assert error.provider == Provider.GENERIC
     assert error.transient is False
 
 
@@ -210,15 +217,15 @@ def test_resolve_request_id_order(
         (502, HTTP_ERRORS[502], True),
         (503, HTTP_ERRORS[503], True),
         (504, HTTP_ERRORS[504], True),
-        (529, APIError, True),
-        (418, APIError, False),
-        (599, APIError, False),
+        (529, APIStatusError, True),
+        (418, APIStatusError, False),
+        (599, APIStatusError, False),
     ],
     ids=lambda value: str(value) if isinstance(value, int) else None,
 )
 def test_classify(
     status: int,
-    error_cls: type[APIError],
+    error_cls: type[APIStatusError],
     transient: bool,
 ) -> None:
     result = BaseErrorResolver().classify(
@@ -255,7 +262,7 @@ def test_rate_limit_is_transient_with_retry_after(
 def test_resolve_uses_classification() -> None:
     error = resolve(529)
 
-    assert type(error) is APIError
+    assert type(error) is APIStatusError
     assert error.transient is True
 
 
@@ -272,7 +279,7 @@ class ExampleErrorResolver(BaseErrorResolver):
         error_type: str | None,
         message: str | None,
         retry_after: float | None,
-    ) -> tuple[type[APIError], bool]:
+    ) -> tuple[type[APIStatusError], bool]:
         if status == 429 and code == "insufficient_quota":
             return QuotaExceededError, False
 

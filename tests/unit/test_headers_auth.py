@@ -1,19 +1,20 @@
 """Block E: default headers and bearer authentication."""
 
+from __future__ import annotations
+
 import dataclasses
 import sys
 
 import pytest
 
 from ai_api.__meta__ import __version__
-from ai_api.client.auth.api_key import APIKeyAuth
-from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.headers.headers import Headers
-from ai_api.client.headers.names import (
+from ai_api.http.auth import APIKeyAuth, BearerAuth
+from ai_api.http.headers import (
     AUTHORIZATION,
     CONTENT_TYPE,
     SERVER_SOFTWARE,
     USER_AGENT,
+    Headers,
 )
 from tests.conftest import TEST_TOKEN
 

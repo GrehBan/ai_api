@@ -1,5 +1,7 @@
 """Block J: ``BaseSession`` logic on the fake transport."""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
@@ -8,28 +10,28 @@ from unittest.mock import MagicMock
 import pytest
 from tenacity import RetryCallState
 
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.error_resolver.protocols import (
+from ai_api.enums import ResponseFormat
+from ai_api.http.exceptions.protocols import (
     IErrorResolver,
 )
-from ai_api.client.exceptions.http import (
-    APIError,
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import (
+    APIStatusError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.client.exceptions.transport import (
+from ai_api.http.exceptions.transport import (
     APIConnectionError,
-    APIResponseError,
     APITLSError,
 )
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.response.parse.stream import StreamResponseParser
-from ai_api.client.response.protocols import IStreamResponse
-from ai_api.client.serialization.json import JsonLoads, loads
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.methods.enums import ResponseFormat
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
+from ai_api.response.buffered import BufferedResponse
+from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.response.protocols import IStreamResponse
+from ai_api.serialization.json import JsonLoads, loads
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import StreamFile
 from tests.conftest import FakeStreamResponse, FakeTransport, make_method
@@ -170,14 +172,14 @@ async def test_undecodable_error_body_reaches_resolver_as_none(
     json_loads: JsonLoads,
 ) -> None:
     resolver = MagicMock()
-    resolver.resolve.return_value = APIError(status=502)
+    resolver.resolve.return_value = APIStatusError(status=502)
     transport = FakeTransport(
         [failed(502, body, {"a": "b"})],
         error_resolver=resolver,
         json_loads=json_loads,
     )
 
-    with pytest.raises(APIError):
+    with pytest.raises(APIStatusError):
         await transport.send_request(buffered_method())
 
     resolver.resolve.assert_called_once_with(
@@ -281,7 +283,7 @@ async def test_retries_stop_after_four_attempts() -> None:
 )
 async def test_permanent_errors_are_not_retried(
     status: int,
-    error_cls: type[APIError],
+    error_cls: type[APIStatusError],
 ) -> None:
     transport = FakeTransport([failed(status), ok()])
 
@@ -338,7 +340,7 @@ async def test_wait_is_computed_from_previous_error(
     first, second = no_retry_wait.outcomes
     assert isinstance(first, ServiceUnavailableError)
     assert first.retry_after == 7.0
-    assert isinstance(second, APIError)
+    assert isinstance(second, APIStatusError)
     assert second.status == 502
     assert second.retry_after is None
 
@@ -376,7 +378,7 @@ async def test_exhausted_retry_loop_is_an_internal_error(
         async def __anext__(self) -> Any:
             raise StopAsyncIteration
 
-    mocker.patch("ai_api.client.session.base.AsyncRetrying", NoAttempts)
+    mocker.patch("ai_api.session.base.AsyncRetrying", NoAttempts)
     transport = FakeTransport([ok()])
 
     with pytest.raises(RuntimeError, match="Unexpected retry state"):
@@ -576,8 +578,8 @@ class TransientErrors(BaseErrorResolver):
         error_type: str | None,
         message: str | None,
         retry_after: float | None,
-    ) -> tuple[type[APIError], bool]:
-        return APIError, True
+    ) -> tuple[type[APIStatusError], bool]:
+        return APIStatusError, True
 
 
 def sse_method(**class_vars: Any) -> IStreamMethod[Any]:
@@ -599,7 +601,7 @@ async def test_error_event_uses_session_resolver_and_is_not_retried(
         stream_responses=[response],
         error_resolver=TransientErrors(),
     )
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         async with transport.stream(sse_method(retryable=True)) as stream:
             items = aiter(stream)
             assert await anext(items) == Delta(text="a")

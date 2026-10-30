@@ -7,32 +7,34 @@ Never run: mypy (through ``pytest --mypy``) and pyright check it. Every
 fail the check if that error disappears.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Annotated, Literal, assert_type
 
 from pydantic import Field
 
-from ai_api.client.api.base import BaseAPI
-from ai_api.client.api.protocols import IAPI
-from ai_api.client.base import BaseClient
-from ai_api.client.protocols import IClient
-from ai_api.client.resources.base import BaseResource
-from ai_api.client.resources.usecases.base import BaseUseCase
-from ai_api.client.resources.usecases.protocols import IUseCase
-from ai_api.client.response.parse.sse import ServerSentEvent
-from ai_api.client.response.stream import Stream, map_stream
-from ai_api.client.session.aiohttp import AiohttpSession
-from ai_api.client.session.protocols import ISession
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.methods.enums import ResponseFormat
-from ai_api.methods.protocols import IAPIMethod, IStreamMethod
-from ai_api.providers.openai.client.openai import (
-    OpenAIClient,
-    session_factory,
+from ai_api import (
+    BaseAPI,
+    BaseAPIMethod,
+    BaseAPIType,
+    BaseClient,
+    BaseStreamMethod,
+    ResponseFormat,
+    ServerSentEvent,
+    Stream,
 )
-from ai_api.types.base import BaseAPIType
-from ai_api.types.requests.generation import GenerationRequest
-from ai_api.types.responses.generation import GenerationResponse
+from ai_api.client import IClient
+from ai_api.http import IAPI
+from ai_api.methods import IAPIMethod, IStreamMethod
+from ai_api.providers.openai import OpenAIClient
+from ai_api.providers.openai.client import session_factory
+from ai_api.resources import BaseResource, BaseUseCase, IUseCase
+from ai_api.response import map_stream
+from ai_api.session import ISession
+from ai_api.session.aiohttp import AiohttpSession
+from ai_api.types.requests import GenerationRequest
+from ai_api.types.responses import GenerationResponse
 
 
 class Model(BaseAPIType):

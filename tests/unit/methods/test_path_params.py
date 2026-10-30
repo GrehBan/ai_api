@@ -1,5 +1,7 @@
 """Block G2: path parameters."""
 
+from __future__ import annotations
+
 import enum
 import math
 from typing import Any
@@ -90,7 +92,7 @@ def test_path_safe_keeps_slash() -> None:
     path = build_path(
         "/m/{model}",
         {"model": "org/model name"},
-        __path_safe__="/",
+        __request_path_safe__="/",
     )
 
     assert path == "/m/org/model%20name"
@@ -127,7 +129,7 @@ def test_unsafe_values(value: Any, match: str) -> None:
 )
 def test_unsafe_segments_with_path_safe(value: str) -> None:
     with pytest.raises(ValueError, match="unsafe value"):
-        build_path("/m/{value}", {"value": value}, __path_safe__="/")
+        build_path("/m/{value}", {"value": value}, __request_path_safe__="/")
 
 
 def test_dot_segments_are_escaped_without_path_safe() -> None:

@@ -1,5 +1,7 @@
 """Base class of shared requests."""
 
+from __future__ import annotations
+
 from pydantic import ConfigDict
 
 from ai_api.types.base import BaseAPIType

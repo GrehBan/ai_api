@@ -1,5 +1,7 @@
 """Block G3: query, body, stream wrapping and retries."""
 
+from __future__ import annotations
+
 import enum
 import io
 from collections.abc import AsyncIterator
@@ -8,8 +10,8 @@ from typing import Any
 import pytest
 from pydantic import Field, ValidationError
 
+from ai_api.enums import BodyFormat
 from ai_api.methods.base import BaseAPIMethod
-from ai_api.methods.enums import BodyFormat
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile, InputFile, IOFile, StreamFile
 from tests.conftest import make_method
@@ -279,4 +281,4 @@ def test_method_properties() -> None:
     method = Upload()
 
     assert method.request_method == "POST"
-    assert method.body_format is BodyFormat.MULTIPART
+    assert method.request_body_format is BodyFormat.MULTIPART

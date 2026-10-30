@@ -1,28 +1,29 @@
 """Block M: ``BaseClient``, ``OpenAIClient`` and ``SessionFactory``."""
 
+from __future__ import annotations
+
 import warnings
 from typing import Any
 
 import pytest
 
-from ai_api.client.auth.api_key import APIKeyAuth
-from ai_api.client.auth.bearer import BearerAuth
 from ai_api.client.base import BaseClient
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.http import (
+from ai_api.client.factory import SessionFactory
+from ai_api.enums import Provider
+from ai_api.http.auth import APIKeyAuth, BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import (
     QuotaExceededError,
     RateLimitError,
 )
-from ai_api.client.factory.factory import SessionFactory
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.session.aiohttp import AiohttpSession
-from ai_api.enums import Provider
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.providers.openai.client.api.openai import OPENAI_API
-from ai_api.providers.openai.client.exceptions.error_resolver.openai import (
+from ai_api.providers.openai.api import OPENAI_API
+from ai_api.providers.openai.client import OpenAIClient
+from ai_api.providers.openai.resolver import (
     OpenAIErrorResolver,
 )
-from ai_api.providers.openai.client.openai import OpenAIClient
+from ai_api.response.buffered import BufferedResponse
+from ai_api.session.aiohttp import AiohttpSession
 from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,

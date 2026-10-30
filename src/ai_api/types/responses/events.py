@@ -1,5 +1,7 @@
 """Shared events of a streamed generation."""
 
+from __future__ import annotations
+
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -73,11 +75,11 @@ class OtherEvent[RawT](RawResponseEvent[RawT]):
     type: Literal["other"] = "other"
 
 
-type ResponseEvent[RawT] = Annotated[
+type GenerationEvent[RawT] = Annotated[
     TextDeltaEvent[RawT]
     | CompletedEvent[RawT]
     | FailedEvent[RawT]
     | OtherEvent[RawT],
     Field(discriminator="type"),
 ]
-"""Any shared event, told apart by ``type``."""
+"""Any shared event of a generation stream, told apart by ``type``."""

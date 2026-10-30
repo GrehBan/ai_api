@@ -6,6 +6,8 @@ outcome of ``build`` is checked: the kind of arguments, the rejections,
 and the URL-encoded form rendered through the public payload API.
 """
 
+from __future__ import annotations
+
 import datetime
 import decimal
 import enum
@@ -20,11 +22,11 @@ from urllib.parse import parse_qsl
 import pytest
 from aiohttp import BytesPayload, FormData
 
-from ai_api.client.exceptions.transport import APIRequestError
-from ai_api.client.serialization.body import BodyNormalizer
-from ai_api.client.serialization.json import JsonDumps, dumps, loads
-from ai_api.client.session.builders.aiohttp import AiohttpBodyBuilder
-from ai_api.methods.enums import BodyFormat
+from ai_api.enums import BodyFormat
+from ai_api.http.exceptions.transport import APIRequestError
+from ai_api.serialization.json import JsonDumps, dumps, loads
+from ai_api.serialization.normalize import BodyNormalizer
+from ai_api.session.body.aiohttp import AiohttpBodyBuilder
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile, PathFile, StreamFile
 

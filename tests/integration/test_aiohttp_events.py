@@ -1,5 +1,7 @@
 """SSE stage 4: SSE and NDJSON streams of ``AiohttpSession``."""
 
+from __future__ import annotations
+
 import asyncio
 import itertools
 import json
@@ -8,13 +10,13 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import Field
 
-from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.http import APIError
-from ai_api.client.response.parse.sse import ServerSentEvent
-from ai_api.client.session.aiohttp import AiohttpSession
+from ai_api.enums import BodyFormat, ResponseFormat
+from ai_api.http.auth import BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import APIStatusError
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.methods.enums import BodyFormat, ResponseFormat
+from ai_api.response.parse.sse import ServerSentEvent
+from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
@@ -203,7 +205,7 @@ async def test_error_event_is_raised_mid_stream(
         )
     )
 
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         async with session.stream(CreateMessage()) as events:
             async for _ in events:
                 pass
@@ -246,12 +248,12 @@ async def test_break_from_endless_events_releases_connection(
         Reply(body=b"ok"),
     )
 
-    # With limit=1 a leaked connection would block the next request.
+    # With max_connections=1 a leaked connection would block the next request.
     async with AiohttpSession(
         api,
         BearerAuth(TEST_TOKEN),
         BaseErrorResolver(),
-        limit=1,
+        max_connections=1,
     ) as session:
         async with session.stream(Completions()) as chunks:
             async for _ in chunks:

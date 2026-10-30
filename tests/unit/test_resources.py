@@ -1,5 +1,7 @@
 """Block N: resources, use cases and shared types on the fake transport."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import Any
@@ -7,26 +9,24 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from ai_api.client.resources.base import BaseResource, BaseSessionAccess
-from ai_api.client.resources.protocols import IResource
-from ai_api.client.resources.usecases.base import (
+from ai_api.enums import BodyFormat, Provider, ResponseFormat
+from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
+from ai_api.resources.base import BaseResource, BaseSessionAccess
+from ai_api.resources.protocols import ICompositeUseCase, IResource
+from ai_api.resources.usecases import (
     BaseCompositeUseCase,
     BaseStreamUseCase,
     BaseUseCase,
 )
-from ai_api.client.resources.usecases.protocols import ICompositeUseCase
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.response.stream import Stream, map_stream
-from ai_api.enums import Provider
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.methods.enums import BodyFormat, ResponseFormat
+from ai_api.response.buffered import BufferedResponse
+from ai_api.response.stream import Stream, map_stream
 from ai_api.types.base import BaseAPIType
 from ai_api.types.requests.generation import GenerationRequest
 from ai_api.types.responses.events import (
     CompletedEvent,
     FailedEvent,
+    GenerationEvent,
     OtherEvent,
-    ResponseEvent,
     TextDeltaEvent,
 )
 from ai_api.types.responses.generation import GenerationResponse, TokenUsage
@@ -63,7 +63,7 @@ class CreateStream(BaseStreamMethod[RawEvent]):
     stream: bool = True
 
 
-def to_event(raw: RawEvent) -> ResponseEvent[RawEvent]:
+def to_event(raw: RawEvent) -> GenerationEvent[RawEvent]:
     match raw.type:
         case "response.output_text.delta":
             return TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
@@ -77,7 +77,7 @@ class Generate(
     BaseCompositeUseCase[
         GenerationRequest,
         GenerationResponse[RawResponse],
-        ResponseEvent[RawEvent],
+        GenerationEvent[RawEvent],
         FakeTransport,
     ]
 ):
@@ -99,7 +99,7 @@ class Generate(
     def stream(
         self,
         request: GenerationRequest,
-    ) -> AbstractAsyncContextManager[Stream[ResponseEvent[RawEvent]]]:
+    ) -> AbstractAsyncContextManager[Stream[GenerationEvent[RawEvent]]]:
         method = CreateStream(model=request.model, input=request.input)
         return map_stream(self.session.stream(method), to_event)
 
@@ -199,7 +199,7 @@ def test_classes_implement_the_protocols() -> None:
     use_case: ICompositeUseCase[
         GenerationRequest,
         GenerationResponse[RawResponse],
-        ResponseEvent[RawEvent],
+        GenerationEvent[RawEvent],
     ] = Generate(transport)
 
     assert resource.session is use_case.session
@@ -272,8 +272,8 @@ def test_response_events_are_told_apart_by_type(
     data: dict[str, Any],
     event_type: type[Any],
 ) -> None:
-    adapter: TypeAdapter[ResponseEvent[RawEvent]] = TypeAdapter(
-        ResponseEvent[RawEvent]
+    adapter: TypeAdapter[GenerationEvent[RawEvent]] = TypeAdapter(
+        GenerationEvent[RawEvent]
     )
 
     event = adapter.validate_python({**data, "raw": {"type": "x"}})

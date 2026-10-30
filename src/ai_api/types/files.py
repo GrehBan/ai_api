@@ -1,5 +1,7 @@
 """Files to upload in multipart requests."""
 
+from __future__ import annotations
+
 import asyncio
 import errno
 import io
