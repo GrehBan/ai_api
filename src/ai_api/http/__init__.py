@@ -14,6 +14,7 @@ from ai_api.http.headers import (
 )
 from ai_api.http.protocols import (
     IAPI,
+    HeadersType,
     IAuth,
     IHeaders,
     Query,
@@ -24,6 +25,7 @@ __all__ = [
     "BaseAPI",
     "BearerAuth",
     "Headers",
+    "HeadersType",
     "IAPI",
     "IAuth",
     "IHeaders",

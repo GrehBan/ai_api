@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Method headers: `__request_headers__` (a mapping or `Headers`, `None` by
+  default) is sent with every request of the method; it is exposed as the
+  `request_headers` property, a new `IHeaders` collection on every access.
+- Per-call options: `send_request` and `stream` on `ISession`, `BaseSession`,
+  `IClient` and `BaseClient` take keyword-only `headers=` and `timeout=`.
+  Both apply to every attempt of the call, retries included.
+  - Headers are merged in the order session < method < call < authentication;
+    a call cannot replace the authentication header.
+  - `timeout` is in seconds. For a buffered request it replaces the total of
+    the session's `timeout`; for a stream, the silence between chunks
+    (`sock_read`) of `stream_timeout`. Other limits are kept, and a stream
+    still has no total limit.
+- `ai_api.http.HeadersType` (a mapping or an `IHeaders`) and
+  `ai_api.session.Timeout`.
+- `Headers`, `Headers.add` and `Headers.build` accept another `IHeaders`
+  collection as well as a mapping. `IHeaders` is `runtime_checkable`.
+
+### Changed
+
+- Transports implement `_execute(method, *, headers=None, timeout=None)` and
+  `_open_stream(method, *, headers=None, timeout=None)`.
+- `BaseSession(headers=...)` keeps a given `IHeaders` object as it is instead
+  of copying it into a new `Headers`; a mapping is still copied.
+
 ## [0.1.0] - 2026-10-30
 
 This release reorganizes the package into layers and defines the public API.
@@ -105,4 +133,5 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/GrehBan/ai_api/compare/2b58dfc...v0.1.0

@@ -33,7 +33,7 @@ from ai_api.http.exceptions.transport import (
     APITLSError,
 )
 from ai_api.http.headers import SERVER_SOFTWARE, Headers
-from ai_api.methods.base import BaseAPIMethod
+from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
@@ -53,6 +53,11 @@ class Ping(BaseAPIMethod[bytes]):
 
 class RetryablePing(Ping):
     __retryable__ = True
+
+
+class StreamPing(BaseStreamMethod[bytes]):
+    __request_path__ = "/ping"
+    __request_method__ = "GET"
 
 
 class UpdateModel(BaseAPIMethod[Model]):
@@ -118,6 +123,38 @@ async def test_extra_headers(api: LocalAPI, recorder: Recorder) -> None:
     assert headers["X-Trace"] == "abc"
     # The library's own headers win over the defaults.
     assert headers["User-Agent"] == SERVER_SOFTWARE
+
+
+class TracedPing(Ping):
+    __request_headers__ = {"X-Level": "method", "X-Method": "m"}
+
+
+async def test_header_precedence(api: LocalAPI, recorder: Recorder) -> None:
+    defaults = {"X-Level": "session", "X-Session": "s"}
+
+    async with make_session(api, headers=defaults) as session:
+        await session.send_request(
+            TracedPing(),
+            headers={"x-level": "call", "Authorization": "Bearer other"},
+        )
+
+    headers = recorder.last.headers
+    assert headers.getall("X-Level") == ["call"]
+    assert headers["X-Session"] == "s"
+    assert headers["X-Method"] == "m"
+    # A call cannot replace the authentication header.
+    assert headers.getall("Authorization") == [f"Bearer {TEST_TOKEN}"]
+
+
+async def test_call_headers_are_not_kept(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    await session.send_request(Ping(), headers={"X-Call": "1"})
+    await session.send_request(Ping())
+
+    assert "X-Call" in recorder.requests[0].headers
+    assert "X-Call" not in recorder.requests[1].headers
 
 
 async def test_path_query_and_json_body_in_one_request(
@@ -301,6 +338,53 @@ async def test_timeout(api: LocalAPI, recorder: Recorder) -> None:
             await session.send_request(Ping())
 
     assert isinstance(info.value.__cause__, TimeoutError)
+
+
+async def test_call_timeout_replaces_the_total(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(delay=0.6))
+
+    with pytest.raises(APITimeoutError):
+        await session.send_request(Ping(), timeout=0.2)
+
+
+async def test_call_timeout_can_extend_the_session_timeout(
+    api: LocalAPI,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(body=b"pong", delay=0.3))
+
+    async with make_session(api, timeout=ClientTimeout(total=0.1)) as session:
+        assert await session.send_request(Ping(), timeout=5) == b"pong"
+
+
+async def test_call_timeout_keeps_the_other_limits(
+    api: LocalAPI,
+    recorder: Recorder,
+    mocker: MockerFixture,
+) -> None:
+    limits = {"connect": 2, "sock_read": 3, "sock_connect": 4}
+    request = mocker.spy(ClientSession, "request")
+
+    async with make_session(
+        api,
+        timeout=ClientTimeout(total=1, ceil_threshold=6, **limits),
+        stream_timeout=ClientTimeout(sock_read=7, connect=8),
+    ) as session:
+        await session.send_request(Ping(), timeout=9)
+        await session.send_request(Ping())
+
+        async with session.stream(StreamPing(), timeout=5):
+            pass
+
+    timeouts = [call.kwargs["timeout"] for call in request.call_args_list]
+    assert timeouts == [
+        ClientTimeout(total=9, ceil_threshold=6, **limits),
+        ClientTimeout(total=1, ceil_threshold=6, **limits),
+        ClientTimeout(sock_read=5, connect=8),
+    ]
 
 
 async def test_closed_port() -> None:

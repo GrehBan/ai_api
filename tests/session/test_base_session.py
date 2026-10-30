@@ -26,6 +26,7 @@ from ai_api.http.exceptions.transport import (
     APIConnectionError,
     APITLSError,
 )
+from ai_api.http.headers import Headers
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.buffered import BufferedResponse
@@ -624,3 +625,65 @@ async def test_break_in_event_stream_closes_response() -> None:
             break
 
     assert response.aclose_calls == 1
+
+
+async def test_call_options_reach_every_attempt(
+    no_retry_wait: MagicMock,
+) -> None:
+    transport = FakeTransport([failed(503), ok()])
+    headers = {"X-Call": "1"}
+
+    await transport.send_request(
+        buffered_method(retryable=True),
+        headers=headers,
+        timeout=5.0,
+    )
+
+    assert transport.call_options == [(headers, 5.0), (headers, 5.0)]
+
+
+async def test_call_options_default_to_none() -> None:
+    transport = FakeTransport([ok()], [FakeStreamResponse([b"a"])])
+
+    await transport.send_request(buffered_method())
+    async with transport.stream(stream_method()):
+        pass
+
+    assert transport.call_options == [(None, None), (None, None)]
+
+
+async def test_stream_call_options_reach_every_opening_attempt(
+    no_retry_wait: MagicMock,
+) -> None:
+    transport = FakeTransport(
+        stream_responses=[
+            FakeStreamResponse([], status=503),
+            FakeStreamResponse([b"a"]),
+        ]
+    )
+    headers = Headers({"Last-Event-ID": "7"})
+
+    async with transport.stream(
+        stream_method(retryable=True),
+        headers=headers,
+        timeout=2.5,
+    ) as stream:
+        assert [item async for item in stream] == [b"a"]
+
+    assert transport.call_options == [(headers, 2.5), (headers, 2.5)]
+
+
+def test_session_keeps_a_given_headers_collection() -> None:
+    headers = Headers({"X-Default": "1"})
+
+    assert FakeTransport(headers=headers).headers is headers
+
+
+def test_session_copies_header_mappings() -> None:
+    mapping = {"X-Default": "1"}
+
+    session = FakeTransport(headers=mapping)
+    mapping["X-Default"] = "2"
+
+    assert isinstance(session.headers, Headers)
+    assert session.headers.headers["x-default"] == "1"

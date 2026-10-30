@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from multidict import CIMultiDict
 from yarl import URL
@@ -70,6 +70,7 @@ type HeadersDict = CIMultiDict[Any]
 type HeadersMapping = Mapping[str, Any]
 
 
+@runtime_checkable
 class IHeaders(Protocol):
     """Default headers the session sends with every request."""
 
@@ -78,11 +79,11 @@ class IHeaders(Protocol):
         """The stored headers."""
         ...
 
-    def add(self, headers: HeadersMapping) -> None:
+    def add(self, headers: HeadersType) -> None:
         """Add or replace headers.
 
         Args:
-            headers: Headers to merge in.
+            headers: Headers to merge in, as a mapping or a collection.
         """
         ...
 
@@ -94,13 +95,18 @@ class IHeaders(Protocol):
         """
         ...
 
-    def build(self, extra: HeadersMapping) -> HeadersDict:
+    def build(self, extra: HeadersType | None = None) -> HeadersDict:
         """Return the stored headers merged with ``extra``.
 
         Args:
-            extra: Headers that take precedence over the stored ones.
+            extra: Headers that take precedence over the stored ones;
+                ``None`` for none.
 
         Returns:
             A new case-insensitive mapping.
         """
         ...
+
+
+type HeadersType = HeadersMapping | IHeaders
+"""Headers given as a mapping or as an ``IHeaders`` collection."""

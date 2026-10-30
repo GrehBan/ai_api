@@ -30,7 +30,7 @@ from ai_api.http.headers import (
     SERVER_SOFTWARE,
     USER_AGENT,
 )
-from ai_api.http.protocols import IAPI, IAuth, IHeaders
+from ai_api.http.protocols import IAPI, HeadersType, IAuth
 from ai_api.methods.protocols import IAPIMethod, IBaseMethod, IStreamMethod
 from ai_api.response.aiohttp import AiohttpStreamResponse, read_body
 from ai_api.response.buffered import BufferedResponse
@@ -39,6 +39,7 @@ from ai_api.serialization.json import JsonDumps, JsonLoads, dumps, loads
 from ai_api.session.base import BaseSession
 from ai_api.session.body.aiohttp import AiohttpBodyBuilder
 from ai_api.session.loop import bind_loop
+from ai_api.session.protocols import Timeout
 from ai_api.session.retry import (
     DEFAULT_MAX_RETRY_AFTER,
     DEFAULT_RETRY_DEADLINE,
@@ -65,6 +66,32 @@ _CLOSE_DELAY: Final[float] = 0.25
 
 _DNS_CACHE_TTL: Final[int] = 3600
 """Seconds a resolved host name is cached."""
+
+
+def _replace_timeout(
+    timeout: ClientTimeout,
+    *,
+    total: float | None = None,
+    sock_read: float | None = None,
+) -> ClientTimeout:
+    """Copy a timeout with its total or its read limit replaced.
+
+    Args:
+        timeout: The timeout to copy.
+        total: New total limit, in seconds; ``None`` keeps the old one.
+        sock_read: New limit of the silence between two chunks, in
+            seconds; ``None`` keeps the old one.
+
+    Returns:
+        A new timeout; the other limits are those of ``timeout``.
+    """
+    return ClientTimeout(
+        total=timeout.total if total is None else total,
+        connect=timeout.connect,
+        sock_read=timeout.sock_read if sock_read is None else sock_read,
+        sock_connect=timeout.sock_connect,
+        ceil_threshold=timeout.ceil_threshold,
+    )
 
 
 def _same_origin(url: URL) -> ClientMiddlewareType:
@@ -129,7 +156,7 @@ class AiohttpSession(BaseSession):
         auth: IAuth,
         error_resolver: IErrorResolver,
         *,
-        headers: IHeaders | None = None,
+        headers: HeadersType | None = None,
         json_loads: JsonLoads = loads,
         json_dumps: JsonDumps = dumps,
         max_connections: int = 100,
@@ -260,11 +287,17 @@ class AiohttpSession(BaseSession):
     async def _execute(
         self,
         method: IAPIMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> BufferedResponse:
         """Send the request and read the whole body.
 
         Args:
             method: The method to send.
+            headers: Headers for this request only.
+            timeout: Total timeout of this request, in seconds, in place
+                of the total of ``timeout``; its other limits are kept.
 
         Returns:
             The response, including responses with an error status.
@@ -275,7 +308,15 @@ class AiohttpSession(BaseSession):
             APIResponseError: If the body is larger than
                 ``max_body_size``.
         """
-        response = await self._request(method)
+        response = await self._request(
+            method,
+            headers=headers,
+            timeout=(
+                self._timeout
+                if timeout is None
+                else _replace_timeout(self._timeout, total=timeout)
+            ),
+        )
 
         async with response:
             with body_errors():
@@ -291,11 +332,18 @@ class AiohttpSession(BaseSession):
     async def _open_stream(
         self,
         method: IStreamMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> IStreamResponse:
         """Send the request with ``stream_timeout`` and leave the body unread.
 
         Args:
             method: The stream method to send.
+            headers: Headers for this request only.
+            timeout: Longest silence between two chunks, in seconds, in
+                place of the ``sock_read`` of ``stream_timeout``; its
+                other limits are kept.
 
         Returns:
             The open response; the caller closes it.
@@ -305,24 +353,35 @@ class AiohttpSession(BaseSession):
         """
         response = await self._request(
             method,
-            timeout=self._stream_timeout,
+            headers=headers,
+            timeout=(
+                self._stream_timeout
+                if timeout is None
+                else _replace_timeout(self._stream_timeout, sock_read=timeout)
+            ),
         )
         return AiohttpStreamResponse(response, self._max_body_size)
 
     async def _request(
         self,
         method: IBaseMethod[Any],
-        **kwargs: Any,
+        *,
+        headers: HeadersType | None,
+        timeout: ClientTimeout,
     ) -> ClientResponse:
         """Send the HTTP request for a method.
 
-        The authentication header is produced for every request, so an
-        ``IAuth`` that rotates its token takes effect immediately.
+        The session's default headers are set on the ``ClientSession``;
+        the method's headers override them, the headers of the call
+        override those, and the authentication header, produced for every
+        request so that an ``IAuth`` that rotates its token takes effect
+        immediately, overrides all of them.
 
         Args:
-            method: The method whose path, query and body are sent.
-            **kwargs: Extra arguments for ``ClientSession.request``, such
-                as ``timeout``.
+            method: The method whose path, query, headers and body are
+                sent.
+            headers: Headers for this request only.
+            timeout: Timeout of this request.
 
         Returns:
             The response with its body not yet read.
@@ -351,15 +410,18 @@ class AiohttpSession(BaseSession):
             else {"allow_redirects": False}
         )
 
+        request_headers = method.request_headers.build(headers)
+        request_headers[self.auth.header_name] = self.auth.encode()
+
         try:
             with transport_errors():
                 response = await client.request(
                     method=method.request_method,
                     url=url,
-                    headers={self.auth.header_name: self.auth.encode()},
+                    headers=request_headers,
+                    timeout=timeout,
                     **redirects,
                     **body,
-                    **kwargs,
                 )
         except ClientPayloadError as exc:
             # A 307/308 needs the body again, and a stream was consumed.

@@ -53,6 +53,21 @@ async def test_client_delegates_to_its_session() -> None:
         assert [chunk async for chunk in chunks] == [b"a", b"b"]
 
 
+async def test_client_forwards_call_options() -> None:
+    transport = FakeTransport(
+        [BufferedResponse(200, {}, b"done")],
+        [FakeStreamResponse([b"a"])],
+    )
+    client = BaseClient(transport)
+
+    await client.send_request(buffered(), headers={"X-A": "1"}, timeout=3)
+
+    async with client.stream(streamed(), headers={"X-B": "2"}, timeout=4):
+        pass
+
+    assert transport.call_options == [({"X-A": "1"}, 3), ({"X-B": "2"}, 4)]
+
+
 async def test_client_context_closes_its_session() -> None:
     transport = FakeTransport()
 

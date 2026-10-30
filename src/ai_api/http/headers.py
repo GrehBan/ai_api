@@ -12,7 +12,12 @@ from typing import Final
 from multidict import CIMultiDict, istr
 
 from ai_api.__meta__ import __version__
-from ai_api.http.protocols import HeadersDict, HeadersMapping
+from ai_api.http.protocols import (
+    HeadersDict,
+    HeadersMapping,
+    HeadersType,
+    IHeaders,
+)
 
 USER_AGENT: Final[istr] = istr("User-Agent")
 SERVER_SOFTWARE: Final[str] = (
@@ -92,6 +97,21 @@ def parse_retry_after(
     return max(0.0, seconds)
 
 
+def _as_mapping(headers: HeadersType) -> HeadersMapping:
+    """Return the headers of a mapping or a collection as a mapping.
+
+    Args:
+        headers: A mapping, or an ``IHeaders`` collection.
+
+    Returns:
+        The mapping itself, or the collection's stored headers.
+    """
+    if isinstance(headers, IHeaders):
+        return headers.headers
+
+    return headers
+
+
 class Headers:
     """Case-insensitive collection of default request headers.
 
@@ -99,24 +119,23 @@ class Headers:
         headers: The stored headers.
     """
 
-    def __init__(self, headers: HeadersMapping | None = None) -> None:
+    def __init__(self, headers: HeadersType | None = None) -> None:
         """Create the collection.
 
         Args:
-            headers: Initial headers.
+            headers: Initial headers, as a mapping or another collection,
+                which is copied.
         """
-        if headers is None:
-            headers = {}
+        self.headers = CIMultiDict(_as_mapping(headers or {}))
 
-        self.headers = CIMultiDict(headers)
-
-    def add(self, headers: HeadersMapping) -> None:
+    def add(self, headers: HeadersType) -> None:
         """Add or replace headers.
 
         Args:
-            headers: Headers to merge in; existing names are overwritten.
+            headers: Headers to merge in, as a mapping or a collection;
+                existing names are overwritten.
         """
-        self.headers.update(headers)
+        self.headers.update(_as_mapping(headers))
 
     def copy(self) -> HeadersDict:
         """Return an independent copy of the stored headers.
@@ -126,17 +145,21 @@ class Headers:
         """
         return self.headers.copy()
 
-    def build(self, extra: HeadersMapping) -> HeadersDict:
+    def build(self, extra: HeadersType | None = None) -> HeadersDict:
         """Return the stored headers merged with ``extra``.
 
         The collection itself is not modified.
 
         Args:
-            extra: Headers that take precedence over the stored ones.
+            extra: Headers that take precedence over the stored ones, as
+                a mapping or a collection; ``None`` for none.
 
         Returns:
             A new case-insensitive mapping.
         """
         headers = self.headers.copy()
-        headers.update(extra)
+
+        if extra is not None:
+            headers.update(_as_mapping(extra))
+
         return headers

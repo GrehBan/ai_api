@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import email.policy
 from collections import deque
 from collections.abc import (
     AsyncIterator,
@@ -15,12 +16,14 @@ from collections.abc import (
     Mapping,
 )
 from dataclasses import dataclass, field
+from email.message import EmailMessage
+from email.parser import BytesParser
 from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import MagicMock
 
 import pytest
-from aiohttp import BodyPartReader, web
+from aiohttp import web
 from aiohttp.test_utils import TestServer
 from multidict import CIMultiDict, CIMultiDictProxy, MultiDict
 from pytest_aiohttp import AiohttpServer
@@ -31,12 +34,14 @@ from yarl import URL
 from ai_api.http.auth import BearerAuth
 from ai_api.http.exceptions.protocols import IErrorResolver
 from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.protocols import IAPI, IAuth, Query
+from ai_api.http.headers import CONTENT_TYPE
+from ai_api.http.protocols import IAPI, HeadersType, IAuth, Query
 from ai_api.methods.base import BaseMethod
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.buffered import BufferedResponse
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.session.base import BaseSession
+from ai_api.session.protocols import Timeout
 
 TEST_TOKEN = "test-token"
 
@@ -230,7 +235,8 @@ class FakeTransport(BaseSession):
     ``_execute`` pops from ``responses`` and ``_open_stream`` from
     ``stream_responses``; an exception in the queue is raised instead of
     returned. Every call is recorded, so tests can assert exact attempt
-    counts and which stream responses were closed.
+    counts and which stream responses were closed, and the headers and
+    timeout of each attempt go to ``call_options``.
 
     Args:
         responses: Outcomes of ``_execute``, in order.
@@ -264,6 +270,7 @@ class FakeTransport(BaseSession):
         self.execute_calls: list[IAPIMethod[Any]] = []
         self.stream_calls: list[IStreamMethod[Any]] = []
         self.opened: list[FakeStreamResponse] = []
+        self.call_options: list[tuple[HeadersType | None, Timeout | None]] = []
         self.close_calls = 0
 
     @property
@@ -279,15 +286,26 @@ class FakeTransport(BaseSession):
     async def close(self) -> None:
         self.close_calls += 1
 
-    async def _execute(self, method: IAPIMethod[Any]) -> BufferedResponse:
+    async def _execute(
+        self,
+        method: IAPIMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
+    ) -> BufferedResponse:
         self.execute_calls.append(method)
+        self.call_options.append((headers, timeout))
         return self._next(self.responses, "_execute")
 
     async def _open_stream(
         self,
         method: IStreamMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> FakeStreamResponse:
         self.stream_calls.append(method)
+        self.call_options.append((headers, timeout))
         response = self._next(self.stream_responses, "_open_stream")
         self.opened.append(response)
         return response
@@ -424,6 +442,41 @@ class Reply:
     abort: bool = False
 
 
+def _parse_multipart(content_type: str, body: bytes) -> list[RecordedPart]:
+    """Split a multipart body into its parts.
+
+    Args:
+        content_type: ``Content-Type`` of the request, with the boundary.
+        body: The whole request body.
+
+    Returns:
+        The parts, in order.
+    """
+    message = BytesParser(policy=email.policy.HTTP).parsebytes(
+        f"{CONTENT_TYPE}: {content_type}\r\n\r\n".encode() + body
+    )
+    assert isinstance(message, EmailMessage)
+    assert message.is_multipart()
+
+    parts: list[RecordedPart] = []
+
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        data = part.get_payload(decode=True)
+        assert isinstance(name, str | None)
+        assert isinstance(data, bytes)
+        parts.append(
+            RecordedPart(
+                name=name,
+                filename=part.get_filename(),
+                content_type=part.get(CONTENT_TYPE),
+                data=data,
+            )
+        )
+
+    return parts
+
+
 class Recorder:
     """aiohttp app that records requests and answers from a script.
 
@@ -466,18 +519,14 @@ class Recorder:
         body = b""
 
         if request.content_type.startswith("multipart/"):
-            reader = await request.multipart()
-
-            while (part := await reader.next()) is not None:
-                assert isinstance(part, BodyPartReader)
-                parts.append(
-                    RecordedPart(
-                        name=part.name,
-                        filename=part.filename,
-                        content_type=part.headers.get("Content-Type"),
-                        data=bytes(await part.read()),
-                    )
-                )
+            # Parsed from the whole body: aiohttp's streaming multipart
+            # reader calls the deprecated ``unread_data`` for parts without
+            # a length, which fails the test under ``-W error`` whenever a
+            # boundary falls inside a received chunk.
+            parts = _parse_multipart(
+                request.headers[CONTENT_TYPE],
+                await request.read(),
+            )
         else:
             body = await request.read()
 

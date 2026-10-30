@@ -43,9 +43,10 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
     HANDLING,
     RESOLVER,
     AUTH,
+    CALL_OPTIONS,
     CLIENT,
     RESOURCES,
-) = range(14)
+) = range(15)
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -146,7 +147,7 @@ def examples(
 
 def test_every_example_is_tested() -> None:
     # A new ```python block needs a test here.
-    assert len(BLOCKS) == 14
+    assert len(BLOCKS) == 15
 
 
 def test_quick_start_ends_with_asyncio_run() -> None:
@@ -448,6 +449,21 @@ async def test_rotating_auth(
     assert [
         request.headers["Authorization"] for request in recorder.requests
     ] == ["Bearer sk-old", "Bearer sk-new"]
+
+
+async def test_call_options(
+    examples: Examples,
+    recorder: Recorder,
+) -> None:
+    await examples.run(QUICK_START, CALL_OPTIONS)
+    recorder.reply(Reply(json={"id": "c-1", "text": "Hi."}))
+
+    result = await examples.complete("Hello!", "key-1")
+
+    assert result == examples.Completion(id="c-1", text="Hi.")
+    assert recorder.last.raw_path == "/v1/completions"
+    assert recorder.last.headers["x-beta-features"] == "long-context"
+    assert recorder.last.headers["Idempotency-Key"] == "key-1"
 
 
 async def test_openai_client(
