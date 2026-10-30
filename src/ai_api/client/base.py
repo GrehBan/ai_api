@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING, Self
 
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.stream import Stream
-from ai_api.session.protocols import ISession
+from ai_api.session.protocols import ISession, Timeout
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+    from ai_api.http.protocols import HeadersType
 
 
 class BaseClient[SessionT: ISession]:
@@ -67,28 +69,48 @@ class BaseClient[SessionT: ISession]:
     async def send_request[T](
         self,
         method: IAPIMethod[T],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> T:
         """Send a method and return its parsed response.
 
         Args:
             method: The method to send.
+            headers: Headers for this request only.
+            timeout: Seconds the whole request may take; ``None`` for
+                the session's timeout.
 
         Returns:
             The parsed response, typed by the method's generic argument.
         """
-        return await self.session.send_request(method)
+        return await self.session.send_request(
+            method,
+            headers=headers,
+            timeout=timeout,
+        )
 
     def stream[T](
         self,
         method: IStreamMethod[T],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> AbstractAsyncContextManager[Stream[T]]:
         """Send a stream method; use the result with ``async with``.
 
         Args:
             method: The stream method to send.
+            headers: Headers for this request only.
+            timeout: Longest silence between two chunks, in seconds;
+                ``None`` for the session's stream timeout.
 
         Returns:
             A context manager that yields the stream and closes it on
             exit.
         """
-        return self.session.stream(method)
+        return self.session.stream(
+            method,
+            headers=headers,
+            timeout=timeout,
+        )

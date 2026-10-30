@@ -7,6 +7,7 @@ from ai_api.session.base import (
 )
 from ai_api.session.protocols import (
     ISession,
+    Timeout,
 )
 from ai_api.session.retry import (
     DEFAULT_MAX_RETRY_AFTER,
@@ -18,4 +19,5 @@ __all__ = [
     "DEFAULT_MAX_RETRY_AFTER",
     "DEFAULT_RETRY_DEADLINE",
     "ISession",
+    "Timeout",
 ]

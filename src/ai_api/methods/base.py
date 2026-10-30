@@ -16,7 +16,8 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, PydanticUserError, TypeAdapter
 
 from ai_api.enums import BodyFormat, ResponseFormat
-from ai_api.http.protocols import Query
+from ai_api.http.headers import Headers
+from ai_api.http.protocols import HeadersType, IHeaders, Query
 from ai_api.methods.fields import (
     has_one_shot_file,
     is_mapping_type,
@@ -118,6 +119,10 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             Empty by default; set it to ``"/"`` for identifiers such as
             ``"org/model"``.
         __request_method__: HTTP method, e.g. ``"POST"``.
+        __request_headers__: Headers sent with every request of the
+            method, as a mapping or an ``IHeaders`` collection; ``None``
+            for none. They override the session's default headers and
+            are overridden by the headers of a call.
         __request_query__: Names of fields sent as query parameters; all
             other fields go to the body. Any set may be given; it is
             stored as a ``frozenset``. A list or tuple is sent as a
@@ -147,6 +152,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     __request_body_format__: ClassVar[BodyFormat] = BodyFormat.NONE
     __retryable__: ClassVar[bool] = False
     __response_format__: ClassVar[ResponseFormat]
+    __request_headers__: ClassVar[HeadersType | None] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -318,6 +324,11 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             for klass in cls.__mro__
             if klass not in _BASE_METHODS
         )
+
+    @property
+    def request_headers(self) -> IHeaders:
+        """Headers of the method, as a new collection on every access."""
+        return Headers(self.__request_headers__)
 
     @property
     def request_path(self) -> str:

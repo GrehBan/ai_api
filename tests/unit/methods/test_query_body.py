@@ -11,6 +11,7 @@ import pytest
 from pydantic import Field, ValidationError
 
 from ai_api.enums import BodyFormat
+from ai_api.http.headers import Headers
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile, InputFile, IOFile, StreamFile
@@ -282,3 +283,39 @@ def test_method_properties() -> None:
 
     assert method.request_method == "POST"
     assert method.request_body_format is BodyFormat.MULTIPART
+
+
+class Traced(BaseAPIMethod[bytes]):
+    __request_path__ = "/traced"
+    __request_headers__ = {"X-Trace": "on"}
+
+
+class TracedChild(Traced):
+    pass
+
+
+def test_request_headers_default_to_empty() -> None:
+    assert dict(Upload().request_headers.headers) == {}
+
+
+def test_request_headers_come_from_the_class() -> None:
+    assert dict(Traced().request_headers.headers) == {"X-Trace": "on"}
+    assert TracedChild().request_headers.headers["x-trace"] == "on"
+
+
+def test_request_headers_are_a_new_collection_every_time() -> None:
+    method = Traced()
+
+    method.request_headers.add({"X-Trace": "off"})
+
+    assert method.request_headers.headers["X-Trace"] == "on"
+    assert Traced.__request_headers__ == {"X-Trace": "on"}
+
+
+def test_request_headers_accept_a_collection() -> None:
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        __request_headers__=Headers({"X-Trace": "on"}),
+    )
+
+    assert method_cls().request_headers.headers["x-trace"] == "on"

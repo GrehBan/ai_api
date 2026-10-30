@@ -61,6 +61,27 @@ def test_copy_is_independent() -> None:
     assert "Other" not in copied
 
 
+def test_build_without_extra_is_a_copy() -> None:
+    headers = Headers({"X-Trace": "1"})
+
+    built = headers.build()
+    built["X-Trace"] = "2"
+
+    assert headers.headers["X-Trace"] == "1"
+
+
+def test_headers_accept_another_collection() -> None:
+    source = Headers({"X-Trace": "1"})
+
+    headers = Headers(source)
+    headers.add(Headers({"X-New": "n"}))
+    built = headers.build(Headers({"x-trace": "2"}))
+
+    assert built.getall("X-Trace") == ["2"]
+    assert built["x-new"] == "n"
+    assert dict(source.headers) == {"X-Trace": "1"}
+
+
 def test_header_names_are_case_insensitive() -> None:
     assert USER_AGENT == "User-Agent"
     assert AUTHORIZATION == "Authorization"

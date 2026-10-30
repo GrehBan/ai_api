@@ -16,7 +16,7 @@ You describe each API call as a small declarative class. The library sends it ov
 - [Uploading files](#uploading-files)
 - [Streaming responses](#streaming-responses): events, interrupted streams
 - [Errors and retries](#errors-and-retries)
-- [Sessions](#sessions): options, authentication, headers, timeouts, redirects, event loop
+- [Sessions](#sessions): options, authentication, headers, per-request options, timeouts, redirects, event loop
 - [Describing an API](#describing-an-api)
 - [Provider clients](#provider-clients), [adding a provider](#adding-a-provider)
 - [Resources and use cases](#resources-and-use-cases)
@@ -140,6 +140,7 @@ send_request(method)
     └── one attempt
         ├── URL:   api.build_url(method.request_path, method.get_query_map())
         ├── body:  method.get_body_map() → normalized → JSON / form / multipart
+        ├── headers: session < method.request_headers < headers= < auth
         ├── send:  the transport sends the request and reads the whole body
         ├── check: status ≥ 400 → error resolver → APIStatusError(transient=…)
         └── parse: method.response_parser → the typed result
@@ -172,6 +173,7 @@ A method class declares the HTTP request in its dunder class attributes. Its fie
 | `__request_method__` | required | HTTP method, e.g. `"POST"` |
 | `__request_query__` | empty | Names of fields sent as query parameters; fields that are neither path nor query parameters go to the body. Unknown names and mapping or model fields raise `TypeError` at class definition |
 | `__request_body_format__` | `BodyFormat.NONE` | `JSON`, `FORM`, `MULTIPART` or `NONE` |
+| `__request_headers__` | `None` | Headers sent with every request of the method, as a mapping or `Headers`; see [Default headers](#default-headers) for which ones win |
 | `__retryable__` | `False` | Retry transient failures (up to 4 attempts in total) |
 | `__returning__` | inferred | Result class, taken from the generic argument |
 | `__response_format__` | inferred | How the response body is parsed |
@@ -198,7 +200,7 @@ Why dunder class attributes rather than fields or a decorator:
 - **They describe the class, not an instance.** The configuration is checked once, when the class is defined: a bad path template, an unknown query field or a response format that contradicts the result type raises `TypeError` at import time, not at the first request.
 - **The design follows aiogram's `TelegramMethod`.** A request is data that knows its own endpoint and result type, so one generic `send_request` serves every endpoint, and adding an endpoint means adding one small class.
 
-Inside the library, these attributes are read only through regular properties (`request_path`, `request_method`, `request_body_format`, `retryable`, `response_format`, `response_type`, `response_parser`, `stream_parser`), which is what the session and parsers see.
+Inside the library, these attributes are read only through regular properties (`request_path`, `request_method`, `request_headers`, `request_body_format`, `retryable`, `response_format`, `response_type`, `response_parser`, `stream_parser`), which is what the session and parsers see.
 
 ### Validation of parameters
 
@@ -473,7 +475,7 @@ Items you received before the failure stay yours, and the connection is released
 **Why the SSE resume protocol is not used.** SSE has its own way to continue a stream. The server marks events with `id:`, the client reconnects after `retry:` milliseconds and sends the last id in the `Last-Event-ID` header, and the server replays what came after it. The library parses `id` and `retry`; you can read them on `ServerSentEvent` items. It does not reconnect, for three reasons:
 
 - **It only works if the server keeps the events and replays them.** AI providers' generation streams generally don't. Where a provider supports resuming, it does so with its own parameters (OpenAI's background responses, for example, are resumed from an event's `sequence_number` with `starting_after`). That is a provider method, not a transport feature.
-- **Methods cannot set per-request headers yet,** so there is no place to put `Last-Event-ID`. See [Limitations](#limitations-and-roadmap).
+- **Resuming is a policy, not a request.** It needs a number of attempts, a delay, the last id and a way to continue the same `Stream`, and each of these depends on the server. A single call can already send `Last-Event-ID` with `headers=`; deciding when to send it again is the caller's part for now.
 - **Silent reconnection hides failures.** A client that reconnects on its own can loop for a long time against a broken server, while the caller sees a stream that is merely slow.
 
 **What to do instead.** Decide in your code what a broken stream means. For short answers the simplest choice is to start over and drop the partial text:
@@ -500,7 +502,7 @@ async def generate_text(prompt: str, attempts: int = 3) -> str:
     raise ValueError("attempts must be at least 1")
 ```
 
-For a provider that can resume, keep the position from the last event you received (its `id`, or a sequence number in its data) and call the provider's resume method with it.
+For a provider that can resume, keep the position from the last event you received (its `id`, or a sequence number in its data) and call the provider's resume method with it. For a server that replays SSE events, open the stream again with the last id: `session.stream(method, headers={"Last-Event-ID": last_id})`.
 
 An opt-in reconnection with `Last-Event-ID` for servers that support it is on the [roadmap](#limitations-and-roadmap): limited attempts, the `retry` delay, and the same `Stream` object continuing with the replayed events.
 
@@ -644,7 +646,7 @@ Library errors can be pickled and copied, for example to pass them between proce
 | `api` | required | Builds request URLs (`IAPI`) |
 | `auth` | required | Produces the authentication header (`IAuth`): `BearerAuth` for `Authorization: Bearer ...`, `APIKeyAuth` for a key in its own header (`x-api-key` by default) |
 | `error_resolver` | required | Maps error responses to exceptions (`IErrorResolver`) |
-| `headers` | `None` | Extra default headers (`Headers({...})`) |
+| `headers` | `None` | Extra default headers, as a mapping or `Headers`; an `IHeaders` object is kept as it is |
 | `json_loads` / `json_dumps` | `orjson` | JSON codec |
 | `max_connections` | `100` | Maximum number of simultaneous connections |
 | `timeout` | 600 s total, 30 s connect | Timeout of buffered requests |
@@ -691,7 +693,39 @@ Any object with a `header_name` and an `encode()` method is an `IAuth`; it does 
 AiohttpSession(api, auth, resolver, headers=Headers({"anthropic-version": "2023-06-01"}))
 ```
 
-They are copied into the connection pool when it is created, so set them before the first request; changes made after that are not sent until the session is closed and opened again. The `User-Agent` set by the library takes precedence over one in `headers`, and the authentication header over both.
+They are copied into the connection pool when it is created, so set them before the first request; changes made after that are not sent until the session is closed and opened again. For a header that changes, use a method's `__request_headers__` or a call's `headers=` instead.
+
+A request gets headers from four places. Names are case-insensitive, and a later place replaces a header of an earlier one:
+
+1. the session's `headers`, with the library's `User-Agent` over them;
+2. the method's `__request_headers__`;
+3. the call's `headers=`;
+4. the authentication header, which neither a method nor a call can replace.
+
+### Per-request headers and timeout
+
+`send_request` and `stream`, on a session or a client, take two keyword-only arguments for one call:
+
+```python
+class BetaCompletion(CreateCompletion):
+    __request_headers__ = {"x-beta-features": "long-context"}   # every request of the method
+
+
+async def complete(prompt: str, key: str) -> Completion:
+    return await session.send_request(
+        BetaCompletion(
+            model="example-1",
+            messages=[Message(role="user", content=prompt)],
+        ),
+        headers={"Idempotency-Key": key},   # this call only, every attempt
+        timeout=30,                         # seconds for the whole request
+    )
+```
+
+- **`headers=`** is a mapping or `Headers`. It is sent with every attempt of the call, retries included, and is not kept for later calls: an idempotency key, `Last-Event-ID`, a trace id.
+- **`timeout=`** is a number of seconds. It changes one limit of the session's timeout for this call and keeps the others; see [Timeouts](#timeouts).
+
+Both stay out of the method, because they describe one call, not the API endpoint: the same `CreateCompletion` can be sent with different keys and limits.
 
 ### JSON codec
 
@@ -705,6 +739,11 @@ Timeouts are `aiohttp.ClientTimeout` objects, set per session:
 
 - **`timeout`**, for buffered requests: 600 s in total, 30 s to connect. It is longer than aiohttp's default of 5 minutes, because a long model generation that is not streamed exceeds that.
 - **`stream_timeout`**, for streams: no total limit, 30 s to connect and 600 s of silence between two chunks. A stream may legitimately run for a long time, but a stream that sends nothing for ten minutes is dead.
+
+`timeout=` on a call replaces one of these limits, in seconds, and keeps the connect limits:
+
+- for `send_request`, the total of `timeout`, so a quick call can fail sooner and a slow one can wait longer than 600 s;
+- for `stream`, the silence between two chunks (`sock_read`) of `stream_timeout`. A stream still has no total limit, so a long generation is not cut off however small the number is.
 
 A timeout raises `APITimeoutError`, which is transient. When the method is retryable, a buffered request that timed out is sent again, so keep `__retryable__` off for requests that must not run twice.
 
@@ -851,11 +890,11 @@ No provider implements these yet; they are the base for the provider-neutral API
 
 `BaseSession` holds everything that doesn't depend on the HTTP client: retries, error mapping, parsing and stream cleanup. A transport subclasses it and implements three methods:
 
-- **`_execute(method) -> BufferedResponse`**: send the request and read the whole body.
-- **`_open_stream(method) -> IStreamResponse`**: send the request and leave the body unread; the response has `status`, `headers` and `charset`, and offers `iter_chunks()`, `read()` and `aclose()`.
+- **`_execute(method, *, headers=None, timeout=None) -> BufferedResponse`**: send the request and read the whole body.
+- **`_open_stream(method, *, headers=None, timeout=None) -> IStreamResponse`**: send the request and leave the body unread; the response has `status`, `headers` and `charset`, and offers `iter_chunks()`, `read()` and `aclose()`.
 - **`close()`**: release the connections.
 
-Both request methods return error statuses as responses, without raising, so the status check stays in `BaseSession`. I/O failures are raised as `APITransportError` subclasses with the right `transient` flag; that mapping is what makes retries behave the same on every transport. Build the URL with `api.build_url(method.request_path, method.get_query_map())` and the body from `method.get_body_map()` and `method.request_body_format`, and send the authentication header from `auth` on every request.
+Both request methods return error statuses as responses, without raising, so the status check stays in `BaseSession`. I/O failures are raised as `APITransportError` subclasses with the right `transient` flag; that mapping is what makes retries behave the same on every transport. Build the URL with `api.build_url(method.request_path, method.get_query_map())` and the body from `method.get_body_map()` and `method.request_body_format`, and the headers from `method.request_headers.build(headers)` with the authentication header from `auth` set last, on every request. `timeout` is the call's `timeout=`; apply it as described in [Timeouts](#timeouts), and use the session's own timeouts when it is `None`.
 
 Transport code lives only in `<layer>/<transport>.py` modules (today `session/aiohttp.py`, `session/body/aiohttp.py`, `response/aiohttp.py` and `http/exceptions/aiohttp.py`), so a second transport, such as httpx, adds `*/httpx.py` files and changes nothing else. `bind_loop` in `session/loop.py` is transport-neutral and can be reused.
 
@@ -943,9 +982,8 @@ The code uses Google-style docstrings, which ruff enforces, and PEP 695 generics
 
 ## Limitations and roadmap
 
-- **Streams are not resumed.** SSE `id` and `retry` are parsed and available on `ServerSentEvent`, but a dropped stream is not reconnected with `Last-Event-ID`; the error reaches your code. Planned: an opt-in reconnection for servers that replay events. See [Interrupted streams](#interrupted-streams).
-- **No per-request headers.** Methods cannot set headers, and default headers are fixed when the connection pool is created. Headers such as `Last-Event-ID`, an idempotency key or a beta flag for one request need a session of their own for now.
-- **No per-request timeouts.** Timeouts are set per session, one for buffered requests and one for streams.
+- **Streams are not resumed.** SSE `id` and `retry` are parsed and available on `ServerSentEvent`, but a dropped stream is not reconnected on its own; the error reaches your code, which can open it again with `headers={"Last-Event-ID": ...}`. Planned: an opt-in reconnection for servers that replay events. See [Interrupted streams](#interrupted-streams).
+- **Session headers are fixed.** Default headers are copied into the connection pool when it is created; headers that change belong in a method or a call.
 - **No raw binary request body.** A file can only be uploaded as a multipart part, not as the whole body.
 - **No logging or hooks.** The library logs nothing and has no request or response hooks for metrics and tracing yet.
 - **No synchronous API.**

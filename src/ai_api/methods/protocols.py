@@ -10,7 +10,7 @@ from ai_api.enums import BodyFormat, ResponseFormat
 if TYPE_CHECKING:
     from pydantic import TypeAdapter
 
-    from ai_api.http.protocols import Query
+    from ai_api.http.protocols import IHeaders, Query
     from ai_api.response.parse.protocols import (
         IResponseParser,
         IStreamParser,
@@ -25,6 +25,11 @@ class IBaseMethod[ResponseT](Protocol):
     class attributes of subclasses as implementing protocol members
     declared as ``ClassVar``.
     """
+
+    @property
+    def request_headers(self) -> IHeaders:
+        """Headers sent with every request of the method."""
+        ...
 
     @property
     def request_path(self) -> str:

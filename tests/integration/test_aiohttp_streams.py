@@ -206,6 +206,49 @@ async def test_session_timeout_does_not_limit_streams(
     assert chunks == [b"x"] * 6
 
 
+async def test_call_timeout_limits_silence(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    resume = asyncio.Event()
+    recorder.reply(Reply(chunks=[b"first", resume, b"never"]))
+
+    with pytest.raises(APITimeoutError):
+        async with session.stream(Download(), timeout=0.3) as stream:
+            async for _ in stream:
+                pass
+
+    resume.set()
+
+
+async def test_call_timeout_does_not_limit_the_stream_length(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    # ~0.6 s in total, twice the call timeout, but never silent for long.
+    recorder.reply(Reply(chunks=[b"x"] * 6, chunk_delay=0.1))
+
+    async with session.stream(Download(), timeout=0.3) as stream:
+        chunks = [chunk async for chunk in stream]
+
+    assert chunks == [b"x"] * 6
+
+
+async def test_stream_sends_call_headers(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(chunks=[b"x"]))
+
+    async with session.stream(
+        Download(),
+        headers={"Last-Event-ID": "7"},
+    ) as stream:
+        assert [chunk async for chunk in stream] == [b"x"]
+
+    assert recorder.last.headers["Last-Event-ID"] == "7"
+
+
 async def test_break_from_endless_stream_releases_connection(
     api: LocalAPI,
     recorder: Recorder,

@@ -14,12 +14,13 @@ from tenacity.stop import stop_base
 from ai_api.http.exceptions.protocols import IErrorResolver
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.headers import Headers
-from ai_api.http.protocols import IAPI, IAuth, IHeaders
+from ai_api.http.protocols import IAPI, HeadersType, IAuth, IHeaders
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.buffered import BufferedResponse
 from ai_api.response.protocols import IStreamResponse
 from ai_api.response.stream import Stream
 from ai_api.serialization.json import JsonDumps, JsonLoads, dumps, loads
+from ai_api.session.protocols import Timeout
 from ai_api.session.retry import (
     DEFAULT_MAX_RETRY_AFTER,
     DEFAULT_RETRY_DEADLINE,
@@ -58,7 +59,7 @@ class BaseSession(ABC):
         auth: IAuth,
         error_resolver: IErrorResolver,
         *,
-        headers: IHeaders | None = None,
+        headers: HeadersType | None = None,
         json_loads: JsonLoads = loads,
         json_dumps: JsonDumps = dumps,
         max_retry_after: float = DEFAULT_MAX_RETRY_AFTER,
@@ -70,7 +71,9 @@ class BaseSession(ABC):
             api: Builds request URLs.
             auth: Produces the authentication header.
             error_resolver: Turns error responses into exceptions.
-            headers: Default headers; an empty set is used when ``None``.
+            headers: Default headers. An ``IHeaders`` collection is used
+                as it is; a mapping is copied into ``Headers``, and an
+                empty set is used when ``None``.
             json_loads: JSON decoder for response bodies.
             json_dumps: JSON encoder for request bodies.
             max_retry_after: Longest ``Retry-After`` to wait for, in
@@ -83,7 +86,9 @@ class BaseSession(ABC):
         self.api = api
         self.auth = auth
         self.error_resolver = error_resolver
-        self.headers = headers or Headers()
+        self.headers: IHeaders = (
+            headers if isinstance(headers, IHeaders) else Headers(headers)
+        )
         self.json_loads = json_loads
         self.json_dumps = json_dumps
         self.max_retry_after = max_retry_after
@@ -120,16 +125,25 @@ class BaseSession(ABC):
     async def send_request[T](
         self,
         method: IAPIMethod[T],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> T:
         """Send a method and return its parsed response.
 
         If ``method.retryable`` is true, transient failures are retried up
         to four attempts in total, unless the API asks to wait longer than
         ``max_retry_after`` or the retry would start after
-        ``retry_deadline``.
+        ``retry_deadline``. ``headers`` and ``timeout`` apply to every
+        attempt.
 
         Args:
             method: The method to send.
+            headers: Headers for this request only; they override the
+                session's and the method's headers, but not the
+                authentication header.
+            timeout: Seconds the whole request may take, instead of the
+                total of the session's timeout; ``None`` to keep it.
 
         Returns:
             The parsed response, typed by the method's generic argument.
@@ -141,13 +155,20 @@ class BaseSession(ABC):
         """
         return await self._with_retry(
             method.retryable,
-            lambda: self._send_once(method),
+            lambda: self._send_once(
+                method,
+                headers=headers,
+                timeout=timeout,
+            ),
         )
 
     @asynccontextmanager
     async def stream[T](
         self,
         method: IStreamMethod[T],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> AsyncGenerator[Stream[T]]:
         """Send a method and stream its response.
 
@@ -158,6 +179,13 @@ class BaseSession(ABC):
 
         Args:
             method: The stream method to send.
+            headers: Headers for this request only; they override the
+                session's and the method's headers, but not the
+                authentication header.
+            timeout: Longest silence between two chunks, in seconds,
+                instead of the session's stream timeout; ``None`` to keep
+                it. A stream has no total limit, so a long generation is
+                not cut off.
 
         Yields:
             The stream of items, typed by the method's generic argument.
@@ -175,7 +203,11 @@ class BaseSession(ABC):
         """
         response = await self._with_retry(
             method.retryable,
-            lambda: self._open_stream_once(method),
+            lambda: self._open_stream_once(
+                method,
+                headers=headers,
+                timeout=timeout,
+            ),
         )
 
         try:
@@ -231,18 +263,27 @@ class BaseSession(ABC):
     async def _send_once[T](
         self,
         method: IAPIMethod[T],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> T:
         """Perform one attempt of ``send_request``.
 
         Args:
             method: The method to send.
+            headers: Headers for this request only.
+            timeout: Total timeout of this request, in seconds.
 
         Returns:
             The parsed response.
         """
         # Status check stays inside the retried unit: retries are driven
         # by the transient flag of the APIStatusError raised here.
-        response = await self._execute(method)
+        response = await self._execute(
+            method,
+            headers=headers,
+            timeout=timeout,
+        )
         self._raise_for_status(response)
 
         try:
@@ -260,6 +301,9 @@ class BaseSession(ABC):
     async def _open_stream_once(
         self,
         method: IStreamMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> IStreamResponse:
         """Perform one attempt of opening a stream.
 
@@ -268,11 +312,17 @@ class BaseSession(ABC):
 
         Args:
             method: The stream method to send.
+            headers: Headers for this request only.
+            timeout: Longest silence between two chunks, in seconds.
 
         Returns:
             The open response with a status below 400.
         """
-        response = await self._open_stream(method)
+        response = await self._open_stream(
+            method,
+            headers=headers,
+            timeout=timeout,
+        )
 
         if response.status >= HTTPStatus.BAD_REQUEST:
             try:
@@ -318,11 +368,19 @@ class BaseSession(ABC):
     async def _execute(
         self,
         method: IAPIMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> BufferedResponse:
         """Send the request and read the whole body.
 
         Args:
             method: The method to send.
+            headers: Headers for this request only, sent over the
+                session's and the method's headers and under the
+                authentication header.
+            timeout: Total timeout of this request, in seconds; ``None``
+                for the session's.
 
         Returns:
             The response, including responses with an error status.
@@ -336,11 +394,19 @@ class BaseSession(ABC):
     async def _open_stream(
         self,
         method: IStreamMethod[Any],
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
     ) -> IStreamResponse:
         """Send the request without reading the body.
 
         Args:
             method: The stream method to send.
+            headers: Headers for this request only, sent over the
+                session's and the method's headers and under the
+                authentication header.
+            timeout: Longest silence between two chunks, in seconds;
+                ``None`` for the session's stream timeout.
 
         Returns:
             The open response, including responses with an error status.

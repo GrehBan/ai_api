@@ -20,6 +20,7 @@ from ai_api import (
     BaseAPIType,
     BaseClient,
     BaseStreamMethod,
+    Headers,
     ResponseFormat,
     ServerSentEvent,
     Stream,
@@ -149,6 +150,16 @@ async def wrong_kind_of_method_is_rejected(session: AiohttpSession) -> None:
 
     async with session.stream(Generate()) as pieces:
         await pieces.save("out.txt")  # type: ignore[misc]
+
+
+async def call_options_are_keyword_only(session: AiohttpSession) -> None:
+    await session.send_request(GetText(), headers={"X-A": "1"}, timeout=2)
+    await session.send_request(GetText(), headers=Headers(), timeout=0.5)
+    await session.send_request(GetText(), {"X-A": "1"})  # type: ignore[call-arg]
+    await session.send_request(GetText(), timeout="2")  # type: ignore[arg-type]
+
+    async with session.stream(Download(), timeout=30) as chunks:
+        assert_type(chunks, Stream[bytes])
 
 
 def aliased_fields_are_set_by_name() -> None:
