@@ -14,7 +14,7 @@ from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.methods.base import BaseStreamMethod
 from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.response.stream import Stream, map_stream
+from ai_api.response.stream import Stream, map_stream, transform_stream
 from ai_api.serialization.json import loads
 from tests.conftest import FakeStreamResponse, make_method
 
@@ -315,3 +315,51 @@ async def test_map_stream_fails_after_the_block() -> None:
 
     with pytest.raises(RuntimeError, match="Stream is closed"):
         await anext(items)
+
+
+async def test_transform_stream_sees_the_whole_source() -> None:
+    source = Source([1, 2, 3, 4])
+
+    async def evens_twice(items: AsyncIterator[int]) -> AsyncGenerator[int]:
+        async for item in items:
+            if item % 2 == 0:
+                yield item
+                yield item
+
+    async with transform_stream(source.open(), evens_twice) as stream:
+        assert await collect(stream) == [2, 2, 4, 4]
+
+    assert source.log == ["source items closed", "source closed"]
+
+
+async def test_transform_stream_keeps_state_between_items() -> None:
+    source = Source([1, 2, 3])
+
+    async def total(items: AsyncIterator[int]) -> AsyncGenerator[int]:
+        sum_ = 0
+
+        async for item in items:
+            sum_ += item
+
+        yield sum_
+
+    async with transform_stream(source.open(), total) as stream:
+        assert await collect(stream) == [6]
+
+
+async def test_transform_stream_closes_the_transform_first() -> None:
+    source = Source([1, 2, 3])
+    log = source.log
+
+    async def logged(items: AsyncIterator[int]) -> AsyncGenerator[int]:
+        try:
+            async for item in items:
+                yield item
+        finally:
+            log.append("transform closed")
+
+    async with transform_stream(source.open(), logged) as stream:
+        async for _ in stream:
+            break
+
+    assert log == ["transform closed", "source items closed", "source closed"]

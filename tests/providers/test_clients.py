@@ -13,8 +13,12 @@ from ai_api.enums import Provider
 from ai_api.http.auth import APIKeyAuth, BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import (
+    APIStatusError,
+    BadRequestError,
+    InternalServerError,
     QuotaExceededError,
     RateLimitError,
+    ServiceUnavailableError,
 )
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.providers.openai.api import OPENAI_API
@@ -110,6 +114,49 @@ def test_openai_client_needs_a_token_or_a_session(kwargs: Any) -> None:
         OpenAIClient(**kwargs)
 
 
+def test_openai_client_reads_the_key_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    session = OpenAIClient().session
+
+    assert isinstance(session, AiohttpSession)
+    assert session.auth.encode() == "Bearer sk-env"
+
+
+def test_explicit_token_wins_over_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    session = OpenAIClient("sk-explicit").session
+
+    assert isinstance(session, AiohttpSession)
+    assert session.auth.encode() == "Bearer sk-explicit"
+
+
+def test_session_ignores_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+    session = FakeTransport(error_resolver=OpenAIErrorResolver())
+
+    assert OpenAIClient(session=session).session is session
+
+
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
+def test_missing_key_names_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str | None,
+) -> None:
+    if value is not None:
+        monkeypatch.setenv("OPENAI_API_KEY", value)
+
+    with pytest.raises(ValueError, match="or set OPENAI_API_KEY"):
+        OpenAIClient()
+
+
 def test_openai_client_accepts_a_fitting_session() -> None:
     session = FakeTransport(error_resolver=OpenAIErrorResolver())
 
@@ -169,6 +216,60 @@ def test_openai_rate_limit_falls_back_to_the_default() -> None:
 
     assert type(error) is RateLimitError
     assert error.transient is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": "credit_balance_exhausted"},
+        {"code": "organization_spend_limit_exceeded"},
+        {"code": "project_spend_limit_exceeded"},
+        {"code": "organization_usage_limit_exceeded"},
+        {"code": "other", "type": "insufficient_quota"},
+    ],
+    ids=["credit", "org-spend", "project-spend", "usage", "type"],
+)
+def test_openai_exhausted_limits_are_quota_errors(
+    error: dict[str, str],
+) -> None:
+    resolved = OpenAIErrorResolver().resolve(
+        status=429,
+        body={"error": error | {"message": "No"}},
+        headers={"Retry-After": "1"},
+    )
+
+    assert type(resolved) is QuotaExceededError
+    assert resolved.transient is False
+
+
+@pytest.mark.parametrize(
+    ("body", "error_class", "transient"),
+    [
+        (
+            {"type": "error", "code": "server_is_overloaded"},
+            ServiceUnavailableError,
+            True,
+        ),
+        ({"type": "error", "code": "server_error"}, InternalServerError, True),
+        (
+            {"error": {"type": "invalid_request_error", "code": None}},
+            BadRequestError,
+            False,
+        ),
+        ({"type": "error", "code": "ERR_SOMETHING"}, APIStatusError, False),
+    ],
+    ids=["overloaded", "server", "type", "unknown"],
+)
+def test_openai_stream_error_is_classified_by_code_or_type(
+    body: dict[str, Any],
+    error_class: type[APIStatusError],
+    transient: bool,
+) -> None:
+    resolved = OpenAIErrorResolver().resolve(status=200, body=body, headers={})
+
+    assert type(resolved) is error_class
+    assert resolved.status == 200
+    assert resolved.transient is transient
 
 
 def test_factory_turns_a_token_into_auth_and_forwards_arguments() -> None:

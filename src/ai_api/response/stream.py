@@ -110,43 +110,77 @@ class Stream[T]:
 
 
 @asynccontextmanager
-async def map_stream[T, R](
+async def transform_stream[T, R](
+    source: AbstractAsyncContextManager[Stream[T]],
+    transform: Callable[[AsyncIterator[T]], AsyncIterator[R]],
+) -> AsyncGenerator[Stream[R]]:
+    """Open a stream and pass its items through ``transform``.
+
+    ``transform`` sees the whole source, so it can keep state between
+    items, skip some and turn one item into several, e.g. collect text
+    deltas into a final event. On exit, including ``break`` and
+    exceptions, the transformed stream is closed first and the source
+    after it; iterating the result after the block raises
+    ``RuntimeError``.
+
+    Args:
+        source: The stream to open, e.g. ``session.stream(method)``.
+        transform: Turns the source items into result items; usually an
+            async generator function.
+
+    Yields:
+        A stream of transformed items.
+
+    Example:
+        >>> async def texts(events):
+        ...     async for event in events:
+        ...         if event.text:
+        ...             yield event.text
+        >>> async with transform_stream(session.stream(Deltas()), texts) as s:
+        ...     async for text in s:
+        ...         handle(text)
+    """
+    async with source as stream:
+        transformed = Stream(transform(stream))
+
+        try:
+            yield transformed
+        finally:
+            await transformed.aclose()
+
+
+def map_stream[T, R](
     source: AbstractAsyncContextManager[Stream[T]],
     convert: Callable[[T], R],
-) -> AsyncGenerator[Stream[R]]:
+) -> AbstractAsyncContextManager[Stream[R]]:
     """Open a stream and convert each of its items.
 
-    Meant for adapters that turn a provider's stream into another item
-    type. On exit, including ``break`` and exceptions, the converted
-    stream is closed first and the source after it; iterating the result
-    after the block raises ``RuntimeError``.
+    The one-to-one case of ``transform_stream``, with the same closing
+    order.
 
     Args:
         source: The stream to open, e.g. ``session.stream(method)``.
         convert: Turns one source item into one result item.
 
-    Yields:
-        A stream of converted items.
+    Returns:
+        A context manager that yields a stream of converted items.
 
     Example:
         >>> async with map_stream(session.stream(Deltas()), to_event) as s:
         ...     async for event in s:
         ...         handle(event)
     """
-    async with source as stream:
 
-        async def items() -> AsyncGenerator[R]:
-            """Convert the source items one by one.
+    async def items(stream: AsyncIterator[T]) -> AsyncGenerator[R]:
+        """Convert the source items one by one.
 
-            Yields:
-                The converted items.
-            """
-            async for item in stream:
-                yield convert(item)
+        Args:
+            stream: The source items.
 
-        mapped = Stream(items())
+        Yields:
+            The converted items.
+        """
+        async for item in stream:
+            yield convert(item)
 
-        try:
-            yield mapped
-        finally:
-            await mapped.aclose()
+    return transform_stream(source, items)

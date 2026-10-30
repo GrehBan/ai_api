@@ -35,6 +35,10 @@ class GenerationResponse[RawT](BaseResponse):
         model: Model that generated it.
         text: Generated text, if any.
         usage: Token counts, if reported.
+        incomplete_reason: Why the provider stopped before the end, such
+            as a token limit, in the provider's own words; ``None`` if
+            the generation finished. ``text`` then holds what was
+            generated until the stop.
         raw: The provider's response.
     """
 
@@ -44,5 +48,6 @@ class GenerationResponse[RawT](BaseResponse):
 
     text: str | None = None
     usage: TokenUsage | None = None
+    incomplete_reason: str | None = None
 
     raw: RawT

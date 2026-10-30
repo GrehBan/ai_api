@@ -1,0 +1,150 @@
+"""Adapter of shared generation to OpenAI's Responses API."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any
+
+from ai_api.adapters.base import BaseCompositeAdapter
+from ai_api.enums import Provider
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.providers.openai.adapters.conversions import (
+    TERMINAL_EVENTS,
+    check_status,
+    incomplete_reason,
+    to_event,
+    to_usage,
+)
+from ai_api.providers.openai.methods.responses import (
+    CreateResponse,
+    StreamResponse,
+)
+from ai_api.providers.openai.types.events import ResponseStreamEvent
+from ai_api.providers.openai.types.responses import Response
+from ai_api.types.requests.generation import GenerationRequest
+from ai_api.types.responses.events import GenerationEvent
+from ai_api.types.responses.generation import GenerationResponse
+
+
+class OpenAIGenerationAdapter(
+    BaseCompositeAdapter[
+        GenerationRequest,
+        Response,
+        GenerationResponse[Response],
+        ResponseStreamEvent,
+        GenerationEvent[ResponseStreamEvent],
+    ],
+):
+    """Generates text with ``POST /responses``.
+
+    Request fields map one to one. OpenAI's own limits are checked when
+    the method is built, so a request that OpenAI would reject, such as
+    ``max_output_tokens`` below 16 or more than 16 metadata pairs, fails
+    with a ``ValidationError`` before anything is sent.
+
+    Example:
+        >>> generation = GenerationResource(session, OpenAIGenerationAdapter())
+        >>> response = await generation.create(
+        ...     GenerationRequest(model="gpt-5", input="Hi")
+        ... )
+    """
+
+    def to_method(self, request: GenerationRequest) -> CreateResponse:
+        """Build the method that creates a response at once.
+
+        Args:
+            request: The shared request.
+
+        Returns:
+            ``CreateResponse`` with the request's fields.
+        """
+        return CreateResponse(**self._fields(request))
+
+    def to_response(
+        self,
+        raw: Response,
+        request: GenerationRequest,
+    ) -> GenerationResponse[Response]:
+        """Convert a finished response.
+
+        Args:
+            raw: OpenAI's response.
+            request: The request it answers.
+
+        Returns:
+            The generated text with its token counts; an incomplete
+            response keeps its text and gets ``incomplete_reason``.
+
+        Raises:
+            APIResponseError: The response failed or did not finish.
+        """
+        check_status(raw)
+        return GenerationResponse[Response](
+            id=raw.id,
+            provider=Provider.OPENAI,
+            model=raw.model,
+            text=raw.output_text,
+            usage=to_usage(raw.usage),
+            incomplete_reason=incomplete_reason(raw),
+            raw=raw,
+        )
+
+    def to_stream_method(self, request: GenerationRequest) -> StreamResponse:
+        """Build the method that streams a response.
+
+        Args:
+            request: The shared request.
+
+        Returns:
+            ``StreamResponse`` with the request's fields.
+        """
+        return StreamResponse(**self._fields(request))
+
+    async def to_events(
+        self,
+        items: AsyncIterator[ResponseStreamEvent],
+        request: GenerationRequest,
+    ) -> AsyncGenerator[GenerationEvent[ResponseStreamEvent]]:
+        """Convert the events of a Responses stream.
+
+        Args:
+            items: The events OpenAI sent.
+            request: The request the stream answers.
+
+        Yields:
+            One shared event per OpenAI event.
+
+        Raises:
+            APIResponseError: The stream ended before a
+                ``response.completed``, ``response.failed`` or
+                ``response.incomplete`` event, so the generation was cut
+                off.
+        """
+        finished = False
+        async for item in items:
+            finished = finished or item.type in TERMINAL_EVENTS
+            yield to_event(item)
+        if not finished:
+            message = (
+                "OpenAI stream ended before response.completed, "
+                "response.failed or response.incomplete"
+            )
+            raise APIResponseError(message)
+
+    @staticmethod
+    def _fields(request: GenerationRequest) -> dict[str, Any]:
+        """Take the method fields of a request.
+
+        Args:
+            request: The shared request.
+
+        Returns:
+            The fields that both methods take.
+        """
+        return {
+            "model": request.model,
+            "input": request.input,
+            "instructions": request.instructions,
+            "max_output_tokens": request.max_output_tokens,
+            "metadata": request.metadata,
+        }

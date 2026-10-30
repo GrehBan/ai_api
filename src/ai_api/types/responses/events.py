@@ -37,15 +37,19 @@ class TextDeltaEvent[RawT](RawResponseEvent[RawT]):
 
 
 class CompletedEvent[RawT](RawResponseEvent[RawT]):
-    """The generation finished.
+    """The generation finished, or stopped early.
 
     Attributes:
         type: Always ``"completed"``.
         usage: Token counts, if reported.
+        incomplete_reason: Why the provider stopped before the end, such
+            as a token limit, in the provider's own words; ``None`` if
+            the generation finished.
     """
 
     type: Literal["completed"] = "completed"
     usage: TokenUsage | None = None
+    incomplete_reason: str | None = None
 
 
 class FailedEvent[RawT](RawResponseEvent[RawT]):

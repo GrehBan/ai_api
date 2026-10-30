@@ -1,6 +1,7 @@
 """Block L: the README examples run against a local server."""
 
 import ast
+import json
 import mimetypes
 import re
 import sys
@@ -20,6 +21,10 @@ from ai_api import (
     RateLimitError,
     ResponseFormat,
     ServiceUnavailableError,
+)
+from ai_api.providers.anthropic import AnthropicClient
+from ai_api.providers.anthropic.client import (
+    session_factory as anthropic_session_factory,
 )
 from ai_api.providers.openai.client import session_factory
 from ai_api.session.aiohttp import AiohttpSession
@@ -45,8 +50,11 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
     AUTH,
     CALL_OPTIONS,
     CLIENT,
+    OPENAI_RESPONSES,
+    ANTHROPIC_MESSAGES,
+    SHARED_GENERATION,
     RESOURCES,
-) = range(15)
+) = range(18)
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -147,7 +155,7 @@ def examples(
 
 def test_every_example_is_tested() -> None:
     # A new ```python block needs a test here.
-    assert len(BLOCKS) == 15
+    assert len(BLOCKS) == 18
 
 
 def test_quick_start_ends_with_asyncio_run() -> None:
@@ -481,6 +489,220 @@ async def test_openai_client(
     assert recorder.last.headers["Authorization"] == "Bearer sk-..."
 
 
+async def test_openai_responses(
+    examples: Examples,
+    recorder: Recorder,
+    session: AiohttpSession,
+) -> None:
+    await examples.run(QUICK_START, CLIENT, OPENAI_RESPONSES)
+    message = {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Hello!"}],
+    }
+    delta = {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "sequence_number": 0,
+    }
+    recorder.reply(
+        Reply(
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1741476777,
+                "model": "gpt-6-astra",
+                "output": [message],
+            }
+        ),
+        Reply(
+            chunks=[
+                f"data: {json.dumps(delta | {'delta': 'He'})}\n\n".encode(),
+                f"data: {json.dumps(delta | {'delta': 'y'})}\n\n".encode(),
+            ],
+            content_type="text/event-stream",
+        ),
+    )
+
+    assert await examples.ask(session) == "Hello!"
+    assert await examples.ask_streamed(session) == "Hey"
+    assert recorder.requests[-2].raw_path == "/v1/responses"
+    assert json.loads(recorder.requests[-2].body) == {
+        "model": "gpt-6-astra",
+        "input": "Hi",
+        "instructions": "Be brief",
+    }
+
+
+async def test_anthropic_messages(
+    examples: Examples,
+    recorder: Recorder,
+    session: AiohttpSession,
+) -> None:
+    await examples.run(QUICK_START, ANTHROPIC_MESSAGES)
+    message = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 5, "output_tokens": 2},
+    }
+    delta = {"type": "content_block_delta", "index": 0}
+    recorder.reply(
+        Reply(json=message),
+        Reply(
+            chunks=[
+                f"event: content_block_delta\ndata: {json.dumps(data)}\n\n"
+                .encode()
+                for data in [
+                    delta | {"delta": {"type": "text_delta", "text": "He"}},
+                    delta | {"delta": {"type": "signature_delta"}},
+                    delta | {"delta": {"type": "text_delta", "text": "y"}},
+                ]
+            ],
+            content_type="text/event-stream",
+        ),
+    )
+
+    assert await examples.ask_claude(session) == "Hello!"
+    assert await examples.ask_claude_streamed(session) == "Hey"
+    first, second = recorder.requests
+    assert first.raw_path == "/v1/messages"
+    assert first.headers["anthropic-version"] == "2026-10-21"
+    assert json.loads(first.body) == {
+        "model": "claude-opus-5-5",
+        "max_tokens": 1024,
+        "system": "Be brief",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }
+    assert json.loads(second.body)["stream"] is True
+
+
+async def test_shared_generation(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, CLIENT, SHARED_GENERATION)
+    monkeypatch.setattr(session_factory, "api", api)
+    delta = {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "sequence_number": 0,
+    }
+    completed = {
+        "type": "response.completed",
+        "sequence_number": 2,
+        "response": {
+            "id": "resp_2",
+            "created_at": 1741476777,
+            "status": "completed",
+            "model": "gpt-6-astra",
+        },
+    }
+    recorder.reply(
+        Reply(
+            json={
+                "id": "resp_1",
+                "created_at": 1741476777,
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "model": "gpt-6-astra",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "incomplete",
+                        "content": [{"type": "output_text", "text": "Hel"}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 64,
+                    "total_tokens": 69,
+                },
+            }
+        ),
+        Reply(
+            chunks=[
+                f"data: {json.dumps(delta | {'delta': 'He'})}\n\n".encode(),
+                f"data: {json.dumps(delta | {'delta': 'y'})}\n\n".encode(),
+                f"data: {json.dumps(completed)}\n\n".encode(),
+            ],
+            content_type="text/event-stream",
+        ),
+    )
+
+    async with examples.OpenAIClient("sk-...") as client:
+        response = await examples.generate(client)
+        assert await examples.generate_streamed(client) == "Hey"
+
+    assert (response.id, response.text) == ("resp_1", "Hel")
+    assert response.incomplete_reason == "max_output_tokens"
+    assert response.usage is not None
+    assert response.usage.total_tokens == 69
+    assert response.raw.status == "incomplete"
+    first, second = recorder.requests
+    assert first.raw_path == second.raw_path == "/v1/responses"
+    assert json.loads(first.body) == {
+        "model": "gpt-6-astra",
+        "input": "Hi",
+        "instructions": "Be brief",
+        "max_output_tokens": 64,
+    }
+    assert json.loads(second.body) == {
+        "model": "gpt-6-astra",
+        "input": "Hi",
+        "stream": True,
+    }
+
+
+async def test_shared_generation_works_with_anthropic(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, CLIENT, SHARED_GENERATION)
+    monkeypatch.setattr(anthropic_session_factory, "api", api)
+    recorder.reply(
+        Reply(
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [{"type": "text", "text": "Hel"}],
+                "stop_reason": "max_tokens",
+                "usage": {"input_tokens": 5, "output_tokens": 64},
+            }
+        )
+    )
+
+    async with AnthropicClient("sk-ant-...") as client:
+        response = await examples.generate(client)
+
+    assert (response.text, response.incomplete_reason) == (
+        "Hel",
+        "max_tokens",
+    )
+    assert json.loads(recorder.last.body) == {
+        "model": "gpt-6-astra",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 64,
+        "system": "Be brief",
+    }
+
+
 async def test_resources(
     examples: Examples,
     recorder: Recorder,
@@ -494,7 +716,7 @@ async def test_resources(
         ),
     )
     await examples.run(QUICK_START, STREAMING, EVENTS, RESOURCES)
-    completions = examples.Completions(session)
+    client = examples.ExampleClient(session)
     request = GenerationRequest(model="example-1", input="Hi")
     recorder.reply(
         Reply(json={"id": "c-1", "text": "Hello!"}),
@@ -508,8 +730,8 @@ async def test_resources(
         ),
     )
 
-    response = await completions.complete(request)
-    async with completions.complete.stream(request) as events:
+    response = await client.generation.create(request)
+    async with client.generation.stream(request) as events:
         received = [event async for event in events]
 
     assert response.text == "Hello!"
@@ -518,7 +740,7 @@ async def test_resources(
     assert [event.type for event in received] == [
         "text_delta",
         "text_delta",
-        "other",
+        "completed",
     ]
     assert [getattr(event, "text", None) for event in received] == [
         "He",

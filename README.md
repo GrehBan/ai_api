@@ -4,7 +4,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 
 You describe each API call as a small declarative class. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming.
 
-> **Status: pre-alpha (0.1.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` sets up the connection to OpenAI, but there are no ready-made OpenAI methods yet. See [Limitations](#limitations-and-roadmap).
+> **Status: pre-alpha (0.1.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
 
 ## Contents
 
@@ -35,7 +35,7 @@ You describe each API call as a small declarative class. The library sends it ov
 - **File uploads.** Upload from bytes, a path on disk, an open binary stream or an async iterator. Each retry resends the full content.
 - **Retries.** Transient failures are retried with exponential backoff and jitter, and `Retry-After` is honored up to a cap.
 - **Structured errors.** One exception class per HTTP status, plus transport errors. Each error carries the provider error code, request id and a `transient` flag.
-- **Provider clients.** `OpenAIClient("sk-...")` builds a session with OpenAI's URL, authentication and error mapping; `BaseClient` and `SessionFactory` are the base for other providers.
+- **Provider clients.** `OpenAIClient("sk-...")` builds a session with OpenAI's URL, authentication and error mapping, and offers shared text generation as `client.generation`; `BaseClient` and `SessionFactory` are the base for other providers.
 - **Pluggable parts.** Sessions depend on protocols, so the API, authentication, error mapping, headers and JSON codec can each be replaced.
 - **Safe defaults.** Path parameters are escaped, redirects to other hosts are refused, proxy settings from the environment are ignored unless enabled, and secrets are kept out of `repr`.
 
@@ -782,7 +782,7 @@ For a different URL scheme, write your own class with `base_url`, `version` and 
 
 ## Provider clients
 
-`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 with the code `insufficient_quota` into a `QuotaExceededError` that is not retried. The client owns its session, so close it, ideally with `async with`:
+`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried. A stream's `error` event comes after a 200, so its class is picked by its code or type, such as a transient `ServiceUnavailableError` for `server_is_overloaded`. The client owns its session, so close it, ideally with `async with`:
 
 ```python
 from ai_api.providers.openai import OpenAIClient
@@ -793,9 +793,127 @@ async def list_models() -> ModelList:
         return await client.send_request(ListModels())
 ```
 
+- **Key from the environment.** `OpenAIClient()` without a token or a session reads the key from `OPENAI_API_KEY`. An explicit token always wins over the variable, a session is never combined with it, and an empty variable counts as unset.
 - **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` with the generic `BaseErrorResolver`, or with authentication outside the `Authorization` header, gets a `UserWarning`, since both are almost certainly mistakes for OpenAI. `session_factory(token, max_body_size=...)` from `ai_api.providers.openai.client` builds a session with OpenAI's settings and your own options; type checkers check those options against `AiohttpSession`.
 - **Ownership.** A client closes its session when it is closed, also a session you passed in. One owner per session means no connection pool is left open by accident; create one session per client.
+- **Anthropic.** `AnthropicClient` (`ai_api.providers.anthropic`) works the same way: a token, a ready `session=` or `ANTHROPIC_API_KEY`, with the `https://api.anthropic.com/v1` URL, `BearerAuth` (Anthropic also accepts `x-api-key`, so `APIKeyAuth` in a given session gets no warning) and `AnthropicErrorResolver`. The resolver reads Anthropic's `error.type` as `error_type` and `details.error_code` as `code`; a reached spend cap (429 `enforced_spend_limit_reached`) or a spend limit you set (400) is a `QuotaExceededError` that is not retried, and the 529 `overloaded_error` is a transient `ServiceUnavailableError`, like OpenAI's 503. A stream's `error` event comes after a 200, so its class is picked by its type. Anthropic also requires an `anthropic-version` header; `API_VERSION` (`2026-10-21`) is the version the library's Anthropic types follow.
 - **Other providers.** Subclass `BaseClient`, which delegates `send_request`, `stream`, `close` and `async with` to its session, and build the session with a `SessionFactory` (`client/factory.py`). `BaseClient` is generic in the session type: `BaseClient(AiohttpSession(...)).session` is typed as `AiohttpSession`, while `OpenAIClient`, which accepts any session, is a `BaseClient[ISession]`.
+
+### OpenAI Responses API
+
+`ai_api.providers.openai.methods` has `CreateResponse` and `StreamResponse` for `POST /v1/responses`, with OpenAI's own types in `ai_api.providers.openai.types`:
+
+```python
+from ai_api.providers.openai.methods import CreateResponse, StreamResponse
+from ai_api.providers.openai.types import OutputTextDeltaEvent
+
+
+async def ask(client: OpenAIClient) -> str | None:
+    response = await client.send_request(
+        CreateResponse(model="gpt-6-astra", input="Hi", instructions="Be brief")
+    )
+    return response.output_text
+
+
+async def ask_streamed(client: OpenAIClient) -> str:
+    text = ""
+    method = StreamResponse(model="gpt-6-astra", input="Hi")
+
+    async with client.stream(method) as events:
+        async for event in events:
+            if isinstance(event, OutputTextDeltaEvent):
+                text += event.delta
+
+    return text
+```
+
+- **`output_text` is computed.** The API sends no such field; like the official SDKs, `Response.output_text` joins the `output_text` parts of the `message` items, and is `None` when there are none.
+- **Nothing unknown is dropped or rejected.** Output items, content parts and stream events that the library does not model yet (reasoning, tool calls, new event types) arrive as `UnknownOutputItem`, `UnknownContent` and `UnknownEvent`, with every field the provider sent kept as an extra field.
+- **Failures.** `response.failed` and `response.incomplete` are regular `ResponseStateEvent`s with `response.error` or `response.incomplete_details`; the separate `error` event is raised as an `APIStatusError` with its code and message.
+- **Checked before sending.** `max_output_tokens` of at least 16, `temperature` from 0 to 2, and metadata of up to 16 pairs with keys up to 64 and values up to 512 characters, as OpenAI documents them.
+
+### Anthropic Messages API
+
+`ai_api.providers.anthropic.methods` has `CreateMessage` and `StreamMessage` for `POST /v1/messages`, with Anthropic's own types in `ai_api.providers.anthropic.types`:
+
+```python
+from ai_api.providers.anthropic import AnthropicClient
+from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
+from ai_api.providers.anthropic.types import ContentBlockDeltaEvent, TextDelta
+
+
+async def ask_claude(client: AnthropicClient) -> str | None:
+    message = await client.send_request(
+        CreateMessage(
+            model="claude-opus-5-5",
+            max_tokens=1024,
+            system="Be brief",
+            messages=[{"role": "user", "content": "Hi"}],
+        )
+    )
+    return message.text
+
+
+async def ask_claude_streamed(client: AnthropicClient) -> str:
+    text = ""
+    method = StreamMessage(
+        model="claude-opus-5-5",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hi"}],
+    )
+
+    async with client.stream(method) as events:
+        async for event in events:
+            if isinstance(event, ContentBlockDeltaEvent) and isinstance(
+                event.delta, TextDelta
+            ):
+                text += event.delta.text
+
+    return text
+```
+
+- **The version is part of the method.** Both methods send `anthropic-version: 2026-10-21` (`VERSION_HEADERS`), the version their types follow, whatever session sends them. A method of your own for Anthropic sets `__request_headers__ = VERSION_HEADERS` too.
+- **`text` is computed.** `Message.text` joins the `text` blocks of the content, and is `None` when there are none.
+- **Nothing unknown is dropped or rejected.** Content blocks, deltas and stream events the library does not model yet (thinking, tool use, new event types) arrive as `UnknownBlock`, `UnknownDelta` and `UnknownEvent`, with every field kept. The `error` event is raised as an `APIStatusError` chosen by its type, such as a transient `ServiceUnavailableError` for `overloaded_error`.
+- **Checked before sending.** `max_tokens` is required; `messages` needs at least one turn, and a turn (a `MessageParam`, a `TypedDict`, so dict literals type-check) takes only `role` and `content`; `metadata` takes only `user_id`, up to 512 characters. There are no `temperature`, `top_p` and `top_k`: API version 2026-10-21 rejects them.
+
+### Shared generation
+
+`client.generation` is the provider-neutral way to generate text: a `GenerationResource` that takes a shared `GenerationRequest` and returns shared types, with the provider's own response in `raw`. `OpenAIClient` and `AnthropicClient` both have it, so the code below works with either; with an `AnthropicClient`, `generate` returns a `GenerationResponse[Message]`.
+
+```python
+from ai_api.providers.openai.types import Response
+from ai_api.types.requests import GenerationRequest
+from ai_api.types.responses import GenerationResponse, TextDeltaEvent
+
+
+async def generate(client: OpenAIClient) -> GenerationResponse[Response]:
+    request = GenerationRequest(
+        model="gpt-6-astra",
+        input="Hi",
+        instructions="Be brief",
+        max_output_tokens=64,
+    )
+    return await client.generation.create(request)
+
+
+async def generate_streamed(client: OpenAIClient) -> str:
+    text = ""
+    request = GenerationRequest(model="gpt-6-astra", input="Hi")
+
+    async with client.generation.stream(request) as events:
+        async for event in events:
+            if isinstance(event, TextDeltaEvent):
+                text += event.text
+
+    return text
+```
+
+- **OpenAI mapping.** `OpenAIGenerationAdapter` (`ai_api.providers.openai.adapters`) builds `CreateResponse` or `StreamResponse` from the request, so OpenAI's limits, such as `max_output_tokens` of at least 16, are checked before sending. Parameters the shared request lacks, such as `temperature`, stay on the methods above.
+- **OpenAI stopped early.** An `incomplete` response, cut off by `max_output_tokens` for example, keeps its `text` and gets `incomplete_reason`, OpenAI's reason such as `"max_output_tokens"`; in a stream, `response.incomplete` is a `CompletedEvent` with it.
+- **OpenAI failures are raised.** A buffered response that is not `completed` or `incomplete`, `failed` first of all, raises `APIResponseError` with OpenAI's code and message, and so does a stream that ends without `response.completed`, `response.failed` or `response.incomplete`. In a stream, `response.failed` arrives as a `FailedEvent`.
+- **Anthropic mapping.** `AnthropicGenerationAdapter` (`ai_api.providers.anthropic.adapters`) sends `input` as one `user` turn and `instructions` as `system`. Anthropic requires `max_tokens`, so a request without `max_output_tokens` gets the client's `default_max_tokens` (`AnthropicClient(..., default_max_tokens=1024)`). Metadata other than `user_id` raises `ValueError` instead of being dropped.
+- **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it. A `stop_reason` other than `end_turn` or `stop_sequence` (`max_tokens`, `refusal`, ...) becomes `incomplete_reason`, with the text kept. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a stream that ends before `message_stop`, or a message without a `stop_reason`, raises `APIResponseError`. Anthropic reports failures only as `error` events, so its streams have no `FailedEvent`.
 
 ### Adding a provider
 
@@ -804,7 +922,7 @@ A provider is a flat package under `providers/<name>/`, built from the same part
 1. **`api.py`**: its `IAPI`, usually `BaseAPI("https://api.provider.com", "v1")`.
 2. **`resolver.py`**: a `BaseErrorResolver` subclass with the provider's `provider` value, and `get_error_code` or `classify` for its error codes, such as which 429s are quota errors and which statuses are transient.
 3. **`client.py`**: a module-level `SessionFactory(AiohttpSession, auth_factory=..., api=..., error_resolver=...)` and a `BaseClient` subclass that accepts a token or a ready session.
-4. **`types/`, `methods/` and `resources/`** subpackages with its first endpoints: response models, method classes, and use cases that map them to the shared types.
+4. **`types/`, `methods/` and `adapters/`** subpackages with its first endpoints: response models, method classes, and adapters that map them to the shared types; its resources build `AdapterUseCase`s from those adapters.
 
 The package `__init__.py` re-exports the client, which makes it the one `__init__` allowed to import a transport.
 
@@ -812,79 +930,91 @@ The package `__init__.py` re-exports the client, which makes it the one `__init_
 
 Methods are specific to one provider. Resources and use cases are the layer above them that offers one API for all providers, in shared types:
 
-- **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, `temperature`, `max_output_tokens`, `metadata`).
-- **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage` and the provider's own response in `raw`, so nothing the shared type lacks is lost.
-- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent`, `FailedEvent` and `OtherEvent`. `FailedEvent` is for a failure the provider reports as a regular event; protocol errors stay exceptions.
-- **Use cases** (`ai_api.resources`): `BaseUseCase` turns a shared request into a provider method and its result into a shared response, `BaseStreamUseCase` does the same for streams, and `BaseCompositeUseCase` does both.
-- **Resources**: `BaseResource` groups the use cases of one area, such as `client.responses.generate(...)`.
+- **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
+- **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage`, `incomplete_reason` (why the provider stopped early, such as a token limit; `None` if it finished) and the provider's own response in `raw`, so nothing the shared type lacks is lost.
+- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent`, `FailedEvent` and `OtherEvent`. `CompletedEvent` carries `usage` and `incomplete_reason` too. `FailedEvent` is for a failure the provider reports as a regular event; protocol errors stay exceptions.
+- **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
+- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both.
+- **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(request)` and `stream(request)`, typed by the adapter's raw types. `BaseResource` groups the use cases of any other area.
 
 ```python
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncGenerator, AsyncIterator
 
-from ai_api import Provider, Stream
-from ai_api.resources import BaseCompositeUseCase, BaseResource
-from ai_api.response import map_stream
+from ai_api import Provider
+from ai_api.adapters import BaseCompositeAdapter
+from ai_api import BaseClient
+from ai_api.resources import GenerationResource
 from ai_api.session import ISession
 from ai_api.types.requests import GenerationRequest
 from ai_api.types.responses import (
+    CompletedEvent,
     GenerationEvent,
     GenerationResponse,
-    OtherEvent,
     TextDeltaEvent,
 )
 
 
-def to_event(event: MessageEvent) -> GenerationEvent[MessageEvent]:
-    if isinstance(event, TextDelta):
-        return TextDeltaEvent[MessageEvent](text=event.text, raw=event)
-    return OtherEvent[MessageEvent](raw=event)
-
-
-class Complete(
-    BaseCompositeUseCase[
+class CompletionAdapter(
+    BaseCompositeAdapter[
         GenerationRequest,
+        Completion,                       # what CreateCompletion returns
         GenerationResponse[Completion],
+        MessageEvent,                     # what StreamMessage yields
         GenerationEvent[MessageEvent],
     ]
 ):
-    async def __call__(
+    def to_method(self, request: GenerationRequest) -> CreateCompletion:
+        return CreateCompletion(
+            model=request.model,
+            messages=[Message(role="user", content=request.input)],
+        )
+
+    def to_response(
         self,
+        raw: Completion,
         request: GenerationRequest,
     ) -> GenerationResponse[Completion]:
-        completion = await self.session.send_request(
-            CreateCompletion(
-                model=request.model,
-                messages=[Message(role="user", content=request.input)],
-                temperature=request.temperature,
-            )
-        )
         return GenerationResponse[Completion](
-            id=completion.id,
+            id=raw.id,
             provider=Provider.GENERIC,
-            model=request.model,
-            text=completion.text,
-            raw=completion,
+            model=request.model,          # the API does not send it back
+            text=raw.text,
+            raw=raw,
         )
 
-    def stream(
+    def to_stream_method(self, request: GenerationRequest) -> StreamMessage:
+        return StreamMessage(prompt=request.input)
+
+    async def to_events(
         self,
+        items: AsyncIterator[MessageEvent],
         request: GenerationRequest,
-    ) -> AbstractAsyncContextManager[Stream[GenerationEvent[MessageEvent]]]:
-        method = StreamMessage(prompt=request.input)
-        return map_stream(self.session.stream(method), to_event)
+    ) -> AsyncGenerator[GenerationEvent[MessageEvent]]:
+        async for event in items:
+            if isinstance(event, TextDelta):
+                yield TextDeltaEvent[MessageEvent](text=event.text, raw=event)
+            else:
+                yield CompletedEvent[MessageEvent](raw=event)
 
 
-class Completions(BaseResource):
+class ExampleClient(BaseClient[ISession]):
     def __init__(self, session: ISession) -> None:
         super().__init__(session)
-        self.complete = Complete(session)
+        self.generation = GenerationResource(session, CompletionAdapter())
 ```
 
-- **`map_stream`** opens the provider's stream and yields a `Stream` of converted items. On exit it closes the converted stream first and the source after it. A hand-written `async for ... yield` wrapper would leave its generator suspended until the event loop ends.
+`await client.generation.create(request)` returns a `GenerationResponse[Completion]`, and `async with client.generation.stream(request) as events` yields `GenerationEvent[MessageEvent]`s. Another provider's client builds the same `GenerationResource` with its own adapter, so the calling code does not change.
+
+- **Why three parts.** The session moves bytes, the adapter converts models, and the use case connects them. An adapter has no session and does no I/O, so it is tested with plain objects; a use case has no provider knowledge, so one class serves every provider.
+- **Grouped by mode, not by direction.** One adapter class holds both halves of a buffered call, so a type checker sees at the class itself whether the method it builds returns the type its `to_response` expects.
+- **The request reaches the conversions.** `to_response` and `to_events` get the shared request too, for what the provider does not send back, such as the model or an output schema.
+- **`to_events` sees the whole stream.** It may keep state, drop items and turn one item into several, for example collect deltas into a final event. The use case runs it through `transform_stream` (`ai_api.response`), which closes the converted stream first and the provider's stream after it, also on `break` and errors. `map_stream` is its one-item-to-one-item case.
+- **Resources hold use cases.** `GenerationResource` runs an `AdapterCompositeUseCase`; a resource of another area builds `AdapterUseCase`s the same way, and `IGenerationResource` is its protocol.
+- **Calls that are not one request and one response,** such as pagination, several dependent requests or polling, subclass `BaseUseCase`, `BaseStreamUseCase` or `BaseCompositeUseCase` directly and use adapters inside.
 - **The session type is optional.** The last type parameter, `SessionT`, defaults to `ISession`. Give a concrete session, such as `BaseResource[AiohttpSession]`, to reach its settings through `self.session` without a cast.
 - **`RawT` has no bound.** With a `BaseAPIType` bound, an unparametrized `GenerationResponse` would turn a dict in `raw` into an empty model, because unknown fields are ignored.
 
-No provider implements these yet; they are the base for the provider-neutral API.
+`OpenAIClient.generation` and `AnthropicClient.generation` are `GenerationResource`s with `OpenAIGenerationAdapter` and `AnthropicGenerationAdapter` (see [Shared generation](#shared-generation)).
 
 ## Writing a transport
 
@@ -939,7 +1069,7 @@ The main choices, and the reasons for them. Details are in the sections above.
 - **Sessions are bound to one loop**, so a misuse fails with a clear error rather than aiohttp's.
 - **Safe network defaults.** No redirects, no environment proxies, verified TLS; each can be turned on explicitly.
 - **Files are not models.** `InputFile` is not a `BaseAPIType`, because dumping a model would read and copy the file; files are opened again for every attempt instead.
-- **Layers in one direction.** Packages are ordered core → data and HTTP primitives → methods → response → session → client → resources → providers, and a module imports only from layers below it, which keeps the core free of providers and transports.
+- **Layers in one direction.** Packages are ordered core → data and HTTP primitives → methods → response → session → client → adapters → resources → providers, and a module imports only from layers below it, which keeps the core free of providers and transports.
 
 ## Project layout
 
@@ -947,18 +1077,24 @@ The main choices, and the reasons for them. Details are in the sections above.
 src/ai_api/
 ├── enums.py            Provider, BodyFormat, ResponseFormat
 ├── exceptions.py       AIAPIError, the root of all library errors
-├── types/              BaseAPIType, InputFile; requests/ and responses/
+├── types/              BaseAPIType, InputFile, BaseUnknown; requests/ and responses/
 │                       hold the shared GenerationRequest/Response, events
 ├── serialization/      JSON codec, body value normalization
 ├── http/               IAPI and BaseAPI, BearerAuth, APIKeyAuth, headers
 │   └── exceptions/     status, transport and response errors, resolver
 ├── methods/            BaseAPIMethod, BaseStreamMethod, path templates
-├── response/           BufferedResponse, Stream, map_stream; parse/ parsers
+├── response/           BufferedResponse, Stream, transform_stream, map_stream;
+│                       parse/ parsers
 ├── session/            BaseSession, AiohttpSession, retries, body/ builders
 ├── client/             BaseClient, SessionFactory
-├── resources/          resources and use cases over shared types
+├── adapters/           adapters between shared types and provider methods
+├── resources/          GenerationResource, use cases and AdapterUseCase orchestrators
 └── providers/
-    └── openai/         OpenAIClient, OPENAI_API, OpenAIErrorResolver
+    ├── anthropic/      AnthropicClient, ANTHROPIC_API, API_VERSION,
+    │                   AnthropicErrorResolver, methods/, types/ and
+    │                   adapters/ of the Messages API
+    └── openai/         OpenAIClient, OPENAI_API, OpenAIErrorResolver,
+                        methods/, types/ and adapters/ of the Responses API
 ```
 
 The names most code needs are re-exported from `ai_api` (`from ai_api import BaseAPIMethod, RateLimitError`), and each layer package re-exports its own, e.g. `from ai_api.http import Query`. Transport modules such as `ai_api.session.aiohttp` and provider packages such as `ai_api.providers.openai` are imported on their own, so `import ai_api` does not import aiohttp.
@@ -987,8 +1123,8 @@ The code uses Google-style docstrings, which ruff enforces, and PEP 695 generics
 - **No raw binary request body.** A file can only be uploaded as a multipart part, not as the whole body.
 - **No logging or hooks.** The library logs nothing and has no request or response hooks for metrics and tracing yet.
 - **No synchronous API.**
-- **Providers.** `OpenAIClient` only sets up the connection: there are no OpenAI method classes yet, and no Anthropic client.
-- **Shared API.** Resources and use cases (`resources/`) and the shared request, response and event types (`types/requests/`, `types/responses/`) are the base of a provider-neutral API; no provider implements them yet.
+- **Providers.** OpenAI has only the Responses API and Anthropic only the Messages API, each with text in and text out; tools, images and other content are reached through the raw dict forms of the methods.
+- **Shared API.** Resources and use cases (`resources/`) and the shared request, response and event types (`types/requests/`, `types/responses/`) are the base of a provider-neutral API; `OpenAIClient.generation` and `AnthropicClient.generation` implement them.
 
 ## License
 

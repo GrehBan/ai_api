@@ -13,16 +13,16 @@ class GenerationRequest(BaseRequest):
     Attributes:
         model: Model identifier of the provider.
         input: Text to respond to.
-        temperature: Sampling temperature; the provider's default if
-            ``None``.
+        instructions: Instructions for the model given apart from the
+            input, such as a system prompt; none if ``None``.
         max_output_tokens: Upper bound on generated tokens; positive.
         metadata: Free-form key-value pairs stored with the request.
     """
 
     model: str
     input: str
+    instructions: str | None = None
 
-    temperature: float | None = None
     max_output_tokens: int | None = Field(
         default=None,
         gt=0,

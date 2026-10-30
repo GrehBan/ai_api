@@ -76,6 +76,13 @@ def no_retry_wait(mocker: MockerFixture) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
+def no_provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide API keys of the environment, so clients see only test tokens."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_close_delay(mocker: MockerFixture) -> None:
     """Drop the ``asyncio.sleep(0.25)`` from ``AiohttpSession.close()``.
 

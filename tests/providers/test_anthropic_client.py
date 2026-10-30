@@ -1,0 +1,277 @@
+"""Anthropic: the client, its session and the error resolver.
+
+The error bodies follow the examples of Anthropic's API reference
+(captured 2026-10-30).
+"""
+
+from __future__ import annotations
+
+import warnings
+from typing import Any
+
+import pytest
+
+from ai_api.client.base import BaseClient
+from ai_api.enums import Provider
+from ai_api.http.auth import APIKeyAuth, BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import (
+    APIStatusError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    QuotaExceededError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
+from ai_api.methods.base import BaseAPIMethod
+from ai_api.providers.anthropic import (
+    ANTHROPIC_API,
+    AnthropicClient,
+    AnthropicErrorResolver,
+)
+from ai_api.providers.anthropic.client import session_factory
+from ai_api.session.aiohttp import AiohttpSession
+from tests.conftest import (
+    TEST_TOKEN,
+    FakeTransport,
+    LocalAPI,
+    Recorder,
+    Reply,
+    make_method,
+)
+
+SPEND_CAP_MESSAGE = (
+    "You have reached your API usage limits: your organization has "
+    "crossed its monthly API usage threshold, set based on your "
+    "organization's API tier. You will regain access on 2026-09-01 at "
+    "00:00 UTC."
+)
+
+SPEND_LIMIT_MESSAGE = (
+    "You have reached your specified API usage limits. You will regain "
+    "access on 2026-11-01 at 00:00 UTC."
+)
+
+
+def body(error_type: str, message: str = "Error", **error: Any) -> Any:
+    """An error body in Anthropic's shape."""
+    return {
+        "type": "error",
+        "error": {"type": error_type, "message": message, **error},
+        "request_id": "req_011CSHoEeqs5C35K2UUqR7Fy",
+    }
+
+
+def resolve(
+    status: int,
+    payload: Any,
+    headers: dict[str, str] | None = None,
+) -> APIStatusError:
+    return AnthropicErrorResolver().resolve(
+        status=status, body=payload, headers=headers or {}
+    )
+
+
+def test_anthropic_client_from_a_token_outside_a_coroutine() -> None:
+    session = AnthropicClient(TEST_TOKEN).session
+
+    assert isinstance(session, AiohttpSession)
+    assert session.api is ANTHROPIC_API
+    assert session.auth == BearerAuth(TEST_TOKEN)
+    assert isinstance(session.error_resolver, AnthropicErrorResolver)
+
+
+def test_anthropic_api_url() -> None:
+    assert (
+        ANTHROPIC_API.build_url("/messages")
+        == "https://api.anthropic.com/v1/messages"
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"token": "t", "session": FakeTransport()}],
+    ids=["neither", "both"],
+)
+def test_anthropic_client_needs_a_token_or_a_session(kwargs: Any) -> None:
+    with pytest.raises(ValueError, match="token or a session"):
+        AnthropicClient(**kwargs)
+
+
+def test_anthropic_client_reads_the_key_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+
+    session = AnthropicClient().session
+
+    assert isinstance(session, AiohttpSession)
+    assert session.auth.encode() == "Bearer sk-ant-env"
+
+
+def test_explicit_token_wins_over_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+
+    session = AnthropicClient("sk-ant-explicit").session
+
+    assert isinstance(session, AiohttpSession)
+    assert session.auth.encode() == "Bearer sk-ant-explicit"
+
+
+def test_missing_key_names_the_variable() -> None:
+    with pytest.raises(ValueError, match="or set ANTHROPIC_API_KEY"):
+        AnthropicClient()
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [BearerAuth("k"), APIKeyAuth("k")],
+    ids=["bearer", "x-api-key"],
+)
+def test_anthropic_client_accepts_both_auth_headers(auth: Any) -> None:
+    session = FakeTransport(auth=auth, error_resolver=AnthropicErrorResolver())
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        client = AnthropicClient(session=session)
+
+    assert client.session is session
+
+
+def test_generic_resolver_is_warned_about_at_the_call_site() -> None:
+    session = FakeTransport(error_resolver=BaseErrorResolver())
+
+    with pytest.warns(UserWarning, match="generic BaseErrorResolver") as info:
+        AnthropicClient(session=session)
+
+    assert info[0].filename == __file__
+
+
+def test_other_auth_header_is_warned_about() -> None:
+    session = FakeTransport(
+        auth=APIKeyAuth("k", header_name="X-Key"),
+        error_resolver=AnthropicErrorResolver(),
+    )
+
+    with pytest.warns(UserWarning, match="x-api-key"):
+        AnthropicClient(session=session)
+
+
+def test_other_sessions_are_not_checked() -> None:
+    session = BaseClient(FakeTransport(error_resolver=BaseErrorResolver()))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        client = AnthropicClient(session=session)
+
+    assert client.session is session
+
+
+def test_error_reads_the_type_message_and_request_id() -> None:
+    error = resolve(404, body("not_found_error", "Not found"))
+
+    assert type(error) is NotFoundError
+    assert error.error_type == "not_found_error"
+    assert error.code is None
+    assert error.request_id == "req_011CSHoEeqs5C35K2UUqR7Fy"
+    assert error.provider is Provider.ANTHROPIC
+    assert "Not found" in str(error)
+
+
+def test_overloaded_is_a_transient_unavailable_error() -> None:
+    error = resolve(529, body("overloaded_error", "Overloaded"))
+
+    assert type(error) is ServiceUnavailableError
+    assert error.status == 529
+    assert error.transient is True
+
+
+def test_rate_limit_with_retry_after_is_retried() -> None:
+    error = resolve(429, body("rate_limit_error"), {"retry-after": "3"})
+
+    assert type(error) is RateLimitError
+    assert error.transient is True
+
+
+def test_spend_cap_is_a_quota_error() -> None:
+    details = {"error_code": "enforced_spend_limit_reached"}
+    error = resolve(
+        429, body("rate_limit_error", SPEND_CAP_MESSAGE, details=details)
+    )
+
+    assert type(error) is QuotaExceededError
+    assert error.code == "enforced_spend_limit_reached"
+    assert error.transient is False
+
+
+def test_own_spend_limit_is_a_quota_error() -> None:
+    error = resolve(400, body("invalid_request_error", SPEND_LIMIT_MESSAGE))
+
+    assert type(error) is QuotaExceededError
+    assert error.transient is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [{"type": "invalid_request_error"}, {"details": "x"}],
+    ids=["no-message", "details-not-an-object"],
+)
+def test_other_bad_requests_stay_bad_requests(error: dict[str, Any]) -> None:
+    resolved = resolve(400, {"type": "error", "error": error})
+
+    assert type(resolved) is BadRequestError
+    assert resolved.code is None
+
+
+def test_non_string_error_code_is_ignored_as_a_code() -> None:
+    error = resolve(429, body("rate_limit_error", details={"error_code": 1}))
+
+    assert type(error) is RateLimitError
+    assert error.code is None
+
+
+@pytest.mark.parametrize(
+    ("error_type", "error_class", "transient"),
+    [
+        ("overloaded_error", ServiceUnavailableError, True),
+        ("api_error", InternalServerError, True),
+        ("invalid_request_error", BadRequestError, False),
+        ("brand_new_error", APIStatusError, False),
+    ],
+)
+def test_stream_error_event_is_classified_by_its_type(
+    error_type: str,
+    error_class: type[APIStatusError],
+    transient: bool,
+) -> None:
+    error = resolve(200, body(error_type))
+
+    assert type(error) is error_class
+    assert error.status == 200
+    assert error.transient is transient
+
+
+async def test_client_sends_bearer_auth_and_maps_errors(
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(
+        Reply(
+            status=404,
+            json=body("not_found_error", "Not found"),
+            headers={"request-id": "req_header"},
+        )
+    )
+    method = make_method(BaseAPIMethod[bytes], http_method="GET")()
+
+    async with AnthropicClient(TEST_TOKEN) as client:
+        with pytest.raises(NotFoundError) as caught:
+            await client.send_request(method)
+
+    assert caught.value.request_id == "req_header"
+    assert recorder.last.headers["Authorization"] == f"Bearer {TEST_TOKEN}"

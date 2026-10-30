@@ -11,6 +11,7 @@ from ai_api.response.protocols import (
 from ai_api.response.stream import (
     Stream,
     map_stream,
+    transform_stream,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "IStreamResponse",
     "Stream",
     "map_stream",
+    "transform_stream",
 ]
