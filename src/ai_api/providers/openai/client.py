@@ -7,14 +7,20 @@ from typing import Final
 
 from ai_api.client.base import BaseClient
 from ai_api.client.factory import SessionFactory
-from ai_api.client.validators import require_token_or_session
+from ai_api.client.validators import resolve_token
 from ai_api.http.auth import BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.headers import AUTHORIZATION
+from ai_api.providers.openai.adapters.generation import (
+    OpenAIGenerationAdapter,
+)
 from ai_api.providers.openai.api import OPENAI_API
 from ai_api.providers.openai.resolver import (
     OpenAIErrorResolver,
 )
+from ai_api.providers.openai.types.events import ResponseStreamEvent
+from ai_api.providers.openai.types.responses import Response
+from ai_api.resources.generation import GenerationResource
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.session.base import BaseSession
 from ai_api.session.protocols import ISession
@@ -26,6 +32,9 @@ session_factory: Final = SessionFactory(
     error_resolver=OpenAIErrorResolver(),
 )
 """Builds the ``AiohttpSession`` of an ``OpenAIClient`` from a token."""
+
+OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
+"""Environment variable with the API key, read without a token or session."""
 
 
 def warn_about_session(session: ISession) -> None:
@@ -65,9 +74,14 @@ def warn_about_session(session: ISession) -> None:
 class OpenAIClient(BaseClient[ISession]):
     """Client of the OpenAI API.
 
+    Attributes:
+        generation: Shared text generation over the Responses API.
+
     Example:
         >>> async with OpenAIClient("sk-...") as client:
-        ...     models = await client.send_request(ListModels())
+        ...     response = await client.generation.create(
+        ...         GenerationRequest(model="gpt-5", input="Hi")
+        ...     )
     """
 
     def __init__(
@@ -80,15 +94,16 @@ class OpenAIClient(BaseClient[ISession]):
 
         Args:
             token: API key; an ``AiohttpSession`` with OpenAI's URL, error
-                resolver and ``BearerAuth`` is created from it.
+                resolver and ``BearerAuth`` is created from it. Without a
+                token and a session, ``OPENAI_API_KEY`` is used.
             session: A ready session, for custom settings; it is checked
                 with ``warn_about_session``.
 
         Raises:
-            ValueError: If both or neither of ``token`` and ``session``
-                are given.
+            ValueError: If both ``token`` and ``session`` are given, or
+                neither is and ``OPENAI_API_KEY`` is unset or empty.
         """
-        require_token_or_session(token, session)
+        token = resolve_token(token, session, OPENAI_API_KEY_ENV)
 
         if session is None:
             assert token is not None  # noqa: S101 - checked above
@@ -97,3 +112,6 @@ class OpenAIClient(BaseClient[ISession]):
             warn_about_session(session)
 
         super().__init__(session)
+        self.generation: GenerationResource[Response, ResponseStreamEvent] = (
+            GenerationResource(session, OpenAIGenerationAdapter())
+        )

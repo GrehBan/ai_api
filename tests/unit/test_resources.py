@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from ai_api.adapters.base import (
+    BaseAdapter,
+    BaseCompositeAdapter,
+    BaseStreamAdapter,
+)
+from ai_api.adapters.protocols import ICompositeAdapter
 from ai_api.enums import BodyFormat, Provider, ResponseFormat
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.resources.base import BaseResource, BaseSessionAccess
-from ai_api.resources.protocols import ICompositeUseCase, IResource
+from ai_api.resources.generation import GenerationResource
+from ai_api.resources.protocols import (
+    ICompositeUseCase,
+    IGenerationResource,
+    IResource,
+)
 from ai_api.resources.usecases import (
+    AdapterCompositeUseCase,
+    AdapterStreamUseCase,
+    AdapterUseCase,
     BaseCompositeUseCase,
     BaseStreamUseCase,
     BaseUseCase,
@@ -219,6 +233,211 @@ def test_session_access_without_a_subclass() -> None:
     transport = FakeTransport()
 
     assert BaseSessionAccess(transport).session is transport
+
+
+class ResponsesAdapter(
+    BaseCompositeAdapter[
+        GenerationRequest,
+        RawResponse,
+        GenerationResponse[RawResponse],
+        RawEvent,
+        GenerationEvent[RawEvent],
+    ]
+):
+    def to_method(self, request: GenerationRequest) -> Create:
+        return Create(model=request.model, input=request.input)
+
+    def to_response(
+        self,
+        raw: RawResponse,
+        request: GenerationRequest,
+    ) -> GenerationResponse[RawResponse]:
+        return GenerationResponse[RawResponse](
+            id=raw.id,
+            provider=Provider.OPENAI,
+            model=request.model,
+            text=raw.output_text,
+            raw=raw,
+        )
+
+    def to_stream_method(self, request: GenerationRequest) -> CreateStream:
+        return CreateStream(model=request.model, input=request.input)
+
+    async def to_events(
+        self,
+        items: AsyncIterator[RawEvent],
+        request: GenerationRequest,
+    ) -> AsyncGenerator[GenerationEvent[RawEvent]]:
+        # Stateful: deltas are passed on, the rest is dropped, and the end
+        # of the stream also reports how many deltas there were.
+        deltas = 0
+
+        async for raw in items:
+            if raw.type == "response.output_text.delta":
+                deltas += 1
+                yield TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
+
+        yield CompletedEvent[RawEvent](
+            raw=RawEvent(type=f"{request.model}:{deltas}"),
+        )
+
+
+ADAPTER = ResponsesAdapter()
+
+RESPONSE_BODY = b'{"id": "r-1", "output_text": "Hello"}'
+
+STREAM_CHUNKS = sse(
+    '{"type": "response.created"}',
+    '{"type": "response.output_text.delta", "delta": "He"}',
+    '{"type": "response.output_text.delta", "delta": "llo"}',
+)
+
+
+@pytest.mark.parametrize(
+    "use_case",
+    [AdapterUseCase, AdapterCompositeUseCase],
+    ids=["buffered", "composite"],
+)
+async def test_adapter_use_case_responds(use_case: type[Any]) -> None:
+    transport = FakeTransport([BufferedResponse(200, {}, RESPONSE_BODY)])
+
+    response = await use_case(transport, ADAPTER)(REQUEST)
+
+    assert response == GenerationResponse[RawResponse](
+        id="r-1",
+        provider=Provider.OPENAI,
+        model="gpt",
+        text="Hello",
+        raw=RawResponse(id="r-1", output_text="Hello"),
+    )
+    assert transport.execute_calls[0].get_body_map() == {
+        "model": "gpt",
+        "input": "Hi",
+    }
+
+
+@pytest.mark.parametrize(
+    "use_case",
+    [AdapterStreamUseCase, AdapterCompositeUseCase],
+    ids=["stream", "composite"],
+)
+async def test_adapter_use_case_streams(use_case: type[Any]) -> None:
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(STREAM_CHUNKS, headers=SSE)]
+    )
+
+    async with use_case(transport, ADAPTER).stream(REQUEST) as events:
+        received = [event async for event in events]
+
+    assert [event.type for event in received] == [
+        "text_delta",
+        "text_delta",
+        "completed",
+    ]
+    assert received[-1].raw.type == "gpt:2"
+    assert transport.closed_responses == 1
+
+
+async def test_adapter_stream_closes_both_streams_on_break() -> None:
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(STREAM_CHUNKS, headers=SSE)]
+    )
+    use_case = AdapterStreamUseCase(transport, ADAPTER)
+
+    async with use_case.stream(REQUEST) as events:
+        async for _ in events:
+            break
+
+    assert transport.closed_responses == 1
+
+    with pytest.raises(RuntimeError, match="Stream is closed"):
+        await anext(events)
+
+
+def test_adapter_use_cases_keep_session_and_adapter() -> None:
+    transport = FakeTransport()
+    adapter: ICompositeAdapter[
+        GenerationRequest,
+        RawResponse,
+        GenerationResponse[RawResponse],
+        RawEvent,
+        GenerationEvent[RawEvent],
+    ] = ADAPTER
+    use_case: ICompositeUseCase[
+        GenerationRequest,
+        GenerationResponse[RawResponse],
+        GenerationEvent[RawEvent],
+    ] = AdapterCompositeUseCase(transport, adapter)
+
+    assert use_case.session is transport
+    assert AdapterUseCase(transport, adapter).adapter is adapter
+
+
+async def test_generation_resource_creates() -> None:
+    transport = FakeTransport([BufferedResponse(200, {}, RESPONSE_BODY)])
+
+    response = await GenerationResource(transport, ADAPTER).create(REQUEST)
+
+    assert response.text == "Hello"
+    assert response.raw == RawResponse(id="r-1", output_text="Hello")
+    assert transport.execute_calls[0].get_body_map() == {
+        "model": "gpt",
+        "input": "Hi",
+    }
+
+
+async def test_generation_resource_streams_and_closes_on_break() -> None:
+    transport = FakeTransport(
+        stream_responses=[
+            FakeStreamResponse(STREAM_CHUNKS, headers=SSE),
+            FakeStreamResponse(STREAM_CHUNKS, headers=SSE),
+        ]
+    )
+    generation = GenerationResource(transport, ADAPTER)
+
+    async with generation.stream(REQUEST) as events:
+        received = [event async for event in events]
+
+    assert [event.type for event in received] == [
+        "text_delta",
+        "text_delta",
+        "completed",
+    ]
+
+    async with generation.stream(REQUEST) as events:
+        async for _ in events:
+            break
+
+    assert transport.closed_responses == 2
+
+    with pytest.raises(RuntimeError, match="Stream is closed"):
+        await anext(events)
+
+
+def test_generation_resource_implements_the_protocol() -> None:
+    transport = FakeTransport()
+    generation = GenerationResource(transport, ADAPTER)
+    resource: IGenerationResource[RawResponse, RawEvent] = generation
+
+    assert resource.session is transport
+    assert generation.session is transport
+
+
+@pytest.mark.parametrize(
+    "base",
+    [BaseAdapter, BaseStreamAdapter, BaseCompositeAdapter],
+    ids=["buffered", "stream", "composite"],
+)
+def test_adapters_are_abstract(base: type[Any]) -> None:
+    with pytest.raises(TypeError, match="abstract"):
+        base()
+
+
+def test_request_keeps_instructions() -> None:
+    assert REQUEST.instructions is None
+    request = GenerationRequest(model="m", input="i", instructions="Be brief")
+
+    assert request.instructions == "Be brief"
 
 
 def test_request_rejects_unknown_fields_and_bad_limits() -> None:

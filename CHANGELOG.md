@@ -25,6 +25,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ai_api.session.Timeout`.
 - `Headers`, `Headers.add` and `Headers.build` accept another `IHeaders`
   collection as well as a mapping. `IHeaders` is `runtime_checkable`.
+- `ai_api.adapters`: adapters convert between shared types and a provider's
+  methods and nothing else. `IAdapter` / `BaseAdapter` have `to_method(request)`
+  and `to_response(raw, request)`; `IStreamAdapter` / `BaseStreamAdapter` have
+  `to_stream_method(request)` and `to_events(items, request)`, which sees the
+  whole stream; `ICompositeAdapter` / `BaseCompositeAdapter` have all four.
+- `AdapterUseCase`, `AdapterStreamUseCase` and `AdapterCompositeUseCase` in
+  `ai_api.resources`: use cases that only orchestrate a session and an
+  adapter. The abstract `BaseUseCase` classes stay for calls that are not one
+  request and one response.
+- `ai_api.response.transform_stream(source, transform)`: opens a stream and
+  passes its items through a function of the whole stream, closing the
+  transformed stream before the source.
+- `GenerationResource(session, adapter)` in `ai_api.resources`: the shared
+  resource of text generation, one class for every provider, with
+  `create(request)` and `stream(request)`; `IGenerationResource` is its
+  protocol.
+- `GenerationRequest.instructions`: instructions given apart from the input,
+  such as a system prompt.
+- `OpenAIClient()` without a token or a session reads the key from
+  `OPENAI_API_KEY`; an explicit token wins over it and an empty variable
+  counts as unset.
+
+- OpenAI Responses API: `CreateResponse` and `StreamResponse` in
+  `ai_api.providers.openai.methods` (`POST /v1/responses`, with OpenAI's
+  limits on `max_output_tokens`, `temperature`, `top_p` and metadata checked
+  before sending), and `Response`, its output items, usage and the stream
+  events in `ai_api.providers.openai.types`. `Response.output_text` joins the
+  text of the output messages. Items, content parts and events of a type the
+  library does not model yet are kept whole as `UnknownOutputItem`,
+  `UnknownContent` and `UnknownEvent`.
+- `OpenAIErrorResolver` reads the flat `error` event of a response stream,
+  so its code and message reach the raised `APIStatusError`, and picks its
+  class by its code or type (`server_is_overloaded` → transient
+  `ServiceUnavailableError`, `server_error` → `InternalServerError`, ...),
+  since it arrives after the stream's 200.
+- `OpenAIErrorResolver` treats every documented exhausted-limit 429
+  (`credit_balance_exhausted`, organization and project spend limits, the
+  usage limit, and the `insufficient_quota` type) as a non-transient
+  `QuotaExceededError`, not only the `insufficient_quota` code.
+- Cross-provider contract tests (`tests/providers/test_generation_contract.py`):
+  the same scenarios for `OpenAIClient.generation` and
+  `AnthropicClient.generation`.
+- `OpenAIGenerationAdapter` in `ai_api.providers.openai.adapters`: shared
+  generation over the Responses API, for `GenerationResource`. A buffered
+  response that failed or did not finish raises `APIResponseError`, and so
+  does a stream that ends without `response.completed`, `response.failed` or
+  `response.incomplete`; `response.failed` in a stream is a `FailedEvent`.
+- `incomplete_reason` on `GenerationResponse` and `CompletedEvent`: why the
+  provider stopped early, such as a token limit; `None` if it finished.
+- Anthropic provider (`ai_api.providers.anthropic`): `AnthropicClient` (a
+  token, a ready session or `ANTHROPIC_API_KEY`; `BearerAuth`), `ANTHROPIC_API`,
+  `API_VERSION` (`2026-10-21`) and `AnthropicErrorResolver`: spend caps and
+  spend limits are non-transient `QuotaExceededError`s, 529
+  `overloaded_error` is a transient `ServiceUnavailableError`, and a stream's
+  `error` event is classified by its type.
+- `X_API_KEY` and `ANTHROPIC_VERSION` header names in `ai_api.http.headers`.
+- Anthropic Messages API: `CreateMessage` and `StreamMessage` in
+  `ai_api.providers.anthropic.methods` (`POST /v1/messages`; both send
+  `anthropic-version: 2026-10-21` through `VERSION_HEADERS`; `max_tokens` is
+  required, turns are `MessageParam` `TypedDict`s and `metadata` takes only
+  `user_id`, all checked before sending), and `Message` with its blocks, usage
+  and the stream events in `ai_api.providers.anthropic.types`. `Message.text`
+  joins the text blocks; unknown blocks, deltas and events are kept whole as
+  `UnknownBlock`, `UnknownDelta` and `UnknownEvent`.
+- `AnthropicGenerationAdapter` in `ai_api.providers.anthropic.adapters` and
+  `AnthropicClient.generation` (with `default_max_tokens=1024` for requests
+  without `max_output_tokens`): shared generation over the Messages API.
+  Metadata other than `user_id` raises `ValueError`; a `stop_reason` other
+  than `end_turn` or `stop_sequence` becomes `incomplete_reason`; the stream's
+  `CompletedEvent` comes on `message_stop` with the counts of `message_start`
+  and the cumulative `message_delta`; a stream without `message_stop` or a
+  message without `stop_reason` raises `APIResponseError`.
+- `BaseUnknown`, `by_type` and `UNKNOWN` in `ai_api.types` (moved from the
+  OpenAI types, now shared by both providers): a pydantic discriminator that
+  keeps a value of an unknown `type` whole instead of rejecting it.
+- `OpenAIClient.generation`: a `GenerationResource` with
+  `OpenAIGenerationAdapter`, so `await client.generation.create(request)` and
+  `client.generation.stream(request)` work with shared types.
 
 ### Changed
 
@@ -32,6 +110,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_open_stream(method, *, headers=None, timeout=None)`.
 - `BaseSession(headers=...)` keeps a given `IHeaders` object as it is instead
   of copying it into a new `Headers`; a mapping is still copied.
+- `map_stream` is built on `transform_stream` and returns its context
+  manager; its behavior is unchanged.
+- `require_token_or_session` in `ai_api.client.validators` is replaced by
+  `resolve_token(token, session, env)`, which also reads the environment.
+  Without a token, a session and the variable, the error now names the
+  variable.
+
+### Removed
+
+- `GenerationRequest.temperature`. Sampling parameters are not common to all
+  providers: Anthropic removed `temperature`, `top_p` and `top_k` in API
+  version `2026-10-21`. A provider's own method can still declare them.
 
 ## [0.1.0] - 2026-10-30
 

@@ -10,6 +10,7 @@ fail the check if that error disappears.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Annotated, Literal, assert_type
 
 from pydantic import Field
@@ -25,17 +26,39 @@ from ai_api import (
     ServerSentEvent,
     Stream,
 )
+from ai_api.adapters import BaseAdapter, BaseCompositeAdapter
 from ai_api.client import IClient
 from ai_api.http import IAPI
 from ai_api.methods import IAPIMethod, IStreamMethod
+from ai_api.providers.anthropic import AnthropicClient
+from ai_api.providers.anthropic.methods import (
+    CreateMessage,
+    MessageParam,
+    StreamMessage,
+)
+from ai_api.providers.anthropic.types import Message, MessageStreamEvent
 from ai_api.providers.openai import OpenAIClient
+from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
 from ai_api.providers.openai.client import session_factory
-from ai_api.resources import BaseResource, BaseUseCase, IUseCase
+from ai_api.providers.openai.methods import CreateResponse, StreamResponse
+from ai_api.providers.openai.types import Response, ResponseStreamEvent
+from ai_api.resources import (
+    AdapterUseCase,
+    BaseResource,
+    BaseUseCase,
+    GenerationResource,
+    IGenerationResource,
+    IUseCase,
+)
 from ai_api.response import map_stream
 from ai_api.session import ISession
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.requests import GenerationRequest
-from ai_api.types.responses import GenerationResponse
+from ai_api.types.responses import (
+    GenerationEvent,
+    GenerationResponse,
+    OtherEvent,
+)
 
 
 class Model(BaseAPIType):
@@ -189,6 +212,10 @@ def methods_implement_protocols() -> None:
 
 async def client_infers_result(client: OpenAIClient) -> IClient:
     assert_type(await client.send_request(GetModel(model_id="m")), Model)
+    request = GenerationRequest(model="m", input="x")
+    assert_type(
+        await client.generation.create(request), GenerationResponse[Response]
+    )
 
     async with client.stream(Download()) as chunks:
         assert_type(chunks, Stream[bytes])
@@ -245,3 +272,134 @@ class WrongRequest(BaseUseCase[Model, GenerationResponse[str]]):  # type: ignore
 
     async def __call__(self, request: Model) -> GenerationResponse[str]:
         raise NotImplementedError
+
+
+class TextAdapter(
+    BaseAdapter[GenerationRequest, str, GenerationResponse[str]],
+):
+    """Builds a method returning ``str`` and converts that ``str``."""
+
+    def to_method(self, request: GenerationRequest) -> GetText:
+        return GetText()
+
+    def to_response(
+        self,
+        raw: str,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        return GenerationResponse[str].model_validate(
+            {"provider": "openai", "model": request.model, "raw": raw}
+        )
+
+
+class WrongMethodAdapter(
+    BaseAdapter[GenerationRequest, str, GenerationResponse[str]],
+):
+    """The method's result must be the raw type of the response half."""
+
+    def to_method(self, request: GenerationRequest) -> GetModel:  # type: ignore[override]
+        return GetModel(model_id="m")
+
+    def to_response(
+        self,
+        raw: str,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        raise NotImplementedError
+
+
+async def adapter_use_case_infers_the_response(
+    session: AiohttpSession,
+) -> None:
+    generate = AdapterUseCase(session, TextAdapter())
+    request = GenerationRequest(model="m", input="x")
+    assert_type(await generate(request), GenerationResponse[str])
+    assert_type(generate.session, AiohttpSession)
+
+
+class TextGeneration(
+    BaseCompositeAdapter[
+        GenerationRequest,
+        str,
+        GenerationResponse[str],
+        bytes,
+        GenerationEvent[bytes],
+    ],
+):
+    """Generates from ``GetText`` at once and from ``Download`` streamed."""
+
+    def to_method(self, request: GenerationRequest) -> GetText:
+        return GetText()
+
+    def to_response(
+        self,
+        raw: str,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        return GenerationResponse[str].model_validate(
+            {"provider": "openai", "model": request.model, "raw": raw}
+        )
+
+    def to_stream_method(self, request: GenerationRequest) -> Download:
+        return Download()
+
+    async def to_events(
+        self,
+        items: AsyncIterator[bytes],
+        request: GenerationRequest,
+    ) -> AsyncGenerator[GenerationEvent[bytes]]:
+        async for item in items:
+            yield OtherEvent[bytes](raw=item)
+
+
+async def generation_resource_infers_the_types(
+    session: AiohttpSession,
+) -> None:
+    generation = GenerationResource(session, TextGeneration())
+    request = GenerationRequest(model="m", input="x", instructions="Be brief")
+    assert_type(await generation.create(request), GenerationResponse[str])
+    async with generation.stream(request) as events:
+        assert_type(events, Stream[GenerationEvent[bytes]])
+    assert_type(generation.session, AiohttpSession)
+    resource: IGenerationResource[str, bytes] = generation
+    assert resource.session is session
+    GenerationResource(session, TextAdapter())  # type: ignore[arg-type]
+
+
+async def openai_responses_infer_their_types(session: AiohttpSession) -> None:
+    create = CreateResponse(model="m", input="x", instructions="Be brief")
+    assert_type(await session.send_request(create), Response)
+    async with session.stream(StreamResponse(model="m", input="x")) as events:
+        assert_type(events, Stream[ResponseStreamEvent])
+    CreateResponse(model="m", input="x", max_tokens=16)  # type: ignore[call-arg]
+
+
+async def openai_generation_infers_its_types(session: AiohttpSession) -> None:
+    generation = GenerationResource(session, OpenAIGenerationAdapter())
+    request = GenerationRequest(model="m", input="x")
+    response = await generation.create(request)
+    assert_type(response, GenerationResponse[Response])
+    assert_type(response.incomplete_reason, str | None)
+    async with generation.stream(request) as events:
+        assert_type(events, Stream[GenerationEvent[ResponseStreamEvent]])
+
+
+async def anthropic_messages_infer_types(session: AiohttpSession) -> None:
+    turn: MessageParam = {"role": "user", "content": "x"}
+    create = CreateMessage(model="m", max_tokens=16, messages=[turn])
+    assert_type(await session.send_request(create), Message)
+    stream = StreamMessage(model="m", max_tokens=16, messages=[turn])
+    async with session.stream(stream) as events:
+        assert_type(events, Stream[MessageStreamEvent])
+    CreateMessage(model="m", max_tokens=16, messages=[turn], temperature=1)  # type: ignore[call-arg]
+
+
+async def anthropic_generation_infers_its_types(
+    client: AnthropicClient,
+) -> None:
+    request = GenerationRequest(model="m", input="x")
+    response = await client.generation.create(request)
+    assert_type(response, GenerationResponse[Message])
+    async with client.generation.stream(request) as events:
+        assert_type(events, Stream[GenerationEvent[MessageStreamEvent]])
+    AnthropicClient("sk", default_max_tokens="1")  # type: ignore[arg-type]

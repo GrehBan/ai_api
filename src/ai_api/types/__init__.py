@@ -12,12 +12,20 @@ from ai_api.types.files import (
     PathFile,
     StreamFile,
 )
+from ai_api.types.unknown import (
+    UNKNOWN,
+    BaseUnknown,
+    by_type,
+)
 
 __all__ = [
     "BaseAPIType",
+    "BaseUnknown",
     "BytesFile",
     "IOFile",
     "InputFile",
     "PathFile",
     "StreamFile",
+    "UNKNOWN",
+    "by_type",
 ]

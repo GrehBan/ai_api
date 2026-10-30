@@ -8,8 +8,10 @@ from typing import Protocol
 from ai_api.response.stream import Stream
 from ai_api.session.protocols import ISession
 from ai_api.types.requests.base import BaseRequest
+from ai_api.types.requests.generation import GenerationRequest
 from ai_api.types.responses.base import BaseResponse
-from ai_api.types.responses.events import BaseResponseEvent
+from ai_api.types.responses.events import BaseResponseEvent, GenerationEvent
+from ai_api.types.responses.generation import GenerationResponse
 
 
 class ISessionAccess(Protocol):
@@ -71,3 +73,36 @@ class ICompositeUseCase[
     EventT: BaseResponseEvent,
 ](IUseCase[ReqT, RespT], IStreamUseCase[ReqT, EventT], Protocol):
     """A use case that can both respond at once and stream."""
+
+
+class IGenerationResource[RawT, RawItemT](IResource, Protocol):
+    """Generates text; the same interface for every provider."""
+
+    async def create(
+        self,
+        request: GenerationRequest,
+    ) -> GenerationResponse[RawT]:
+        """Generate the whole response at once.
+
+        Args:
+            request: What to generate.
+
+        Returns:
+            The generated text with the provider's own response.
+        """
+        ...
+
+    def stream(
+        self,
+        request: GenerationRequest,
+    ) -> AbstractAsyncContextManager[Stream[GenerationEvent[RawItemT]]]:
+        """Open a stream of generation events; use with ``async with``.
+
+        Args:
+            request: What to generate.
+
+        Returns:
+            A context manager that yields the events and closes the
+            stream on exit.
+        """
+        ...

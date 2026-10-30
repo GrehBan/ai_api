@@ -30,6 +30,8 @@ LOCATION: Final[istr] = istr("Location")
 RETRY_AFTER: Final[istr] = istr("Retry-After")
 REQUEST_ID: Final[istr] = istr("Request-Id")
 X_REQUEST_ID: Final[istr] = istr("X-Request-Id")
+X_API_KEY: Final[istr] = istr("X-Api-Key")
+ANTHROPIC_VERSION: Final[istr] = istr("Anthropic-Version")
 
 JSON_CONTENT_TYPE: Final[str] = "application/json"
 """Media type of JSON request bodies."""
