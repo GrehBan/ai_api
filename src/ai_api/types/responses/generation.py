@@ -1,5 +1,7 @@
 """Shared response of text generation."""
 
+from __future__ import annotations
+
 from ai_api.enums import Provider
 from ai_api.types.base import BaseAPIType
 from ai_api.types.responses.base import BaseResponse

@@ -1,7 +1,10 @@
 """Base classes for declaring API methods."""
 
+from __future__ import annotations
+
 from abc import ABC
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from typing import (
     Any,
     ClassVar,
@@ -12,23 +15,22 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, PydanticUserError, TypeAdapter
 
-from ai_api.client.api.protocols import Query
-from ai_api.client.api.url.parse import encode_path_value, parse_path_params
-from ai_api.client.response.parse.buffered import BufferedResponseParser
-from ai_api.client.response.parse.protocols import (
-    IResponseParser,
-    IStreamParser,
-)
-from ai_api.client.response.parse.sse import ServerSentEvent
-from ai_api.client.response.parse.stream import StreamResponseParser
-from ai_api.methods.enums import BodyFormat, ResponseFormat, ResponseMode
-from ai_api.methods.resolve import (
+from ai_api.enums import BodyFormat, ResponseFormat
+from ai_api.http.protocols import Query
+from ai_api.methods.fields import (
     has_one_shot_file,
     is_mapping_type,
     query_value,
-    resolve_response_type,
     wrap_streams,
 )
+from ai_api.methods.path import encode_path_value, parse_path_params
+from ai_api.response.parse.buffered import BufferedResponseParser
+from ai_api.response.parse.protocols import (
+    IResponseParser,
+    IStreamParser,
+)
+from ai_api.response.parse.sse import ServerSentEvent
+from ai_api.response.parse.stream import StreamResponseParser
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
     str: ResponseFormat.TEXT,
@@ -76,6 +78,25 @@ def _type_name(response_type: Any) -> str:
     return repr(response_type)
 
 
+def _resolve_response_type(arg: Any) -> type[Any] | None:
+    """Turn a generic argument into a runtime class.
+
+    Args:
+        arg: The argument of ``BaseMethod[...]``.
+
+    Returns:
+        ``NoneType`` for ``None``, the class itself for classes and
+        ``None`` for anything else (type variables, unions, aliases).
+    """
+    if arg is None:
+        return type(None)
+
+    if isinstance(arg, type):
+        return arg
+
+    return None
+
+
 class BaseMethod[ResponseT](BaseModel, ABC):
     """Request contract shared by buffered and stream methods.
 
@@ -92,12 +113,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             the same name and percent-encoded.
         __request_path_params__: Names of the placeholders; derived from
             ``__request_path__``.
-        __path_safe__: Characters left unescaped in path parameters.
+        __request_path_safe__: Characters left unescaped in path
+            parameters.
             Empty by default; set it to ``"/"`` for identifiers such as
             ``"org/model"``.
         __request_method__: HTTP method, e.g. ``"POST"``.
         __request_query__: Names of fields sent as query parameters; all
-            other fields go to the body. A list or tuple is sent as a
+            other fields go to the body. Any set may be given; it is
+            stored as a ``frozenset``. A list or tuple is sent as a
             repeated key (``ids=a&ids=b``); mappings and models are
             rejected.
         __returning__: Runtime class of the result; inferred from the
@@ -106,7 +129,6 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         __retryable__: Whether transient failures may be retried. Ignored
             when the request carries a file that can be read only once.
         __response_format__: How the response body is parsed.
-        __response_mode__: Whether the response is buffered or streamed.
     """
 
     model_config = ConfigDict(
@@ -118,14 +140,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
     __request_path__: ClassVar[str]
     __request_path_params__: ClassVar[frozenset[str]] = frozenset()
-    __path_safe__: ClassVar[str] = ""
+    __request_path_safe__: ClassVar[str] = ""
     __request_method__: ClassVar[str]
-    __request_query__: ClassVar[set[str] | None] = None
+    __request_query__: ClassVar[AbstractSet[str]] = frozenset()
     __returning__: ClassVar[type[Any] | None] = None
     __request_body_format__: ClassVar[BodyFormat] = BodyFormat.NONE
     __retryable__: ClassVar[bool] = False
     __response_format__: ClassVar[ResponseFormat]
-    __response_mode__: ClassVar[ResponseMode]
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -135,8 +156,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             **kwargs: Class keyword arguments, forwarded to Pydantic.
         """
         super().__pydantic_init_subclass__(**kwargs)
-        cls._init_path_params()
         cls._init_query_params()
+        cls._init_path_params()
         cls._init_response_type()
 
         # A parametrized class such as BaseStreamMethod[Event] is created
@@ -144,6 +165,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         # only the classes users declare are validated.
         if cls.__pydantic_generic_metadata__["origin"] is None:
             cls._validate_response_type()
+            cls._init_response_adapter()
 
     @classmethod
     def _init_path_params(cls) -> None:
@@ -177,9 +199,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             cls.__request_path_params__ = params
 
         # Checked on every subclass: either side may be set further down.
-        query = cls.__request_query__ or set()
-
-        if overlap := cls.__request_path_params__ & query:
+        if overlap := cls.__request_path_params__ & cls.__request_query__:
             raise TypeError(
                 f"{cls.__name__}: fields {sorted(overlap)} cannot be both "
                 "path and query parameters"
@@ -187,13 +207,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
     @classmethod
     def _init_query_params(cls) -> None:
-        """Check that every query parameter is a field that fits a URL.
+        """Freeze ``__request_query__`` and check every query parameter.
 
         Raises:
             TypeError: If a name in ``__request_query__`` has no field, or
                 the field is annotated as a mapping or a model.
         """
-        query = cls.__request_query__ or set()
+        query = frozenset(cls.__request_query__)
+        cls.__request_query__ = query
 
         if unknown := query - cls.model_fields.keys():
             raise TypeError(
@@ -216,7 +237,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         if not args:
             return
 
-        response_type = resolve_response_type(args[0])
+        response_type = _resolve_response_type(args[0])
 
         if response_type is None:
             return
@@ -235,6 +256,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Check that the result type can be produced by the parser.
 
         The base implementation accepts everything; subclasses narrow it.
+        """
+
+    @classmethod
+    def _init_response_adapter(cls) -> None:
+        """Build what the parser needs to validate the result.
+
+        The base implementation builds nothing; stream methods build the
+        validator of their items.
         """
 
     def model_post_init(self, context: Any, /) -> None:
@@ -295,7 +324,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Path appended to the API's base URL, placeholders filled in.
 
         Each parameter is dumped in JSON mode (so enums give their value)
-        and percent-encoded; only ``__path_safe__`` characters are kept.
+        and percent-encoded; only ``__request_path_safe__`` characters are
+        kept.
 
         Raises:
             ValueError: If a parameter is ``None``, empty, or a ``.``/``..``
@@ -313,7 +343,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                 name: encode_path_value(
                     name,
                     values.get(name),
-                    self.__path_safe__,
+                    self.__request_path_safe__,
                     getattr(self, name),
                 )
                 for name in params
@@ -326,7 +356,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         return self.__request_method__
 
     @property
-    def body_format(self) -> BodyFormat:
+    def request_body_format(self) -> BodyFormat:
         """Encoding of the request body."""
         return self.__request_body_format__
 
@@ -345,11 +375,6 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         return self.__response_format__
 
     @property
-    def response_mode(self) -> ResponseMode:
-        """Whether the response is buffered or streamed."""
-        return self.__response_mode__
-
-    @property
     def response_type(self) -> type[ResponseT] | None:
         """Runtime class of the result, if known."""
         return cast(type[ResponseT] | None, self.__returning__)
@@ -366,11 +391,11 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         Raises:
             TypeError: If a value is an object or contains one.
         """
-        if self.__request_query__ is None:
+        if not self.__request_query__:
             return None
 
         data = self.model_dump(
-            include=self.__request_query__,
+            include=set(self.__request_query__),
             exclude_none=True,
             by_alias=True,
             mode="json",
@@ -386,10 +411,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             values, keyed by alias.
         """
         return self.model_dump(
-            exclude=(
-                (self.__request_query__ or set())
-                | self.__request_path_params__
-            ),
+            exclude=set(self.__request_query__ | self.__request_path_params__),
             exclude_none=True,
             by_alias=True,
             mode="python",
@@ -412,7 +434,6 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
     """
 
     __response_format__ = ResponseFormat.JSON
-    __response_mode__ = ResponseMode.BUFFERED
     __response_parser__: ClassVar[IResponseParser] = BufferedResponseParser()
 
     @classmethod
@@ -483,10 +504,10 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
         return self.__response_parser__
 
 
-class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
+class BaseStreamMethod[ItemT](BaseMethod[ItemT]):
     """A method whose response is consumed as a stream.
 
-    ``ResponseT`` is the type of one streamed item: ``bytes`` (raw
+    ``ItemT`` is the type of one streamed item: ``bytes`` (raw
     chunks, the default), ``str`` (decoded text) or ``ServerSentEvent``
     (server-sent events as they are). Send it with ``session.stream()``.
 
@@ -513,7 +534,6 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
     """
 
     __response_format__ = ResponseFormat.BYTES
-    __response_mode__ = ResponseMode.STREAM
     __stream_parser__: ClassVar[IStreamParser] = StreamResponseParser()
     __stream_item__: ClassVar[Any] = None
     __response_adapter__: ClassVar[TypeAdapter[Any] | None] = None
@@ -546,15 +566,14 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
 
     @classmethod
     def _validate_response_type(cls) -> None:
-        """Check the item type and build its validator.
+        """Check that the parser can produce the item type.
 
         Raises:
             TypeError: If the default parser cannot produce the item type
                 and neither the format nor the parser is set explicitly;
-                if, without an explicit parser, the format is not a stream
-                format or BYTES/TEXT is set for items other than
-                ``bytes``/``str``; or if Pydantic cannot validate the item
-                type of an SSE or NDJSON stream.
+                or if, without an explicit parser, the format is not a
+                stream format or BYTES/TEXT is set for items other than
+                ``bytes``/``str``.
         """
         item = cls.__stream_item__
 
@@ -569,16 +588,30 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
             or cls._defines("__response_format__")
             or cls._defines("__stream_parser__")
         ):
-            name = item.__name__ if isinstance(item, type) else item
             raise TypeError(
-                f"{cls.__name__}: stream items of type {name} are not "
-                "supported by the default parser; use bytes, str or "
-                "ServerSentEvent, or set __response_format__ (SSE or "
+                f"{cls.__name__}: stream items of type {_type_name(item)} "
+                "are not supported by the default parser; use bytes, str "
+                "or ServerSentEvent, or set __response_format__ (SSE or "
                 "NDJSON) or __stream_parser__ explicitly"
             )
 
         if not cls._defines("__stream_parser__"):
             cls._validate_stream_format(item)
+
+    @classmethod
+    def _init_response_adapter(cls) -> None:
+        """Build ``__response_adapter__`` for SSE and NDJSON items.
+
+        ``ServerSentEvent`` items of an SSE stream are yielded raw, and
+        other formats do not validate items, so they get ``None``.
+
+        Raises:
+            TypeError: If Pydantic cannot validate the item type.
+        """
+        item = cls.__stream_item__
+
+        if item is None or isinstance(item, TypeVar):
+            return
 
         if cls.__response_format__ not in _EVENT_FORMATS or (
             item is ServerSentEvent
@@ -636,10 +669,10 @@ class BaseStreamMethod[ResponseT](BaseMethod[ResponseT]):
         return self.__stream_parser__
 
     @property
-    def response_adapter(self) -> TypeAdapter[ResponseT] | None:
+    def response_adapter(self) -> TypeAdapter[ItemT] | None:
         """Validator of one SSE or NDJSON item, if events are validated."""
         return cast(
-            TypeAdapter[ResponseT] | None,
+            TypeAdapter[ItemT] | None,
             self.__response_adapter__,
         )
 

@@ -1,5 +1,7 @@
 """SSE stages 2-3: SSE and NDJSON in the stream parser."""
 
+from __future__ import annotations
+
 import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
@@ -8,14 +10,14 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import Field, ValidationError
 
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.http import APIError
-from ai_api.client.exceptions.transport import APIResponseError
-from ai_api.client.response.parse.sse import ServerSentEvent
-from ai_api.client.response.parse.stream import StreamResponseParser
-from ai_api.client.serialization.json import JsonLoads
+from ai_api.enums import ResponseFormat
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import APIStatusError
 from ai_api.methods.base import BaseStreamMethod
-from ai_api.methods.enums import ResponseFormat
+from ai_api.response.parse.sse import ServerSentEvent
+from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.serialization.json import JsonLoads, loads
 from ai_api.types.base import BaseAPIType
 from tests.conftest import FakeStreamResponse, make_method
 
@@ -50,9 +52,9 @@ class OverloadedIsTransient(BaseErrorResolver):
         error_type: str | None,
         message: str | None,
         retry_after: float | None,
-    ) -> tuple[type[APIError], bool]:
+    ) -> tuple[type[APIStatusError], bool]:
         if error_type == "overloaded_error":
-            return APIError, True
+            return APIStatusError, True
 
         return super().classify(
             status=status,
@@ -69,7 +71,7 @@ def parse(
     chunks: list[bytes],
     *,
     headers: Mapping[str, str] | None = None,
-    json_loads: JsonLoads | None = None,
+    json_loads: JsonLoads = loads,
     error_resolver: BaseErrorResolver | None = None,
 ) -> AsyncIterator[Any]:
     class_vars: dict[str, Any] = {}
@@ -82,7 +84,7 @@ def parse(
         method,
         FakeStreamResponse(chunks, headers={**SSE_HEADERS, **(headers or {})}),
         json_loads,
-        error_resolver,
+        error_resolver or BaseErrorResolver(),
     )
 
 
@@ -223,10 +225,10 @@ async def test_sse_error_event_goes_through_the_resolver() -> None:
 
     assert await anext(items) == Delta(type="delta", text="Hi 😀")
 
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         await anext(items)
 
-    assert type(info.value) is APIError
+    assert type(info.value) is APIStatusError
     assert info.value.status == 200
     assert info.value.error_type == "overloaded_error"
     assert info.value.message == "detail: Overloaded"
@@ -237,7 +239,7 @@ async def test_sse_error_event_goes_through_the_resolver() -> None:
 async def test_error_event_with_raw_items_is_raised_too() -> None:
     body = sse('event: error\ndata: {"error": {"code": "boom"}}')
 
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         await collect(parse(ServerSentEvent, None, [body]))
 
     assert info.value.code == "boom"
@@ -246,7 +248,7 @@ async def test_error_event_with_raw_items_is_raised_too() -> None:
 async def test_error_event_with_invalid_json_has_no_details() -> None:
     body = sse("event: error\ndata: Internal error")
 
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         await collect(parse(Delta, ResponseFormat.SSE, [body]))
 
     assert info.value.code is None
@@ -271,7 +273,7 @@ async def test_top_level_error_object_is_raised(
     response_format: ResponseFormat,
     body: bytes,
 ) -> None:
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         await collect(parse(Delta, response_format, [body]))
 
     assert info.value.code == "rate_limit"
@@ -280,7 +282,7 @@ async def test_top_level_error_object_is_raised(
 
 
 async def test_error_as_a_string_is_raised() -> None:
-    with pytest.raises(APIError) as info:
+    with pytest.raises(APIStatusError) as info:
         await collect(
             parse(
                 dict[str, Any], ResponseFormat.NDJSON, [ndjson({"error": "x"})]
@@ -331,7 +333,7 @@ async def test_error_word_elsewhere_is_data(item: Any) -> None:
     ids=["true-without-type", "error-type", "error-type-with-object"],
 )
 async def test_error_events_are_raised(item: Any) -> None:
-    with pytest.raises(APIError):
+    with pytest.raises(APIStatusError):
         await collect(parse(Any, ResponseFormat.NDJSON, [ndjson(item)]))
 
 
@@ -345,11 +347,13 @@ async def test_is_error_event_can_be_overridden() -> None:
         __response_format__=ResponseFormat.NDJSON,
     )()
     body = ndjson({"error": "kept"}) + ndjson({"status": "error"})
-    items = StatusParser().parse(method, FakeStreamResponse([body]))
+    items = StatusParser().parse(
+        method, FakeStreamResponse([body]), loads, BaseErrorResolver()
+    )
 
     assert await anext(items) == {"error": "kept"}
 
-    with pytest.raises(APIError):
+    with pytest.raises(APIStatusError):
         await anext(items)
 
 
@@ -383,9 +387,9 @@ async def test_event_stream_check_can_be_turned_off() -> None:
         [body], headers={"Content-Type": "text/plain"}
     )
 
-    assert await collect(parser.parse(method, response)) == [
-        Delta.model_validate(DELTA)
-    ]
+    assert await collect(
+        parser.parse(method, response, loads, BaseErrorResolver())
+    ) == [Delta.model_validate(DELTA)]
 
 
 async def test_event_over_the_limit_is_a_response_error() -> None:
@@ -395,7 +399,9 @@ async def test_event_over_the_limit_is_a_response_error() -> None:
     response = FakeStreamResponse([body], headers=SSE_HEADERS)
 
     with pytest.raises(APIResponseError, match="Event exceeds 100"):
-        await collect(parser.parse(method, response))
+        await collect(
+            parser.parse(method, response, loads, BaseErrorResolver())
+        )
 
 
 @pytest.mark.parametrize("charset", ["base64", "zlib_codec", "rot13"])
@@ -404,7 +410,11 @@ async def test_text_stream_rejects_non_text_charsets(charset: str) -> None:
     response = FakeStreamResponse([b"aGVsbG8="], charset=charset)
 
     with pytest.raises(APIResponseError, match="Unknown response charset"):
-        await collect(StreamResponseParser().parse(method, response))
+        await collect(
+            StreamResponseParser().parse(
+                method, response, loads, BaseErrorResolver()
+            )
+        )
 
 
 async def test_ndjson_lines() -> None:
@@ -429,7 +439,11 @@ async def test_ndjson_without_item_type_yields_decoded_json() -> None:
     )()
     response = FakeStreamResponse([ndjson({"a": 1}, [2])])
 
-    items = await collect(StreamResponseParser().parse(method, response))
+    items = await collect(
+        StreamResponseParser().parse(
+            method, response, loads, BaseErrorResolver()
+        )
+    )
 
     assert items == [{"a": 1}, [2]]
 
@@ -484,24 +498,6 @@ async def test_invalid_utf8_is_a_response_error(
     assert isinstance(info.value.__cause__, UnicodeError)
 
 
-async def test_parser_uses_its_own_resolver_by_default() -> None:
-    method = make_method(
-        BaseStreamMethod[Delta],
-        __response_format__=ResponseFormat.SSE,
-    )()
-    parser = StreamResponseParser(error_resolver=OverloadedIsTransient())
-    body = sse('event: error\ndata: {"error": {"type": "overloaded_error"}}')
-
-    with pytest.raises(APIError) as info:
-        await collect(
-            parser.parse(
-                method, FakeStreamResponse([body], headers=SSE_HEADERS)
-            )
-        )
-
-    assert info.value.transient is True
-
-
 @pytest.mark.parametrize(
     "response_format",
     [ResponseFormat.SSE, ResponseFormat.NDJSON],
@@ -517,7 +513,7 @@ async def test_line_over_the_limit_is_a_response_error(
     body = b"x" * 40
     parser = StreamResponseParser(max_line_size=20)
     response = FakeStreamResponse([body[:20], body[20:]], headers=SSE_HEADERS)
-    items = parser.parse(method, response)
+    items = parser.parse(method, response, loads, BaseErrorResolver())
 
     with pytest.raises(APIResponseError, match="exceeds 20") as info:
         await collect(items)
@@ -532,7 +528,9 @@ async def test_closing_early_stops_reading() -> None:
         BaseStreamMethod[Delta],
         __response_format__=ResponseFormat.SSE,
     )()
-    items = StreamResponseParser().parse(method, response)
+    items = StreamResponseParser().parse(
+        method, response, loads, BaseErrorResolver()
+    )
 
     assert isinstance(items, AsyncGenerator)
     await anext(items)

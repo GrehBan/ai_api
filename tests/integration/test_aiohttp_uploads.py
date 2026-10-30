@@ -1,5 +1,7 @@
 """Block K: multipart uploads of ``AiohttpSession`` against a real server."""
 
+from __future__ import annotations
+
 import hashlib
 import io
 from collections.abc import AsyncIterator, Callable
@@ -8,10 +10,10 @@ from typing import Any
 
 import pytest
 
-from ai_api.client.exceptions.http import ServiceUnavailableError
-from ai_api.client.session.aiohttp import AiohttpSession
+from ai_api.enums import BodyFormat
+from ai_api.http.exceptions.status import ServiceUnavailableError
 from ai_api.methods.base import BaseAPIMethod
-from ai_api.methods.enums import BodyFormat
+from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.files import (
     DEFAULT_CHUNK_SIZE,
     BytesFile,

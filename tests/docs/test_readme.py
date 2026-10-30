@@ -11,15 +11,20 @@ from typing import Any
 
 import pytest
 
-from ai_api.client.exceptions.http import (
+from ai_api import (
+    APIConnectionError,
+    APIRedirectError,
+    BadRequestError,
+    BaseErrorResolver,
     QuotaExceededError,
     RateLimitError,
+    ResponseFormat,
     ServiceUnavailableError,
 )
-from ai_api.client.session.aiohttp import AiohttpSession
-from ai_api.methods.enums import ResponseFormat
-from ai_api.providers.openai.client.openai import session_factory
+from ai_api.providers.openai.client import session_factory
+from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.base import BaseAPIType
+from ai_api.types.requests import GenerationRequest
 from tests.conftest import LocalAPI, Recorder, Reply
 
 README = Path(__file__).parents[2] / "README.md"
@@ -27,15 +32,20 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
 
 (
     QUICK_START,
+    INHERITANCE,
     QUERY,
     ALIASES,
     PATH_PARAMS,
     UPLOADS,
     STREAMING,
     EVENTS,
+    RESTART,
+    HANDLING,
     RESOLVER,
+    AUTH,
     CLIENT,
-) = range(9)
+    RESOURCES,
+) = range(14)
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -136,7 +146,7 @@ def examples(
 
 def test_every_example_is_tested() -> None:
     # A new ```python block needs a test here.
-    assert len(BLOCKS) == 9
+    assert len(BLOCKS) == 14
 
 
 def test_quick_start_ends_with_asyncio_run() -> None:
@@ -152,7 +162,7 @@ async def test_quick_start(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     await examples.run(QUICK_START)
-    examples.ExampleAPI.base_url = api.base_url
+    examples.API.base_url = api.base_url
     recorder.reply(Reply(json={"id": "c-1", "text": "Hello back!"}))
 
     await examples.main()
@@ -166,6 +176,22 @@ async def test_quick_start(
         b'"messages":[{"role":"user","content":"Hello!"}]}'
     )
     assert capsys.readouterr().out == "Hello back!\n"
+
+
+async def test_inherited_attributes(
+    examples: Examples,
+    recorder: Recorder,
+    session: AiohttpSession,
+) -> None:
+    await examples.run(QUICK_START, INHERITANCE)
+    recorder.reply(Reply(json={"id": "s-1", "text": "Short."}))
+
+    result = await session.send_request(examples.Summarize(text="Long."))
+
+    assert result.text == "Short."
+    assert recorder.last.method == "POST"
+    assert recorder.last.raw_path == "/v1/summaries"
+    assert recorder.last.body == b'{"text":"Long."}'
 
 
 async def test_query_parameters(
@@ -298,6 +324,92 @@ async def test_events(
     assert examples.RawEvents.__response_format__ is ResponseFormat.SSE
 
 
+def stream_replies() -> list[Reply]:
+    """Replies to the requests the streaming block itself sends."""
+    return [
+        Reply(chunks=[b"file"]),
+        Reply(chunks=[b"Text. "], content_type="text/plain"),
+    ]
+
+
+async def test_restart_after_a_broken_stream(
+    examples: Examples,
+    recorder: Recorder,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    recorder.reply(
+        *stream_replies(),
+        Reply(chunks=[b"Hel"], content_type="text/plain", abort=True),
+        Reply(chunks=[b"Hello", b"!"], content_type="text/plain"),
+    )
+    await examples.run(QUICK_START, STREAMING, RESTART)
+    capsys.readouterr()
+
+    text = await examples.generate_text("Hi")
+
+    assert text == "Hello!"
+    assert len(recorder.requests) == 4
+
+
+async def test_restart_gives_up_after_the_last_attempt(
+    examples: Examples,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(
+        *stream_replies(),
+        Reply(chunks=[b"Hel"], content_type="text/plain", abort=True),
+    )
+    await examples.run(QUICK_START, STREAMING, RESTART)
+
+    with pytest.raises(APIConnectionError):
+        await examples.generate_text("Hi", attempts=1)
+
+    with pytest.raises(ValueError, match="at least 1"):
+        await examples.generate_text("Hi", attempts=0)
+
+
+async def test_error_handling(
+    examples: Examples,
+    recorder: Recorder,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    await examples.run(QUICK_START, HANDLING)
+    recorder.reply(
+        Reply(status=429, headers={"X-Request-Id": "req-1"}),
+        Reply(status=400, json={"error": {"code": "bad_model"}}),
+        Reply(json={"id": "c-1", "text": "Fine."}),
+    )
+
+    assert await examples.ask("Hi") is None
+    with pytest.raises(BadRequestError):
+        await examples.ask("Hi")
+    assert await examples.ask("Hi") == "Fine."
+
+    assert capsys.readouterr().out == (
+        "Rate limited, request req-1\n"
+        "API error 400, code bad_model\n"
+    )
+    assert len(recorder.requests) == 3
+
+
+async def test_error_handling_of_transport_errors(
+    examples: Examples,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    await examples.run(QUICK_START, HANDLING)
+
+    async def fail(method: Any) -> Any:
+        raise APIRedirectError("moved")
+
+    monkeypatch.setattr(examples.session, "send_request", fail)
+
+    with pytest.raises(APIRedirectError):
+        await examples.ask("Hi")
+
+    assert capsys.readouterr().out == "Network error, transient: False\n"
+
+
 async def test_error_resolver(examples: Examples) -> None:
     await examples.run(QUICK_START, RESOLVER)
     resolver = examples.ExampleErrorResolver()
@@ -319,6 +431,25 @@ async def test_error_resolver(examples: Examples) -> None:
     assert type(rate) is RateLimitError
 
 
+async def test_rotating_auth(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+) -> None:
+    await examples.run(QUICK_START, QUERY, AUTH)
+    auth = examples.RotatingAuth("sk-old")
+    recorder.reply(Reply(json={"data": []}), Reply(json={"data": []}))
+
+    async with AiohttpSession(api, auth, BaseErrorResolver()) as session:
+        await session.send_request(examples.ListModels())
+        auth.token = "sk-new"
+        await session.send_request(examples.ListModels())
+
+    assert [
+        request.headers["Authorization"] for request in recorder.requests
+    ] == ["Bearer sk-old", "Bearer sk-new"]
+
+
 async def test_openai_client(
     examples: Examples,
     recorder: Recorder,
@@ -332,3 +463,53 @@ async def test_openai_client(
     assert await examples.list_models() == ModelList(data=["gpt-x"])
     assert recorder.last.raw_path == "/v1/models"
     assert recorder.last.headers["Authorization"] == "Bearer sk-..."
+
+
+async def test_resources(
+    examples: Examples,
+    recorder: Recorder,
+    session: AiohttpSession,
+) -> None:
+    recorder.reply(
+        *stream_replies(),
+        Reply(
+            chunks=[b'data: {"type": "message_stop"}\n\n'],
+            content_type="text/event-stream",
+        ),
+    )
+    await examples.run(QUICK_START, STREAMING, EVENTS, RESOURCES)
+    completions = examples.Completions(session)
+    request = GenerationRequest(model="example-1", input="Hi")
+    recorder.reply(
+        Reply(json={"id": "c-1", "text": "Hello!"}),
+        Reply(
+            chunks=[
+                b'data: {"type": "text_delta", "text": "He"}\n\n',
+                b'data: {"type": "text_delta", "text": "y"}\n\n',
+                b'data: {"type": "message_stop"}\n\n',
+            ],
+            content_type="text/event-stream",
+        ),
+    )
+
+    response = await completions.complete(request)
+    async with completions.complete.stream(request) as events:
+        received = [event async for event in events]
+
+    assert response.text == "Hello!"
+    assert response.id == "c-1"
+    assert response.raw.text == "Hello!"
+    assert [event.type for event in received] == [
+        "text_delta",
+        "text_delta",
+        "other",
+    ]
+    assert [getattr(event, "text", None) for event in received] == [
+        "He",
+        "y",
+        None,
+    ]
+    assert recorder.requests[-2].body == (
+        b'{"model":"example-1",'
+        b'"messages":[{"role":"user","content":"Hi"}]}'
+    )

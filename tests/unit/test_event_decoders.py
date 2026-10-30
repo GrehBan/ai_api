@@ -1,9 +1,11 @@
 """SSE stage 1: splitting bytes into lines and lines into events."""
 
+from __future__ import annotations
+
 import pytest
 
-from ai_api.client.response.parse.lines import LineDecoder, LineTooLongError
-from ai_api.client.response.parse.sse import (
+from ai_api.response.parse.lines import LineDecoder, LineTooLongError
+from ai_api.response.parse.sse import (
     EventTooLargeError,
     ServerSentEvent,
     SSEDecoder,
@@ -21,7 +23,7 @@ def split_lines(chunks: list[bytes]) -> list[str]:
 def events_of(lines: list[str]) -> list[ServerSentEvent]:
     decoder = SSEDecoder()
     return [
-        event for line in lines if (event := decoder.feed(line)) is not None
+        event for line in lines if (event := decoder.decode(line)) is not None
     ]
 
 
@@ -244,23 +246,23 @@ def test_incomplete_last_event_is_dropped() -> None:
 
 def test_event_at_the_size_limit_passes() -> None:
     decoder = SSEDecoder(max_event_size=5)
-    decoder.feed("data: ab")
-    decoder.feed("data: cd")  # "ab\ncd": the newline counts
+    decoder.decode("data: ab")
+    decoder.decode("data: cd")  # "ab\ncd": the newline counts
 
-    assert decoder.feed("") == ServerSentEvent(data="ab\ncd")
+    assert decoder.decode("") == ServerSentEvent(data="ab\ncd")
 
 
 def test_event_over_the_size_limit_raises() -> None:
     decoder = SSEDecoder(max_event_size=4)
-    decoder.feed("data: ab")
+    decoder.decode("data: ab")
 
     with pytest.raises(EventTooLargeError, match="exceeds 4"):
-        decoder.feed("data: cd")
+        decoder.decode("data: cd")
 
 
 def test_event_size_resets_after_dispatch() -> None:
     decoder = SSEDecoder(max_event_size=3)
 
     for _ in range(3):
-        decoder.feed("data: abc")
-        assert decoder.feed("") == ServerSentEvent(data="abc")
+        decoder.decode("data: abc")
+        assert decoder.decode("") == ServerSentEvent(data="abc")

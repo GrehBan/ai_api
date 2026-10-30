@@ -12,7 +12,7 @@ Oct 29, 2026 · @Max
 - **Разбор NDJSON:** одна строка — один JSON, пустые строки пропускаются, последняя строка без `\n` тоже разбирается.
 - **Типизированные события:** валидация каждого события в тип элемента стрима через `pydantic.TypeAdapter`. Так работают и модели, и объединения вида `Annotated[A | B, Field(discriminator="type")]`, как события Anthropic.
 - **Сырые события:** `BaseStreamMethod[ServerSentEvent]` отдаёт события SSE без валидации, для своей обработки.
-- **Ошибки внутри стрима** превращаются в `APIError` через резолвер ошибок сессии.
+- **Ошибки внутри стрима** превращаются в `APIStatusError` через резолвер ошибок сессии.
 - **Типы:** `stream()` выводит `Stream[Model]` и `Stream[A | B]` в mypy и pyright.
 
 **Вне рамок:**
@@ -71,7 +71,7 @@ async with session.stream(CreateMessage(model="m")) as events:
 **Ошибки:**
 
 - Невалидный JSON или событие, не подходящее под тип, — `APIResponseError`, как в буферном парсере. Причина — `ValidationError` в `__cause__`.
-- SSE-событие `event: error` (Anthropic) и JSON-событие с ключом `error` на верхнем уровне (OpenAI) передаются в `error_resolver.resolve(status=..., body=..., headers=...)`. Получается тот же `APIError`, что и для ответа с ошибочным статусом, а провайдер через свой `classify` решает, что `overloaded_error` — временная ошибка.
+- SSE-событие `event: error` (Anthropic) и JSON-событие с ключом `error` на верхнем уровне (OpenAI) передаются в `error_resolver.resolve(status=..., body=..., headers=...)`. Получается тот же `APIStatusError`, что и для ответа с ошибочным статусом, а провайдер через свой `classify` решает, что `overloaded_error` — временная ошибка.
 
 ## Этапы
 
@@ -88,7 +88,7 @@ async with session.stream(CreateMessage(model="m")) as events:
 
 **Этап 3: ошибки и сессия (фейковый транспорт).**
 
-- [x] Событие ошибки → `APIError` нужного класса и с `transient` от резолвера; ответ закрывается.
+- [x] Событие ошибки → `APIStatusError` нужного класса и с `transient` от резолвера; ответ закрывается.
 - [x] `break` посреди событий закрывает генератор парсера и ответ.
 
 **Этап 4: интеграция, типы, документация.**

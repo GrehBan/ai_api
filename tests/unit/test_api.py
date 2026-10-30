@@ -1,9 +1,11 @@
 """The default ``IAPI`` implementation."""
 
+from __future__ import annotations
+
 import pytest
 from yarl import URL
 
-from ai_api.client.api.base import BaseAPI
+from ai_api.http.api import BaseAPI
 
 
 @pytest.mark.parametrize(

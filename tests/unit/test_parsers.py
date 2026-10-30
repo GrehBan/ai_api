@@ -1,5 +1,7 @@
 """Block H1: the buffered response parser."""
 
+from __future__ import annotations
+
 import datetime
 import enum
 import uuid
@@ -9,12 +11,12 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import Strict
 
-from ai_api.client.exceptions.transport import APIResponseError
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.response.parse.buffered import BufferedResponseParser
-from ai_api.client.serialization.json import loads
+from ai_api.enums import ResponseFormat
+from ai_api.http.exceptions.response import APIResponseError
 from ai_api.methods.base import BaseAPIMethod
-from ai_api.methods.enums import ResponseFormat
+from ai_api.response.buffered import BufferedResponse
+from ai_api.response.parse.buffered import BufferedResponseParser
+from ai_api.serialization.json import loads
 from ai_api.types.base import BaseAPIType
 from tests.conftest import make_method
 
@@ -58,7 +60,7 @@ def parse(
     body: bytes,
     *,
     charset: str | None = None,
-    json_loads: Any = None,
+    json_loads: Any = loads,
     **class_vars: Any,
 ) -> Any:
     method = make_method(BaseAPIMethod[argument], **class_vars)()
@@ -104,15 +106,6 @@ def test_custom_decoder_rejects_strict_fields() -> None:
         parse(StrictJob, JOB_JSON, json_loads=MagicMock(wraps=loads))
 
     assert info.value.status == 201
-
-
-def test_parser_level_decoder_is_used_by_default() -> None:
-    custom = MagicMock(wraps=loads)
-    method = make_method(BaseAPIMethod[Job])()
-
-    BufferedResponseParser(json_loads=custom).parse(method, response(JOB_JSON))
-
-    custom.assert_called_once_with(JOB_JSON)
 
 
 @pytest.mark.parametrize(

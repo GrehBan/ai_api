@@ -1,5 +1,7 @@
 """Block K: streamed responses of ``AiohttpSession`` against a real server."""
 
+from __future__ import annotations
+
 import asyncio
 import itertools
 from pathlib import Path
@@ -8,15 +10,15 @@ from typing import Any
 import pytest
 from aiohttp import ClientTimeout
 
-from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.http import NotFoundError
-from ai_api.client.exceptions.transport import (
-    APIResponseError,
+from ai_api.http.auth import BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import NotFoundError
+from ai_api.http.exceptions.transport import (
+    APIConnectionError,
     APITimeoutError,
 )
-from ai_api.client.session.aiohttp import AiohttpSession
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
+from ai_api.session.aiohttp import AiohttpSession
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
 pytestmark = pytest.mark.integration
@@ -130,11 +132,11 @@ async def test_error_body_cut_short(
         Reply(status=500, chunks=[b"{"], content_length=50, abort=True)
     )
 
-    with pytest.raises(APIResponseError, match="Failed to read") as info:
+    with pytest.raises(APIConnectionError, match="Connection lost"):
         async with session.stream(Download()):
             pass
 
-    assert info.value.status == 500
+    assert len(recorder.requests) == 1
 
 
 async def test_opening_is_retried(
@@ -153,12 +155,11 @@ async def test_connection_dropped_mid_stream(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
-    # Current behavior: APIResponseError, not APIConnectionError (open
-    # question in the plan).
+    # A retryable stream is not reopened once iteration has started.
     recorder.reply(Reply(chunks=[b"part"], abort=True))
     received: list[bytes] = []
 
-    with pytest.raises(APIResponseError, match="ended unexpectedly"):
+    with pytest.raises(APIConnectionError, match="Connection lost"):
         async with session.stream(RetryableDownload()) as stream:
             async for chunk in stream:
                 received.append(chunk)  # noqa: PERF401 - fails mid-loop
@@ -214,8 +215,8 @@ async def test_break_from_endless_stream_releases_connection(
         Reply(body=b"pong"),
     )
 
-    # With limit=1 a leaked connection would block the next request.
-    async with make_session(api, limit=1) as session:
+    # With max_connections=1 a leaked connection would block the next request.
+    async with make_session(api, max_connections=1) as session:
         async with session.stream(Download()) as stream:
             async for _ in stream:
                 break

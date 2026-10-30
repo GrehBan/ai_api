@@ -1,5 +1,7 @@
 """Block A: the exception hierarchy."""
 
+from __future__ import annotations
+
 import copy
 import pickle
 import subprocess
@@ -8,18 +10,18 @@ from typing import Any, ClassVar
 
 import pytest
 
-from ai_api.client.exceptions import http
-from ai_api.client.exceptions.http import HTTP_ERRORS, APIError
-from ai_api.client.exceptions.transport import (
+from ai_api.exceptions import AIAPIError
+from ai_api.http.exceptions import status as http_errors
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import HTTP_ERRORS, APIStatusError
+from ai_api.http.exceptions.transport import (
     APIConnectionError,
     APIRedirectError,
     APIRequestError,
-    APIResponseError,
     APITimeoutError,
     APITLSError,
     APITransportError,
 )
-from ai_api.exceptions import AIAPIError
 
 
 class TemplatedError(AIAPIError):
@@ -65,7 +67,7 @@ def test_extra_args_are_forwarded_to_exception() -> None:
 
 
 def test_api_error_keeps_all_attributes() -> None:
-    error = APIError(
+    error = APIStatusError(
         status=418,
         message="teapot",
         code="tea",
@@ -87,7 +89,7 @@ def test_api_error_keeps_all_attributes() -> None:
 
 
 def test_api_error_defaults() -> None:
-    error = APIError(status=400)
+    error = APIStatusError(status=400)
 
     assert error.transient is False
     assert error.code is None
@@ -99,19 +101,19 @@ def test_api_error_defaults() -> None:
 
 
 EXPECTED_HTTP_ERRORS = {
-    400: http.BadRequestError,
-    401: http.AuthenticationError,
-    402: http.BillingError,
-    403: http.PermissionDeniedError,
-    404: http.NotFoundError,
-    408: http.RequestTimeoutError,
-    409: http.ConflictError,
-    422: http.UnprocessableEntityError,
-    429: http.RateLimitError,
-    500: http.InternalServerError,
-    502: http.BadGatewayError,
-    503: http.ServiceUnavailableError,
-    504: http.GatewayTimeoutError,
+    400: http_errors.BadRequestError,
+    401: http_errors.AuthenticationError,
+    402: http_errors.BillingError,
+    403: http_errors.PermissionDeniedError,
+    404: http_errors.NotFoundError,
+    408: http_errors.RequestTimeoutError,
+    409: http_errors.ConflictError,
+    422: http_errors.UnprocessableEntityError,
+    429: http_errors.RateLimitError,
+    500: http_errors.InternalServerError,
+    502: http_errors.BadGatewayError,
+    503: http_errors.ServiceUnavailableError,
+    504: http_errors.GatewayTimeoutError,
 }
 
 
@@ -128,18 +130,20 @@ def test_http_errors_map_to_distinct_classes() -> None:
     list(EXPECTED_HTTP_ERRORS.items()),
     ids=[str(status) for status in EXPECTED_HTTP_ERRORS],
 )
-def test_http_error_class(status: int, error_cls: type[APIError]) -> None:
+def test_http_error_class(
+    status: int, error_cls: type[APIStatusError]
+) -> None:
     error = error_cls(status=status, message="boom")
 
-    assert issubclass(error_cls, APIError)
+    assert issubclass(error_cls, APIStatusError)
     assert error_cls.default_message
     assert error.message == f"{error_cls.default_message} detail: boom"
 
 
 def test_quota_exceeded_is_not_mapped_by_status() -> None:
-    assert issubclass(http.QuotaExceededError, APIError)
-    assert http.QuotaExceededError.default_message
-    assert http.QuotaExceededError not in HTTP_ERRORS.values()
+    assert issubclass(http_errors.QuotaExceededError, APIStatusError)
+    assert http_errors.QuotaExceededError.default_message
+    assert http_errors.QuotaExceededError not in HTTP_ERRORS.values()
 
 
 @pytest.mark.parametrize(
@@ -186,7 +190,7 @@ def test_response_error_is_not_a_transport_error() -> None:
 
 @pytest.mark.parametrize(
     "error_cls",
-    [APIError, APITransportError, APIResponseError],
+    [APIStatusError, APITransportError, APIResponseError],
     ids=lambda cls: cls.__name__,
 )
 def test_everything_derives_from_root(error_cls: type[Exception]) -> None:
@@ -194,13 +198,13 @@ def test_everything_derives_from_root(error_cls: type[Exception]) -> None:
 
 
 def test_error_resolver_protocols_import_in_fresh_interpreter() -> None:
-    # The module once used APIError without importing it; a fresh
+    # The module once used APIStatusError without importing it; a fresh
     # interpreter makes sure nothing else imported it first.
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import ai_api.client.exceptions.error_resolver.protocols",
+            "import ai_api.http.exceptions.protocols",
         ],
         capture_output=True,
         text=True,
@@ -226,7 +230,7 @@ def pickled(error: AIAPIError) -> AIAPIError:
             retry_after=2.0,
             transient=True,
         ),
-        APIError(status=599),
+        APIStatusError(status=599),
         APITimeoutError(),
         APIRequestError("bad header"),
         APIResponseError("broken", status=200),

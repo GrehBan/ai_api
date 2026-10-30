@@ -4,19 +4,18 @@ They only prove the infrastructure works; behavior of the library is
 tested by the stage suites.
 """
 
+from __future__ import annotations
+
 import asyncio
 from unittest.mock import MagicMock
 
 import pytest
 
-from ai_api.client.exceptions.http import ServiceUnavailableError
-from ai_api.client.exceptions.transport import (
-    APIConnectionError,
-    APIResponseError,
-)
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.session.aiohttp import AiohttpSession
+from ai_api.http.exceptions.status import ServiceUnavailableError
+from ai_api.http.exceptions.transport import APIConnectionError
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
+from ai_api.response.buffered import BufferedResponse
+from ai_api.session.aiohttp import AiohttpSession
 from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,
@@ -138,7 +137,7 @@ async def test_recorder_abort_breaks_body(
     recorder.reply(Reply(chunks=[b"part"], content_length=100, abort=True))
     method = make_method(BaseAPIMethod[bytes])()
 
-    with pytest.raises(APIResponseError):
+    with pytest.raises(APIConnectionError):
         await session.send_request(method)
 
 

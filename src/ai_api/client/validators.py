@@ -1,9 +1,14 @@
 """Checks of the arguments shared by provider clients."""
 
-from ai_api.client.session.protocols import ISession
+from __future__ import annotations
+
+from ai_api.session.protocols import ISession
 
 
-def check_session_creds(token: str | None, session: ISession | None) -> None:
+def require_token_or_session(
+    token: str | None,
+    session: ISession | None,
+) -> None:
     """Ensure exactly one of a token and a session is given.
 
     Args:

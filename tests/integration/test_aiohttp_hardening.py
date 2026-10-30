@@ -1,5 +1,7 @@
 """Audit fixes: failures of ``AiohttpSession`` that used to be mishandled."""
 
+from __future__ import annotations
+
 import asyncio
 import io
 import math
@@ -16,20 +18,19 @@ from pytest_aiohttp import AiohttpServer
 from pytest_mock import MockerFixture
 from yarl import URL
 
-from ai_api.client.auth.api_key import APIKeyAuth
-from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.http import ServiceUnavailableError
-from ai_api.client.exceptions.transport import (
+from ai_api.enums import BodyFormat
+from ai_api.http.auth import APIKeyAuth, BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import ServiceUnavailableError
+from ai_api.http.exceptions.transport import (
     APIRedirectError,
     APIRequestError,
-    APIResponseError,
 )
-from ai_api.client.headers.headers import Headers
-from ai_api.client.session.aiohttp import AiohttpSession
-from ai_api.client.session.loop import bind_loop
+from ai_api.http.headers import Headers
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.methods.enums import BodyFormat
+from ai_api.session.aiohttp import AiohttpSession
+from ai_api.session.loop import bind_loop
 from ai_api.types.files import IOFile, PathFile, StreamFile
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
@@ -347,7 +348,7 @@ async def test_trust_env_is_passed_to_aiohttp(
     trust_env: bool,
 ) -> None:
     created = mocker.patch(
-        "ai_api.client.session.aiohttp.ClientSession",
+        "ai_api.session.aiohttp.ClientSession",
         wraps=ClientSession,
     )
 
@@ -362,7 +363,7 @@ async def test_trust_env_is_off_by_default(
     mocker: MockerFixture,
 ) -> None:
     created = mocker.patch(
-        "ai_api.client.session.aiohttp.ClientSession",
+        "ai_api.session.aiohttp.ClientSession",
         wraps=ClientSession,
     )
 

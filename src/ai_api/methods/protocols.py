@@ -1,15 +1,17 @@
 """Interfaces of API methods as seen by sessions and parsers."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ai_api.methods.enums import BodyFormat, ResponseFormat, ResponseMode
+from ai_api.enums import BodyFormat, ResponseFormat
 
 if TYPE_CHECKING:
     from pydantic import TypeAdapter
 
-    from ai_api.client.api.protocols import Query
-    from ai_api.client.response.parse.protocols import (
+    from ai_api.http.protocols import Query
+    from ai_api.response.parse.protocols import (
         IResponseParser,
         IStreamParser,
     )
@@ -35,7 +37,7 @@ class IBaseMethod[ResponseT](Protocol):
         ...
 
     @property
-    def body_format(self) -> BodyFormat:
+    def request_body_format(self) -> BodyFormat:
         """Encoding of the request body."""
         ...
 
@@ -47,11 +49,6 @@ class IBaseMethod[ResponseT](Protocol):
     @property
     def response_format(self) -> ResponseFormat:
         """How the response body is parsed."""
-        ...
-
-    @property
-    def response_mode(self) -> ResponseMode:
-        """Whether the response is buffered or streamed."""
         ...
 
     @property
@@ -89,10 +86,10 @@ class IAPIMethod[ResponseT](IBaseMethod[ResponseT], Protocol):
         ...
 
 
-class IStreamMethod[ResponseT](IBaseMethod[ResponseT], Protocol):
+class IStreamMethod[ItemT](IBaseMethod[ItemT], Protocol):
     """A method whose response is consumed as a stream.
 
-    ``ResponseT`` is the type of a single item yielded by the stream.
+    ``ItemT`` is the type of a single item yielded by the stream.
     """
 
     @property
@@ -101,6 +98,6 @@ class IStreamMethod[ResponseT](IBaseMethod[ResponseT], Protocol):
         ...
 
     @property
-    def response_adapter(self) -> TypeAdapter[ResponseT] | None:
+    def response_adapter(self) -> TypeAdapter[ItemT] | None:
         """Validator of one SSE or NDJSON item; ``None`` when not used."""
         ...

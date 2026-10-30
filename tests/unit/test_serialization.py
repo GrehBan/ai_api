@@ -1,5 +1,7 @@
 """Block D: JSON codec and body normalization."""
 
+from __future__ import annotations
+
 import datetime
 import enum
 import io
@@ -8,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from ai_api.client.serialization.body import MAX_DEPTH, BodyNormalizer
-from ai_api.client.serialization.json import dumps, loads
+from ai_api.serialization.json import dumps, loads
+from ai_api.serialization.normalize import MAX_DEPTH, BodyNormalizer
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile
 

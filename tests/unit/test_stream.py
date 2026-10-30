@@ -1,5 +1,7 @@
 """Block H2: the stream parser and ``Stream``."""
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,11 +9,13 @@ from typing import Any
 
 import pytest
 
-from ai_api.client.exceptions.transport import APIResponseError
-from ai_api.client.response.parse.stream import StreamResponseParser
-from ai_api.client.response.stream import Stream, map_stream
+from ai_api.enums import ResponseFormat
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.response import APIResponseError
 from ai_api.methods.base import BaseStreamMethod
-from ai_api.methods.enums import ResponseFormat
+from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.response.stream import Stream, map_stream
+from ai_api.serialization.json import loads
 from tests.conftest import FakeStreamResponse, make_method
 
 
@@ -26,6 +30,8 @@ def parse(
     return StreamResponseParser().parse(
         method,
         FakeStreamResponse(chunks, status=206, charset=charset),
+        loads,
+        BaseErrorResolver(),
     )
 
 

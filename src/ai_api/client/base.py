@@ -1,11 +1,13 @@
 """Base class for provider clients."""
 
+from __future__ import annotations
+
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Self
 
-from ai_api.client.response.stream import Stream
-from ai_api.client.session.protocols import ISession
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
+from ai_api.response.stream import Stream
+from ai_api.session.protocols import ISession
 
 if TYPE_CHECKING:
     from types import TracebackType

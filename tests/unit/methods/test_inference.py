@@ -1,15 +1,17 @@
 """Block G1: inference of the response type and format."""
 
+from __future__ import annotations
+
 from typing import Annotated, Any, ClassVar, Literal, TypeVar
 
 import pytest
 from pydantic import Field
 
-from ai_api.client.response.parse.buffered import BufferedResponseParser
-from ai_api.client.response.parse.sse import ServerSentEvent
-from ai_api.client.response.parse.stream import StreamResponseParser
+from ai_api.enums import ResponseFormat
 from ai_api.methods.base import BaseAPIMethod, BaseMethod, BaseStreamMethod
-from ai_api.methods.enums import ResponseFormat, ResponseMode
+from ai_api.response.parse.buffered import BufferedResponseParser
+from ai_api.response.parse.sse import ServerSentEvent
+from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.types.base import BaseAPIType
 from tests.conftest import make_method
 
@@ -44,13 +46,11 @@ def test_buffered_inference(
 
     assert method_cls.__returning__ is returning
     assert method_cls.__response_format__ is response_format
-    assert method_cls.__response_mode__ is ResponseMode.BUFFERED
 
     method = method_cls()
 
     assert method.response_type is returning
     assert method.response_format is response_format
-    assert method.response_mode is ResponseMode.BUFFERED
 
 
 def test_explicit_format_beats_inference() -> None:
@@ -278,12 +278,12 @@ def test_stream_inference(
 
     assert method_cls.__returning__ is argument
     assert method_cls.__response_format__ is response_format
-    assert method_cls().response_mode is ResponseMode.STREAM
+    assert method_cls().response_format is response_format
 
 
 @pytest.mark.parametrize(
     ("argument", "type_name"),
-    [(Model, "Model"), (None, "NoneType"), (int, "int")],
+    [(Model, "Model"), (None, "None"), (int, "int")],
     ids=["model", "none", "int"],
 )
 def test_stream_rejects_unsupported_items(

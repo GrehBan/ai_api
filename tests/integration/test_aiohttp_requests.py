@@ -1,5 +1,7 @@
 """Block K: buffered requests of ``AiohttpSession`` against a real server."""
 
+from __future__ import annotations
+
 import socket
 import ssl
 from typing import Any
@@ -17,24 +19,22 @@ from pytest_aiohttp import AiohttpServer
 from pytest_mock import MockerFixture
 from yarl import URL
 
-from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.http import (
+from ai_api.enums import BodyFormat
+from ai_api.http.auth import BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import (
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.client.exceptions.transport import (
+from ai_api.http.exceptions.transport import (
     APIConnectionError,
-    APIResponseError,
     APITimeoutError,
     APITLSError,
 )
-from ai_api.client.headers.headers import Headers
-from ai_api.client.headers.names import SERVER_SOFTWARE
-from ai_api.client.session.aiohttp import AiohttpSession
+from ai_api.http.headers import SERVER_SOFTWARE, Headers
 from ai_api.methods.base import BaseAPIMethod
-from ai_api.methods.enums import BodyFormat
+from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
@@ -321,10 +321,23 @@ async def test_body_cut_short(
 ) -> None:
     recorder.reply(Reply(chunks=[b"partial"], content_length=100, abort=True))
 
-    with pytest.raises(APIResponseError, match="Failed to read") as info:
+    with pytest.raises(APIConnectionError, match="Connection lost"):
         await session.send_request(Ping())
 
-    assert info.value.status == 200
+    assert len(recorder.requests) == 1
+
+
+async def test_body_cut_short_is_retried(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(
+        Reply(chunks=[b"partial"], content_length=100, abort=True),
+        Reply(body=b"ok"),
+    )
+
+    assert await session.send_request(RetryablePing()) == b"ok"
+    assert len(recorder.requests) == 2
 
 
 @pytest.mark.parametrize(
@@ -374,7 +387,7 @@ async def test_client_session_is_created_lazily_and_recreated(
     mocker: MockerFixture,
 ) -> None:
     created = mocker.patch(
-        "ai_api.client.session.aiohttp.ClientSession",
+        "ai_api.session.aiohttp.ClientSession",
         wraps=ClientSession,
     )
     session = make_session(api)
@@ -398,10 +411,10 @@ async def test_client_session_is_created_lazily_and_recreated(
 async def test_closed_client_session_is_replaced(
     session: AiohttpSession,
 ) -> None:
-    client = await session.create_session()
+    client = await session.get_client()
     await client.close()
 
-    replacement = await session.create_session()
+    replacement = await session.get_client()
 
     assert replacement is not client
     assert not replacement.closed
@@ -411,7 +424,7 @@ async def test_closed_client_session_is_replaced(
 
 async def test_context_manager_opens_and_closes(api: LocalAPI) -> None:
     async with make_session(api) as session:
-        client = await session.create_session()
-        assert await session.create_session() is client
+        client = await session.get_client()
+        assert await session.get_client() is client
 
     assert client.closed

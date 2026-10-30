@@ -19,7 +19,7 @@ Oct 29, 2026 · @Max
 - Никакой сети наружу: только локальный сервер `pytest-aiohttp` или фейковый транспорт.
 - Детерминированность: реальные задержки повторов и `asyncio.sleep(0.25)` в `close()` подменяются; время, нужное для `timedelta` и `Retry-After`, фиксируется.
 - Скорость: весь набор укладывается в 30 секунд, отдельный тест — меньше секунды, кроме двух-трёх тестов таймаутов.
-- Каждый найденный ранее баг получает регрессионный тест: импорт `APIError`, `SerializationIterator` вместо файла, двойное кодирование пути.
+- Каждый найденный ранее баг получает регрессионный тест: импорт `APIStatusError`, `SerializationIterator` вместо файла, двойное кодирование пути.
 
 **Вне рамок:**
 
@@ -60,20 +60,20 @@ Oct 29, 2026 · @Max
 
 | Блок | Модули | Уровень | Этап | Риск, если не покрыть |
 | --- | --- | --- | --- | --- |
-| A. Исключения | `exceptions.py`, `client/exceptions/http.py`, `transport.py` | unit | 1 | Неверный флаг `transient` меняет поведение повторов |
-| B. Резолвер ошибок | `client/exceptions/error_resolver/` | unit | 1 | Ошибки провайдера превращаются не в тот класс, теряется `Retry-After` |
-| C. Стратегия повторов | `client/retry/startegy.py` | unit | 1 | Повторы без учёта `Retry-After` |
-| D. Сериализация | `client/serialization/` | unit | 1 | Даты, enum и вложенные модели уходят в тело в неверном виде |
-| E. Заголовки и auth | `client/headers/`, `client/auth/` | unit | 1 | Токен попадает в `repr` и логи |
+| A. Исключения | `exceptions.py`, `http/exceptions/status.py`, `transport.py` | unit | 1 | Неверный флаг `transient` меняет поведение повторов |
+| B. Резолвер ошибок | `http/exceptions/resolver.py` | unit | 1 | Ошибки провайдера превращаются не в тот класс, теряется `Retry-After` |
+| C. Стратегия повторов | `session/retry.py` | unit | 1 | Повторы без учёта `Retry-After` |
+| D. Сериализация | `serialization/` | unit | 1 | Даты, enum и вложенные модели уходят в тело в неверном виде |
+| E. Заголовки и auth | `http/headers.py`, `http/auth.py` | unit | 1 | Токен попадает в `repr` и логи |
 | F. Файлы | `types/files.py` | unit | 2 | При повторе уходит обрезанный файл |
-| G. Методы | `methods/base.py`, `methods/resolve.py`, `methods/enums.py`, `client/api/url/` | unit | 2 | Неверный формат ответа, инъекция в путь запроса |
-| H. Парсеры и `Stream` | `client/response/` | unit | 3 | Обрезанный текст на границах чанков, strict-поля не проходят |
-| I. Построитель тела aiohttp | `client/session/builders/aiohttp.py` | unit | 3 | Файл в JSON-теле или потерянные `filename` / `content_type` |
-| J. `BaseSession` | `client/session/base.py` | фейковый транспорт | 4 | Повтор стрима после старта, незакрытые ответы |
-| K. `AiohttpSession` | `client/session/aiohttp.py`, `client/exceptions/aiohttp.py`, `client/response/aiohttp.py` | integration | 5 | Неправильное сопоставление ошибок aiohttp, утечка соединений |
+| G. Методы | `methods/base.py`, `methods/fields.py`, `enums.py`, `methods/path.py` | unit | 2 | Неверный формат ответа, инъекция в путь запроса |
+| H. Парсеры и `Stream` | `response/` | unit | 3 | Обрезанный текст на границах чанков, strict-поля не проходят |
+| I. Построитель тела aiohttp | `session/body/aiohttp.py` | unit | 3 | Файл в JSON-теле или потерянные `filename` / `content_type` |
+| J. `BaseSession` | `session/base.py` | фейковый транспорт | 4 | Повтор стрима после старта, незакрытые ответы |
+| K. `AiohttpSession` | `session/aiohttp.py`, `http/exceptions/aiohttp.py`, `response/aiohttp.py` | integration | 5 | Неправильное сопоставление ошибок aiohttp, утечка соединений |
 | L. Типы и README | публичное API, `README.md` | typing / docs | 6 | `send_request` теряет тип, примеры в README перестают работать |
-| M. Клиенты и провайдеры | `client/base.py`, `client/factory/`, `client/validators.py`, `providers/` | unit, фейковый транспорт | после 7 | Клиент не закрывает сессию, OpenAI-ошибки квоты повторяются, фабрика молча принимает лишний аргумент |
-| N. Ресурсы, use cases и общие типы | `client/resources/`, `types/requests/`, `types/responses/` | unit, фейковый транспорт | после 7 | Use case теряет поток провайдера незакрытым, `raw` молча пустеет, запрос с опечаткой проходит |
+| M. Клиенты и провайдеры | `client/base.py`, `client/factory.py`, `client/validators.py`, `providers/` | unit, фейковый транспорт | после 7 | Клиент не закрывает сессию, OpenAI-ошибки квоты повторяются, фабрика молча принимает лишний аргумент |
+| N. Ресурсы, use cases и общие типы | `resources/`, `types/requests/`, `types/responses/` | unit, фейковый транспорт | после 7 | Use case теряет поток провайдера незакрытым, `raw` молча пустеет, запрос с опечаткой проходит |
 
 Протоколы (`protocols.py`) и `enums.py` отдельных тестов не получают. Первые проверяются статически на этапе 6, второй — через резолвер в блоке B.
 
@@ -113,7 +113,7 @@ tests/
 
 | Фикстура | Что делает | Кто использует |
 | --- | --- | --- |
-| `no_retry_wait` (autouse) | Подменяет `calculate_wait` в `ai_api.client.session.base` на 0 секунд. Иначе каждый тест повтора ждёт до нескольких секунд | Этапы 4–5 |
+| `no_retry_wait` (autouse) | Подменяет `calculate_wait` в `ai_api.session.base` на 0 секунд. Иначе каждый тест повтора ждёт до нескольких секунд | Этапы 4–5 |
 | `no_close_delay` (autouse) | Убирает `asyncio.sleep(0.25)` из `AiohttpSession.close()` | Этап 5 |
 | `FakeTransport` | Подкласс `BaseSession`. Возвращает заранее заданную очередь ответов или исключений, считает попытки и закрытые ответы | Этап 4 |
 | `FakeStreamResponse` | Реализация `IStreamResponse` из списка чанков. Умеет бросить ошибку на n-м чанке и запоминает, вызван ли `aclose()` | Этапы 3–4 |
@@ -136,22 +136,22 @@ tests/
 **A. Исключения**
 
 - [ ] `AIAPIError`: сообщение из `default_message` + `"detail: …"`, только одно из них, ни одного; подстановка `kwargs` в шаблон.
-- [ ] `APIError`: все атрибуты сохраняются; `transient` по умолчанию `False`.
-- [ ] `HTTP_ERRORS`: каждый статус ведёт на свой класс, все классы — подклассы `APIError` с `default_message`.
+- [ ] `APIStatusError`: все атрибуты сохраняются; `transient` по умолчанию `False`.
+- [ ] `HTTP_ERRORS`: каждый статус ведёт на свой класс, все классы — подклассы `APIStatusError` с `default_message`.
 - [ ] Транспортные ошибки: `APIConnectionError` и `APITimeoutError` временные, `APITLSError` нет; `APIResponseError` хранит `status`.
-- [ ] Регрессия: `ai_api.client.exceptions.error_resolver.protocols` импортируется без ошибки.
+- [ ] Регрессия: `ai_api.http.exceptions.protocols` импортируется без ошибки.
 
 **B. Резолвер ошибок**
 
 - [ ] `get_header` без учёта регистра и с отсутствующим заголовком; `optional_str` для не-строк.
 - [ ] `parse_retry_after`: число секунд, HTTP-дата в будущем, дата в прошлом (`0.0`), дата без часового пояса, мусор, `inf` / `nan`, отрицательное число. Текущее время фиксируется через `mocker`.
 - [ ] `resolve`: тело `None`, не `Mapping`, без `error`, `error` не объект; порядок `x-request-id` → `request-id` → `body.request_id`.
-- [ ] `classify`: набор временных статусов 408, 500, 502, 503, 504, 529; 429 временный только при `Retry-After`; неизвестный статус → `APIError`.
+- [ ] `classify`: набор временных статусов 408, 500, 502, 503, 504, 529; 429 временный только при `Retry-After`; неизвестный статус → `APIStatusError`.
 - [ ] Подкласс из README (`ExampleErrorResolver`): `provider`, переопределённый `classify` и `get_error_code`.
 
 **C. Стратегия повторов**
 
-- [ ] `should_retry` для `APIError`, `APITransportError`, постороннего исключения.
+- [ ] `should_retry` для `APIStatusError`, `APITransportError`, постороннего исключения.
 - [ ] `calculate_wait`: без исхода, с ошибкой без `retry_after`, с `retry_after` больше джиттера (берётся он) и меньше (берётся джиттер). `RetryCallState` создаётся вручную, джиттер проверяется по границам 0–30 с.
 
 **D. Сериализация**
@@ -191,8 +191,8 @@ tests/
 **G2. Параметры пути**
 
 - [ ] Подстановка нескольких параметров, enum → значение, `bool` → `true`/`false`, `{{literal}}`.
-- [ ] Экранирование: `../admin`, `a/b?x=1#f`, кириллица, пробел, `50%`; с `__path_safe__ = "/"` слеш сохраняется.
-- [ ] `ValueError` для `None`, `""`, `.`, `..`, а с `__path_safe__ = "/"` — для `a/../b`, `a//b`, `../x`.
+- [ ] Экранирование: `../admin`, `a/b?x=1#f`, кириллица, пробел, `50%`; с `__request_path_safe__ = "/"` слеш сохраняется.
+- [ ] `ValueError` для `None`, `""`, `.`, `..`, а с `__request_path_safe__ = "/"` — для `a/../b`, `a//b`, `../x`.
 - [ ] `TypeError` при определении: нет поля, `{}`, `{a.b}`, `{a[0]}`, `{a:>5}`, `{a!r}`, незакрытая `{`, пересечение с query — в том же классе и в подклассе.
 - [ ] Подкласс без своего пути наследует `__request_path_params__`.
 
@@ -205,7 +205,7 @@ tests/
 
 ## Этап 3: парсеры, Stream и построитель тела (блоки H–I)
 
-Этап 3 проверяет преобразование байтов в результат и обратно, не касаясь сети. Ответы собираются вручную как `BufferedResponse` или `FakeStreamResponse`. Цель — 100% `client/response/` и `builders/aiohttp.py`.
+Этап 3 проверяет преобразование байтов в результат и обратно, не касаясь сети. Ответы собираются вручную как `BufferedResponse` или `FakeStreamResponse`. Цель — 100% `response/` и `builders/aiohttp.py`.
 
 **H1. `BufferedResponseParser`**
 
@@ -233,7 +233,7 @@ tests/
 
 ## Этап 4: BaseSession на фейковом транспорте (блок J)
 
-Этап 4 проверяет общую логику сессии через `FakeTransport`. Это подкласс `BaseSession`, чьи `_execute` и `_open_stream` отдают заранее заданные ответы и исключения. Так повторы и закрытие ответов проверяются по точному числу вызовов, без сети и без нестабильности. Цель — 100% `client/session/base.py`.
+Этап 4 проверяет общую логику сессии через `FakeTransport`. Это подкласс `BaseSession`, чьи `_execute` и `_open_stream` отдают заранее заданные ответы и исключения. Так повторы и закрытие ответов проверяются по точному числу вызовов, без сети и без нестабильности. Цель — 100% `session/base.py`.
 
 **`send_request`**
 
@@ -259,7 +259,7 @@ tests/
 
 ## Этап 5: интеграция AiohttpSession (блок K)
 
-Этап 5 запускает настоящий `AiohttpSession` против сервера из фикстуры `aiohttp_server` и проверяет то, что сервер действительно получил: сырой путь, заголовки, тело, multipart-части. Эти тесты помечены `@pytest.mark.integration`. Основа — сценарии, которые уже проверялись вручную скриптами в ходе разработки 0.0.2. Цель — 100% `client/session/aiohttp.py`.
+Этап 5 запускает настоящий `AiohttpSession` против сервера из фикстуры `aiohttp_server` и проверяет то, что сервер действительно получил: сырой путь, заголовки, тело, multipart-части. Эти тесты помечены `@pytest.mark.integration`. Основа — сценарии, которые уже проверялись вручную скриптами в ходе разработки 0.0.2. Цель — 100% `session/aiohttp.py`.
 
 **Запросы (`test_aiohttp_requests.py`)**
 
@@ -321,7 +321,7 @@ tests/
 
 Проценты — фактическое покрытие после этапа, округлённое вниз (этапы 2 и 3 делались вместе). Итоговый порог в `pyproject.toml` — `fail_under = 98`.
 
-**GitHub Actions (`.github/workflows/tests.yml`)**, на каждый PR и push в `master`, Python 3.15, `uv sync --all-groups --locked`:
+**GitHub Actions (`.github/workflows/tests.yml`)**, на каждый PR и push в `master`, Python 3.13, `uv sync --all-groups --locked`:
 
 1. `uv run ruff check src tests` и `uv run ruff format --check src tests`
 2. `uv run mypy src` и pyright по конфигурации из `pyproject.toml`
@@ -354,7 +354,7 @@ tests/
 - [ ] Use case на фейковом транспорте: буферный ответ провайдера превращается в `GenerationResponse` с `raw`, тело запроса собрано из `GenerationRequest`.
 - [ ] Потоковый use case через `map_stream`: события SSE превращаются в `TextDeltaEvent`/`OtherEvent`/`CompletedEvent`; после выхода и после `break` ответ закрыт ровно один раз, итерация после блока → `RuntimeError`.
 - [ ] Ресурс и use case хранят ту же сессию и подходят под `IResource`/`ICompositeUseCase`; базовые use case абстрактные.
-- [ ] `GenerationRequest` отклоняет лишнее поле и `max_output_tokens=0`; `GenerationResponse` без параметра сохраняет `raw` как есть, с параметром валидирует его; `ResponseEvent[Raw]` различает события по `type`.
+- [ ] `GenerationRequest` отклоняет лишнее поле и `max_output_tokens=0`; `GenerationResponse` без параметра сохраняет `raw` как есть, с параметром валидирует его; `GenerationEvent[Raw]` различает события по `type`.
 
 ## Риски и открытые вопросы
 

@@ -1,22 +1,24 @@
 """Block C: the retry strategy."""
 
+from __future__ import annotations
+
 import pytest
 from pytest_mock import MockerFixture
 from tenacity import AsyncRetrying, RetryCallState
 
-from ai_api.client.exceptions.http import (
-    APIError,
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import (
+    APIStatusError,
     NotFoundError,
     ServiceUnavailableError,
 )
-from ai_api.client.exceptions.transport import (
+from ai_api.http.exceptions.transport import (
     APIConnectionError,
-    APIResponseError,
     APITLSError,
 )
-from ai_api.client.retry.startegy import (
-    RETRY_CONDITION,
+from ai_api.session.retry import (
     calculate_wait,
+    retry_condition,
     should_retry,
 )
 
@@ -67,8 +69,10 @@ def test_should_retry(exc: BaseException, expected: bool) -> None:
 
 
 def test_retry_condition_uses_should_retry() -> None:
-    assert RETRY_CONDITION(make_state(error=APIConnectionError())) is True
-    assert RETRY_CONDITION(make_state(error=APITLSError())) is False
+    condition = retry_condition()
+
+    assert condition(make_state(error=APIConnectionError())) is True
+    assert condition(make_state(error=APITLSError())) is False
 
 
 @pytest.mark.parametrize("attempt", [1, 2, 5, 10, 50])
@@ -82,7 +86,7 @@ def test_jitter_stays_within_bounds(attempt: int) -> None:
     [
         make_state(),
         make_state(error=APIConnectionError()),
-        make_state(error=APIError(status=503)),
+        make_state(error=APIStatusError(status=503)),
         make_state(result="ok"),
     ],
     ids=["no-outcome", "transport-error", "no-retry-after", "result"],
@@ -92,7 +96,7 @@ def test_wait_is_jitter_without_retry_after(
     state: RetryCallState,
 ) -> None:
     jitter = mocker.patch(
-        "ai_api.client.retry.startegy._jitter",
+        "ai_api.session.retry._jitter",
         return_value=4.0,
     )
 
@@ -110,13 +114,13 @@ def test_wait_honors_retry_after(
     retry_after: float,
     expected: float,
 ) -> None:
-    mocker.patch("ai_api.client.retry.startegy._jitter", return_value=4.0)
-    error = APIError(status=503, retry_after=retry_after, transient=True)
+    mocker.patch("ai_api.session.retry._jitter", return_value=4.0)
+    error = APIStatusError(status=503, retry_after=retry_after, transient=True)
 
     assert calculate_wait(make_state(error=error)) == expected
 
 
 def test_retry_after_above_jitter_with_real_jitter() -> None:
-    error = APIError(status=503, retry_after=45.0, transient=True)
+    error = APIStatusError(status=503, retry_after=45.0, transient=True)
 
     assert calculate_wait(make_state(error=error)) == 45.0

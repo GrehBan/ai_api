@@ -4,6 +4,8 @@ The doubles are importable from tests as ``tests.conftest``; see
 ``docs/testing-plan.md`` (stage 0) for what each stage uses.
 """
 
+from __future__ import annotations
+
 import asyncio
 import datetime
 from collections import deque
@@ -26,16 +28,15 @@ from pytest_mock import MockerFixture
 from tenacity import RetryCallState
 from yarl import URL
 
-from ai_api.client.api.protocols import IAPI, Query
-from ai_api.client.auth.bearer import BearerAuth
-from ai_api.client.auth.protocols import IAuth
-from ai_api.client.exceptions.error_resolver.base import BaseErrorResolver
-from ai_api.client.exceptions.error_resolver.protocols import IErrorResolver
-from ai_api.client.response.base import BufferedResponse
-from ai_api.client.session.aiohttp import AiohttpSession
-from ai_api.client.session.base import BaseSession
+from ai_api.http.auth import BearerAuth
+from ai_api.http.exceptions.protocols import IErrorResolver
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.protocols import IAPI, IAuth, Query
 from ai_api.methods.base import BaseMethod
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
+from ai_api.response.buffered import BufferedResponse
+from ai_api.session.aiohttp import AiohttpSession
+from ai_api.session.base import BaseSession
 
 TEST_TOKEN = "test-token"
 
@@ -61,7 +62,7 @@ def no_retry_wait(mocker: MockerFixture) -> MagicMock:
         return 0.0
 
     mock = mocker.patch(
-        "ai_api.client.session.base.calculate_wait",
+        "ai_api.session.base.calculate_wait",
         autospec=True,
         side_effect=wait,
     )
@@ -82,7 +83,7 @@ def no_close_delay(mocker: MockerFixture) -> None:
         return await real_sleep(0, result)
 
     mocker.patch(
-        "ai_api.client.session.aiohttp.asyncio",
+        "ai_api.session.aiohttp.asyncio",
         SimpleNamespace(
             sleep=instant_sleep,
             get_running_loop=asyncio.get_running_loop,
@@ -117,11 +118,11 @@ def frozen_now(mocker: MockerFixture) -> datetime.datetime:
         ``NOW``.
     """
     mocker.patch(
-        "ai_api.client.exceptions.error_resolver.base.datetime",
+        "ai_api.http.headers.datetime",
         _FrozenDatetime,
     )
     mocker.patch(
-        "ai_api.client.serialization.body.datetime",
+        "ai_api.serialization.normalize.datetime",
         SimpleNamespace(
             datetime=_FrozenDatetime,
             timedelta=datetime.timedelta,
