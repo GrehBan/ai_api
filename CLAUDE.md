@@ -25,6 +25,8 @@ uv run pre-commit install            # once: hooks from .pre-commit-config.yaml
 
 Tests live in `tests/` (`unit/`, `session/`, `integration/`, `providers/`, `typing/`, `docs/`; `providers/test_generation_contract.py` runs the same scenarios against every provider's `client.generation`, so a new provider adds a `Case` there); shared doubles and fixtures are in `tests/conftest.py`, and the plan is `docs/testing-plan.md`. `tests/typing/check_public_api.py` is never run: every `# type: ignore[...]` there marks a line that must stay a type error. `tests/docs/test_readme.py` runs every ```` ```python ```` block of `README.md`, so a new README example needs a test. CI (`.github/workflows/tests.yml`) runs the same commands; pytest on Ubuntu and Windows.
 
+Offline provider documentation (OpenAI, Anthropic, OpenRouter, Gemini: endpoints, JSON schemas, stream contracts, fixtures, request validation) comes from the `unified-api-docs` MCP server in `.mcp.json`, enabled in `.claude/settings.json`. It runs `docs-suite-mcp` from the private repository `GrehBan/docs-lite-mcp`, expected at `/home/user/docs-lite-mcp` (cloud sessions); elsewhere set `DOCS_SUITE_MCP_DIR` to its `docs-suite-mcp` folder.
+
 ## Architecture
 
 Request flow: a `BaseAPIMethod` instance → `BaseSession.send_request` → (optional tenacity retry around) `BaseSession._send_once` → transport `_execute` → `BufferedResponse` → `_raise_for_status` → the method's `response_parser` → typed result.

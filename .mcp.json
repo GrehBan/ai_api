@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "unified-api-docs": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${DOCS_SUITE_MCP_DIR:-/home/user/docs-lite-mcp/docs-suite-mcp}",
+        "run",
+        "--locked",
+        "--no-dev",
+        "--python",
+        "3.13",
+        "docs-suite-mcp",
+        "serve"
+      ],
+      "env": {
+        "PYTHONUTF8": "1",
+        "UV_LINK_MODE": "copy"
+      }
+    }
+  }
+}
