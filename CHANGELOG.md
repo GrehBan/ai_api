@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-31
+
 ### Added
 
 - Method headers: `__request_headers__` (a mapping or `Headers`, `None` by
@@ -68,12 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same scenarios for `OpenAIClient.generation` and
   `AnthropicClient.generation`.
 - `OpenAIGenerationAdapter` in `ai_api.providers.openai.adapters`: shared
-  generation over the Responses API, for `GenerationResource`. A buffered
+  generation over the Responses API, for `GenerationResource`; OpenAI's
+  limits on the request raise `RequestValidationError`. A buffered
   response that did not finish (`cancelled`, `in_progress`, ...) raises
   `APIResponseError`; a failed one is raised by `CreateResponse` and
   `StreamResponse` themselves (see below).
 - `incomplete_reason` on `GenerationResponse` and `CompletedEvent`: why the
-  provider stopped early, such as a token limit; `None` if it finished.
+  provider stopped early, an `IncompleteReason` (`MAX_TOKENS`, `REFUSAL` or
+  `OTHER`); `None` if it finished. The provider's own reason is in
+  `raw_incomplete_reason`.
 - Anthropic provider (`ai_api.providers.anthropic`): `AnthropicClient` (a
   token, a ready session or `ANTHROPIC_API_KEY`; `BearerAuth`), `ANTHROPIC_API`,
   `API_VERSION` (`2026-10-21`) and `AnthropicErrorResolver`: spend caps and
@@ -92,8 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AnthropicGenerationAdapter` in `ai_api.providers.anthropic.adapters` and
   `AnthropicClient.generation` (with `default_max_tokens=1024` for requests
   without `max_output_tokens`): shared generation over the Messages API.
-  Metadata other than `user_id` raises `ValueError`; a `stop_reason` other
-  than `end_turn` or `stop_sequence` becomes `incomplete_reason`; the stream's
+  Metadata other than `user_id` raises `RequestValidationError`; a
+  `stop_reason` other than `end_turn` or `stop_sequence` sets
+  `incomplete_reason`; the stream's
   `CompletedEvent` comes on `message_stop` with the counts of `message_start`
   and the cumulative `message_delta`; a message without `stop_reason` raises
   `APIResponseError`.
@@ -160,6 +166,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property tests of the line and SSE decoders, cuts and silence mid-stream,
   and a close-delimited HTTP/1.1 body cut mid-event. New test dependency
   `hypothesis`.
+- Conversations in shared generation: `GenerationRequest.input` takes a list
+  of `Turn`s (`ai_api.types.requests`; frozen, unknown fields rejected,
+  `Turn.user(...)` and `Turn.assistant(...)`) as well as a text, and
+  `GenerationResponse.to_turn()` turns an answer into the next request's
+  `assistant` turn. The list must not be empty and must end with a `user`
+  turn. OpenAI gets the turns as `EasyInputMessage` items, Anthropic as
+  `messages`.
+- `Role`, `IncompleteReason` and `GenerationEventType` (`StrEnum`s in
+  `ai_api.enums`, re-exported from `ai_api`).
+- `RequestValidationError` (`ai_api`, a `ValueError`, with `provider` and the
+  shared `field`): the generation adapters raise it, before anything is sent,
+  for a shared request that a provider cannot take; a pydantic error behind it
+  is its `__cause__`.
+- `raw_incomplete_reason` and `refusal` on `GenerationResponse` and
+  `CompletedEvent`. A refusal is an answer, as in both SDKs: it sets
+  `incomplete_reason` to `IncompleteReason.REFUSAL` and `refusal` to OpenAI's
+  refusal text, or Anthropic's `stop_details.explanation` (else its
+  `category`).
+- `TokenUsage.cache_read_tokens`, `cache_write_tokens` and `reasoning_tokens`
+  (parts of the input and output counts; `None` if not reported), from
+  OpenAI's token details and Anthropic's cache counts and thinking tokens.
+- `OutputTokensDetails` (`thinking_tokens`) and `output_tokens_details` on
+  Anthropic's `Usage` and `MessageDeltaUsage`.
+- `docs/unification.md`: what every shared field becomes for each provider,
+  what is lost, when a request or response raises, and what is not unified;
+  `tests/docs/test_unification.py` checks it against the shared types and
+  raises every error it lists.
 
 ### Changed
 
@@ -183,6 +216,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared streams report failures only as exceptions: the generation adapters
   no longer check the end of a stream themselves; the provider method's
   terminal and the use case's `terminal` do.
+- The `type` of the shared events is a `GenerationEventType`, and
+  `GENERATION_TERMINAL` matches `GenerationEventType.COMPLETED`; the values
+  are the same strings as before.
 
 ### Removed
 
@@ -299,5 +335,6 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/GrehBan/ai_api/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GrehBan/ai_api/compare/2b58dfc...v0.1.0
