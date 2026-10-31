@@ -300,6 +300,10 @@ async def test_stream_events_are_converted() -> None:
     assert completed.raw_incomplete_reason is None
     assert completed.refusal is None
     assert completed.raw.type == "response.completed"
+    assert completed.id == completed.raw.response.id
+    assert completed.model == completed.raw.response.model
+    # The text of the final response, as OpenAI sends it in the event.
+    assert completed.text == completed.raw.response.output_text
 
 
 async def test_incomplete_stream_completes_with_its_reason() -> None:

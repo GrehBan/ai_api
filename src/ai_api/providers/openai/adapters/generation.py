@@ -206,9 +206,13 @@ class OpenAIGenerationAdapter(
             case ResponseStateEvent(
                 type="response.completed" | "response.incomplete"
             ):
-                stop = self.stop_conversion(event.response)
+                response = event.response
+                stop = self.stop_conversion(response)
                 return CompletedEvent[ResponseStreamEvent](
-                    usage=self._usage(event.response.usage),
+                    id=response.id,
+                    model=response.model,
+                    text=response.output_text,
+                    usage=self._usage(response.usage),
                     incomplete_reason=stop.incomplete_reason,
                     raw_incomplete_reason=stop.raw_incomplete_reason,
                     refusal=stop.refusal,

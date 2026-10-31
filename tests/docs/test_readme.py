@@ -657,7 +657,10 @@ async def test_shared_generation(
 
     async with examples.OpenAIClient("sk-...") as client:
         response = await examples.generate(client)
-        assert await examples.generate_streamed(client) == "Hey"
+        text, completed = await examples.generate_streamed(client)
+
+    assert text == "Hey"
+    assert (completed.id, completed.model) == ("resp_2", "gpt-6-astra")
 
     assert (response.id, response.text) == ("resp_1", "Hel")
     assert response.incomplete_reason is IncompleteReason.MAX_TOKENS

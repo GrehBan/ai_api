@@ -23,8 +23,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/docs/test_unification.py` checks that every field of
   `docs/unification.md` is filled by a conversion that every adapter has,
   or is listed as taken as is.
+- `generation.create(...)` and `generation.stream(...)` take the fields of
+  `GenerationRequest` as keyword arguments, as the providers' SDKs do
+  (`create(model="...", input="Hi")`), or a ready `GenerationRequest`;
+  passing both raises `TypeError`. `IGenerationResource` has the same
+  overloads.
+- `GenerationStream` (`ai_api.resources`): `generation.stream(...)` yields
+  it. Besides iterating every event, `events.text()` gives the text deltas
+  and `await events.final()` reads to the end and returns the
+  `CompletedEvent`; whatever read the stream, the `CompletedEvent` is kept.
+- `CompletedEvent` carries the response's `id`, `model` (required) and whole
+  `text`, from OpenAI's terminal event and from Anthropic's `message_start`
+  and text deltas.
+- `IGenerationClient[RawT = Any, RawItemT = Any]` (`ai_api.resources`): a
+  client with a read-only `generation`; `OpenAIClient` and
+  `AnthropicClient` match it.
+- `OpenAIClient(token, **session_kwargs)` and
+  `AnthropicClient(token, **session_kwargs)` pass every keyword argument of
+  `AiohttpSession` to the session built from the token, typed by
+  `ai_api.session.aiohttp.AiohttpSessionOptions`; with `session=` they raise
+  `ValueError`.
+- The root package re-exports the shared generation layer:
+  `GenerationRequest`, `Turn`, `GenerationResponse`, `TokenUsage`,
+  `TextDeltaEvent`, `CompletedEvent`, `OtherEvent`, `GenerationEvent`,
+  `GenerationStream`, `IGenerationResource` and `IGenerationClient`.
 
 ### Changed
+
+- `generation.stream(...)` yields a `GenerationStream`, a `Stream` subclass,
+  instead of a plain `Stream`.
+- `CompletedEvent.model` is required: an adapter that builds the event
+  passes the model.
 
 - An Anthropic stream builds a real `Usage` (from `message_start` and the
   cumulative `message_delta` counts) and `MessageDelta` for the final

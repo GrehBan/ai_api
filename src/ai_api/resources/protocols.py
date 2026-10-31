@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol, overload
 
+from ai_api.client.protocols import IClient
 from ai_api.response.stream import Stream
 from ai_api.session.protocols import ISession
 from ai_api.types.requests.base import BaseRequest
 from ai_api.types.requests.generation import GenerationRequest
 from ai_api.types.responses.base import BaseResponse
-from ai_api.types.responses.events import BaseResponseEvent, GenerationEvent
+from ai_api.types.responses.events import BaseResponseEvent
 from ai_api.types.responses.generation import GenerationResponse
+
+if TYPE_CHECKING:
+    from ai_api.resources.stream import GenerationStream
+    from ai_api.types.requests.generation import Turn
 
 
 class ISessionAccess(Protocol):
@@ -76,33 +81,105 @@ class ICompositeUseCase[
 
 
 class IGenerationResource[RawT, RawItemT](IResource, Protocol):
-    """Generates text; the same interface for every provider."""
+    """Generates text; the same interface for every provider.
 
+    Both methods take the request's fields as keyword arguments, as the
+    providers' SDKs do, or a ready ``GenerationRequest``.
+    """
+
+    @overload
+    async def create(
+        self,
+        /,
+        *,
+        model: str,
+        input: str | list[Turn],
+        instructions: str | None = None,
+        max_output_tokens: int | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> GenerationResponse[RawT]: ...
+
+    @overload
     async def create(
         self,
         request: GenerationRequest,
+        /,
+    ) -> GenerationResponse[RawT]: ...
+
+    async def create(
+        self,
+        request: GenerationRequest | None = None,
+        /,
+        **fields: Any,
     ) -> GenerationResponse[RawT]:
         """Generate the whole response at once.
 
         Args:
-            request: What to generate.
+            request: What to generate, as a ready request.
+            **fields: What to generate, as the fields of a
+                ``GenerationRequest``.
 
         Returns:
             The generated text with the provider's own response.
         """
         ...
 
+    @overload
+    def stream(
+        self,
+        /,
+        *,
+        model: str,
+        input: str | list[Turn],
+        instructions: str | None = None,
+        max_output_tokens: int | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
+
+    @overload
     def stream(
         self,
         request: GenerationRequest,
-    ) -> AbstractAsyncContextManager[Stream[GenerationEvent[RawItemT]]]:
+        /,
+    ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
+
+    def stream(
+        self,
+        request: GenerationRequest | None = None,
+        /,
+        **fields: Any,
+    ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]:
         """Open a stream of generation events; use with ``async with``.
 
         Args:
-            request: What to generate.
+            request: What to generate, as a ready request.
+            **fields: What to generate, as the fields of a
+                ``GenerationRequest``.
 
         Returns:
-            A context manager that yields the events and closes the
-            stream on exit.
+            A context manager that yields the events, with the
+            ``text()`` and ``final()`` helpers, and closes the stream on
+            exit.
         """
+        ...
+
+
+class IGenerationClient[RawT = Any, RawItemT = Any](IClient, Protocol):
+    """A client that generates text; every provider's client is one.
+
+    ``RawT`` is the provider's response and ``RawItemT`` one item of its
+    stream; both default to ``Any`` for code that works with any
+    provider.
+
+    Example:
+        >>> async def ask(client: IGenerationClient, question: str) -> str:
+        ...     response = await client.generation.create(
+        ...         model=MODEL, input=question
+        ...     )
+        ...     return response.text or ""
+    """
+
+    @property
+    def generation(self) -> IGenerationResource[RawT, RawItemT]:
+        """Shared text generation over the provider's API."""
         ...
