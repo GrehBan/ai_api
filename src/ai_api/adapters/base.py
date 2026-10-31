@@ -11,6 +11,32 @@ from ai_api.types.responses.base import BaseResponse
 from ai_api.types.responses.events import BaseResponseEvent
 
 
+class BaseConversion[SourceT, TargetT](ABC):
+    """Base class of conversions between provider and shared values.
+
+    A conversion is pure: it converts one value and does no I/O. It
+    names what it converts in its type, ``source → target``, and an
+    adapter takes it as a keyword argument, so a caller can swap it.
+
+    Example:
+        >>> class UsageConversion(BaseConversion[Usage, TokenUsage]):
+        ...     def __call__(self, source):
+        ...         return TokenUsage(input_tokens=source.input_tokens)
+    """
+
+    @abstractmethod
+    def __call__(self, source: SourceT, /) -> TargetT:
+        """Convert a value.
+
+        Args:
+            source: The value to convert.
+
+        Returns:
+            The converted value.
+        """
+        raise NotImplementedError
+
+
 class BaseAdapter[
     ReqT: BaseRequest,
     RawT,

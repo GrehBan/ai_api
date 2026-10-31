@@ -388,15 +388,28 @@ async def test_stream_stopped_early_completes_with_its_reason() -> None:
     assert completed.refusal == "cyber"
 
 
-async def test_stream_without_message_start_has_partial_usage() -> None:
+async def test_stream_without_message_start_raises() -> None:
     payloads = [
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
         STREAM[-1],
     ]
 
-    completed = (await convert(payloads))[-1]
+    with pytest.raises(APIResponseError, match="without message_start"):
+        await convert(payloads)
 
-    assert completed.usage == TokenUsage()
+
+async def test_counts_before_message_start_raise() -> None:
+    payloads = [
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 1},
+        },
+        STREAM[-1],
+    ]
+
+    with pytest.raises(APIResponseError, match="before message_start"):
+        await convert(payloads)
 
 
 async def test_stream_stop_without_a_stop_reason_raises() -> None:
