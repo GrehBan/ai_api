@@ -295,7 +295,7 @@ def test_shared_conversation_passes_the_request_schema(case: Case) -> None:
         case.adapter.to_method(CONVERSATION),
         case.adapter.to_stream_method(CONVERSATION),
     ):
-        body = json.loads(method.model_dump_json(exclude_none=True))
+        body = json.loads(json.dumps(method.get_body_map()))
         assert errors(schema, body) == []
 
 
