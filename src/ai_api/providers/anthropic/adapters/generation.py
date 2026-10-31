@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.adapters.validation import check_last_turn, request_errors
-from ai_api.enums import Provider, Role
+from ai_api.enums import Provider
 from ai_api.exceptions import RequestValidationError
 from ai_api.providers.anthropic.adapters.conversions import (
+    INPUT_CONVERSION,
+    STOP_CONVERSION,
+    USAGE_CONVERSION,
     StreamState,
-    message_usage,
-    to_stop,
 )
 from ai_api.providers.anthropic.methods.messages import (
     CreateMessage,
@@ -35,6 +36,15 @@ from ai_api.types.responses.events import (
     TextDeltaEvent,
 )
 from ai_api.types.responses.generation import GenerationResponse
+
+if TYPE_CHECKING:
+    from ai_api.adapters.protocols import IConversion
+    from ai_api.adapters.stop import Stop
+    from ai_api.providers.anthropic.methods.base import MessageParam
+    from ai_api.providers.anthropic.types.events import MessageDelta
+    from ai_api.providers.anthropic.types.messages import Usage
+    from ai_api.types.requests.generation import Turn
+    from ai_api.types.responses.generation import TokenUsage
 
 DEFAULT_MAX_TOKENS: Final = 1024
 """``max_tokens`` sent when the request has no ``max_output_tokens``."""
@@ -70,9 +80,16 @@ class AnthropicGenerationAdapter(
     any other key raises instead of being dropped, and a conversation
     must end with a ``user`` turn.
 
+    The conversions of the input, the token counts and the stop are
+    keyword arguments, so any of them can be swapped without a subclass;
+    a stream goes through the same ones as a message.
+
     Attributes:
         default_max_tokens: ``max_tokens`` of a request without
             ``max_output_tokens``.
+        input_conversion: Turns the shared ``input`` into ``messages``.
+        usage_conversion: Turns Anthropic's ``Usage`` into shared counts.
+        stop_conversion: Tells how a message, or a stream, stopped.
 
     Example:
         >>> generation = GenerationResource(
@@ -81,13 +98,27 @@ class AnthropicGenerationAdapter(
     """
 
     def __init__(
-        self, *, default_max_tokens: int = DEFAULT_MAX_TOKENS
+        self,
+        *,
+        default_max_tokens: int = DEFAULT_MAX_TOKENS,
+        input_conversion: IConversion[
+            str | list[Turn], list[MessageParam]
+        ] = INPUT_CONVERSION,
+        usage_conversion: IConversion[Usage, TokenUsage] = USAGE_CONVERSION,
+        stop_conversion: IConversion[
+            Message | MessageDelta, Stop
+        ] = STOP_CONVERSION,
     ) -> None:
-        """Store the default token limit.
+        """Store the default token limit and the conversions.
 
         Args:
             default_max_tokens: ``max_tokens`` of a request without
                 ``max_output_tokens``; positive.
+            input_conversion: Turns the shared ``input`` into
+                ``messages``.
+            usage_conversion: Turns Anthropic's ``Usage`` into shared
+                counts.
+            stop_conversion: Tells how a message, or a stream, stopped.
 
         Raises:
             ValueError: If ``default_max_tokens`` is not positive.
@@ -99,6 +130,9 @@ class AnthropicGenerationAdapter(
             )
             raise ValueError(message)
         self.default_max_tokens = default_max_tokens
+        self.input_conversion = input_conversion
+        self.usage_conversion = usage_conversion
+        self.stop_conversion = stop_conversion
 
     def to_method(self, request: GenerationRequest) -> CreateMessage:
         """Build the method that creates a message at once.
@@ -135,13 +169,13 @@ class AnthropicGenerationAdapter(
         Raises:
             APIResponseError: The message has no stop reason.
         """
-        stop = to_stop(raw.stop_reason, raw.stop_details)
+        stop = self.stop_conversion(raw)
         return GenerationResponse[Message](
             id=raw.id,
             provider=Provider.ANTHROPIC,
             model=raw.model,
             text=raw.text,
-            usage=message_usage(raw.usage),
+            usage=self.usage_conversion(raw.usage),
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
@@ -185,8 +219,8 @@ class AnthropicGenerationAdapter(
 
         Raises:
             APIResponseError: ``message_stop`` came without a stop
-                reason. The stream's end is checked by ``StreamMessage``
-                and by the use case.
+                reason or without ``message_start``. The stream's end is
+                checked by ``StreamMessage`` and by the use case.
         """
         state = StreamState()
         async for item in items:
@@ -201,9 +235,9 @@ class AnthropicGenerationAdapter(
                 case MessageDeltaEvent():
                     state.update(item)
                 case MessageStopEvent():
-                    stop = state.stop()
+                    stop = self.stop_conversion(state.delta)
                     yield CompletedEvent[MessageStreamEvent](
-                        usage=state.usage(),
+                        usage=self.usage_conversion(state.usage()),
                         incomplete_reason=stop.incomplete_reason,
                         raw_incomplete_reason=stop.raw_incomplete_reason,
                         refusal=stop.refusal,
@@ -229,17 +263,9 @@ class AnthropicGenerationAdapter(
                 ``user_id``.
         """
         check_last_turn(request, Provider.ANTHROPIC)
-        messages = (
-            [{"role": Role.USER.value, "content": request.input}]
-            if isinstance(request.input, str)
-            else [
-                {"role": turn.role.value, "content": turn.content}
-                for turn in request.input
-            ]
-        )
         fields: dict[str, Any] = {
             "model": request.model,
-            "messages": messages,
+            "messages": self.input_conversion(request.input),
             "max_tokens": request.max_output_tokens or self.default_max_tokens,
             "system": request.instructions,
         }

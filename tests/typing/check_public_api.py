@@ -28,22 +28,30 @@ from ai_api import (
     ServerSentEvent,
     Stream,
 )
-from ai_api.adapters import BaseAdapter, BaseCompositeAdapter
+from ai_api.adapters import (
+    BaseAdapter,
+    BaseCompositeAdapter,
+    IConversion,
+)
+from ai_api.adapters import Stop as GenerationStop
 from ai_api.client import IClient
 from ai_api.http import IAPI
 from ai_api.methods import IAPIMethod, IStreamMethod
 from ai_api.providers.anthropic import AnthropicClient
+from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
 from ai_api.providers.anthropic.methods import (
     CreateMessage,
     MessageParam,
     StreamMessage,
 )
 from ai_api.providers.anthropic.types import Message, MessageStreamEvent
+from ai_api.providers.anthropic.types.messages import Usage
 from ai_api.providers.openai import OpenAIClient
 from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
 from ai_api.providers.openai.client import session_factory
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
+from ai_api.providers.openai.types.responses import ResponseUsage
 from ai_api.resources import (
     AdapterUseCase,
     BaseResource,
@@ -60,6 +68,7 @@ from ai_api.types.responses import (
     GenerationEvent,
     GenerationResponse,
     OtherEvent,
+    TokenUsage,
 )
 
 
@@ -414,3 +423,24 @@ async def anthropic_generation_infers_its_types(
     async with client.generation.stream(request) as events:
         assert_type(events, Stream[GenerationEvent[MessageStreamEvent]])
     AnthropicClient("sk", default_max_tokens="1")  # type: ignore[arg-type]
+
+
+def no_usage(source: Usage, /) -> TokenUsage:
+    """A plain function is a conversion of Anthropic's counts."""
+    return TokenUsage(input_tokens=source.input_tokens)
+
+
+def openai_usage(source: ResponseUsage, /) -> TokenUsage:
+    """A conversion of OpenAI's counts, not Anthropic's."""
+    return TokenUsage(input_tokens=source.input_tokens)
+
+
+def conversions_are_typed(
+    stop: IConversion[Response, GenerationStop],
+    response: Response,
+) -> None:
+    assert_type(stop(response), GenerationStop)
+    AnthropicGenerationAdapter(usage_conversion=no_usage)
+    OpenAIGenerationAdapter(stop_conversion=stop)
+    AnthropicGenerationAdapter(usage_conversion=openai_usage)  # type: ignore[arg-type]
+    AnthropicGenerationAdapter(stop_conversion=stop)  # type: ignore[arg-type]

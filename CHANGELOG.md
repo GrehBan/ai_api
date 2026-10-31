@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Conversions: `ai_api.adapters.IConversion[SourceT, TargetT]` (a protocol
+  of `__call__(source, /)`, so a plain function fits) and its ABC
+  `BaseConversion`, for pure value conversions between a provider's types
+  and the shared ones; `ai_api.adapters.Stop` holds what a stop conversion
+  returns (`incomplete_reason`, `raw_incomplete_reason`, `refusal`).
+- `OpenAIGenerationAdapter` and `AnthropicGenerationAdapter` take
+  `input_conversion=`, `usage_conversion=` and `stop_conversion=` keyword
+  arguments (defaults: each provider's `InputConversion`,
+  `UsageConversion` and `StopConversion`), so one can be swapped without
+  subclassing the adapter. A response and a stream go through the same
+  conversions.
+- `tests/docs/test_unification.py` checks that every field of
+  `docs/unification.md` is filled by a conversion that every adapter has,
+  or is listed as taken as is.
+
+### Changed
+
+- An Anthropic stream builds a real `Usage` (from `message_start` and the
+  cumulative `message_delta` counts) and `MessageDelta` for the final
+  `CompletedEvent`. A stream without `message_start`, or with counts before
+  it, now raises `APIResponseError` instead of reporting partial counts.
+
+### Removed
+
+- The internal conversion functions they replace: OpenAI's `to_usage`,
+  `refusal`, `incomplete_reason`, `raw_incomplete_reason` and `to_event`,
+  Anthropic's `to_usage`, `message_usage` and `to_stop` (its `Stop` moved
+  to `ai_api.adapters`).
+
 ## [0.2.0] - 2026-10-31
 
 ### Added

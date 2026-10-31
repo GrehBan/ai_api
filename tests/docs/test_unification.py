@@ -85,6 +85,66 @@ def test_every_shared_field_has_a_row(model: type[BaseModel]) -> None:
     assert documented(model.__name__) == set(model.model_fields)
 
 
+STOP_FIELDS = ("incomplete_reason", "raw_incomplete_reason", "refusal")
+
+CONVERSIONS = {
+    "input_conversion": {"GenerationRequest.input"},
+    "usage_conversion": {
+        "GenerationResponse.usage",
+        "CompletedEvent.usage",
+        *(f"TokenUsage.{name}" for name in TokenUsage.model_fields),
+    },
+    "stop_conversion": {
+        f"{owner}.{name}"
+        for owner in ("GenerationResponse", "CompletedEvent")
+        for name in STOP_FIELDS
+    },
+}
+"""The shared fields each conversion of an adapter fills."""
+
+TAKEN_AS_IS = {
+    "GenerationRequest.model",
+    "GenerationRequest.instructions",
+    "GenerationRequest.max_output_tokens",
+    "GenerationRequest.metadata",
+    "GenerationResponse.id",
+    "GenerationResponse.provider",
+    "GenerationResponse.model",
+    "GenerationResponse.text",
+    "GenerationResponse.raw",
+    "CompletedEvent.type",
+    "CompletedEvent.raw",
+}
+"""The shared fields an adapter copies or sets without a conversion."""
+
+
+def test_every_documented_field_is_converted_or_taken_as_is() -> None:
+    fields = {
+        f"{model.__name__}.{name}"
+        for model in (
+            GenerationRequest,
+            GenerationResponse,
+            TokenUsage,
+            CompletedEvent,
+        )
+        for name in documented(model.__name__)
+    }
+    converted = set[str]().union(*CONVERSIONS.values())
+
+    assert converted.isdisjoint(TAKEN_AS_IS)
+    assert fields == converted | TAKEN_AS_IS
+
+
+@pytest.mark.parametrize(
+    "adapter",
+    [OpenAIGenerationAdapter(), AnthropicGenerationAdapter()],
+    ids=["openai", "anthropic"],
+)
+def test_every_provider_has_every_conversion(adapter: object) -> None:
+    for name in CONVERSIONS:
+        assert callable(getattr(adapter, name))
+
+
 def test_every_shared_event_has_a_row() -> None:
     union = get_args(GenerationEvent.__value__)[0]
     events = {
@@ -251,4 +311,3 @@ async def test_documented_response_errors_are_raised(
 
     with pytest.raises(raises(case)):
         await ASYNC_CASES[case](recorder)
-

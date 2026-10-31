@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
-from ai_api.enums import IncompleteReason
+from pydantic import BaseModel
+
+from ai_api.adapters.base import BaseConversion
+from ai_api.adapters.stop import Stop
+from ai_api.enums import IncompleteReason, Role
 from ai_api.http.exceptions.response import APIResponseError
+from ai_api.providers.anthropic.methods.base import MessageParam
 from ai_api.providers.anthropic.types.events import (
+    MessageDelta,
     MessageDeltaEvent,
     MessageStartEvent,
 )
-from ai_api.providers.anthropic.types.messages import (
-    OutputTokensDetails,
-    StopDetails,
-    Usage,
-)
+from ai_api.providers.anthropic.types.messages import Message, Usage
+from ai_api.types.requests.generation import Turn
 from ai_api.types.responses.generation import TokenUsage
 
 FINISHED: Final = frozenset({"end_turn", "stop_sequence"})
@@ -40,150 +43,132 @@ REFUSAL: Final = "refusal"
 """The stop reason of a refusal."""
 
 
-@dataclass(frozen=True, slots=True)
-class Stop:
-    """How a message stopped, in shared terms.
+class InputConversion(
+    BaseConversion[str | list[Turn], list[MessageParam]],
+):
+    """Converts the shared ``input`` into ``messages``.
 
-    Attributes:
-        incomplete_reason: Shared reason of an early stop; ``None`` if
-            the message reached its end.
-        raw_incomplete_reason: Anthropic's stop reason of an early stop.
-        refusal: The refusal's explanation, else its category, if the
-            model refused and Anthropic says why.
+    A text becomes one ``user`` turn; a list of turns is sent as it is.
     """
 
-    incomplete_reason: IncompleteReason | None
-    raw_incomplete_reason: str | None
-    refusal: str | None
+    def __call__(self, source: str | list[Turn], /) -> list[MessageParam]:
+        """Convert the input.
+
+        Args:
+            source: The text or the turns of the shared request.
+
+        Returns:
+            One message per turn.
+        """
+        if isinstance(source, str):
+            return [{"role": Role.USER.value, "content": source}]
+        return [
+            {"role": turn.role.value, "content": turn.content}
+            for turn in source
+        ]
 
 
-def to_stop(
-    stop_reason: str | None,
-    stop_details: StopDetails | None,
-) -> Stop:
-    """Tell how a message stopped.
-
-    Args:
-        stop_reason: The stop reason of a finished message.
-        stop_details: More about the stop, if sent.
-
-    Returns:
-        Nothing set if the message reached its end; else the shared and
-        Anthropic's reason, and for a refusal its explanation.
-
-    Raises:
-        APIResponseError: The message has no stop reason, which Anthropic
-            sends on every finished message.
-    """
-    if stop_reason is None:
-        message = "Anthropic message finished without a stop_reason"
-        raise APIResponseError(message)
-    if stop_reason in FINISHED:
-        return Stop(None, None, None)
-    refusal = None
-    if stop_reason == REFUSAL and stop_details is not None:
-        refusal = stop_details.explanation or stop_details.category
-    return Stop(
-        INCOMPLETE_REASONS.get(stop_reason, IncompleteReason.OTHER),
-        stop_reason,
-        refusal,
-    )
-
-
-def to_usage(
-    *,
-    input_tokens: int | None,
-    cache_creation_input_tokens: int | None,
-    cache_read_input_tokens: int | None,
-    output_tokens: int | None,
-    output_tokens_details: OutputTokensDetails | None,
-) -> TokenUsage:
-    """Convert Anthropic's token counts.
+class UsageConversion(BaseConversion[Usage, TokenUsage]):
+    """Converts Anthropic's token counts.
 
     Anthropic counts input read from and written to the cache apart from
     the rest; the shared ``input_tokens`` is their sum, and
     ``total_tokens`` adds the output.
-
-    Args:
-        input_tokens: Input tokens outside the cache, if known.
-        cache_creation_input_tokens: Input tokens written to the cache.
-        cache_read_input_tokens: Input tokens read from the cache.
-        output_tokens: Generated tokens, if known.
-        output_tokens_details: Breakdown of the output tokens, if sent.
-
-    Returns:
-        The shared token counts; a sum is ``None`` if a part of it that
-        is always sent is unknown.
     """
-    total_input = (
-        None
-        if input_tokens is None
-        else input_tokens
-        + (cache_creation_input_tokens or 0)
-        + (cache_read_input_tokens or 0)
-    )
-    total = (
-        None
-        if total_input is None or output_tokens is None
-        else total_input + output_tokens
-    )
-    return TokenUsage(
-        input_tokens=total_input,
-        output_tokens=output_tokens,
-        total_tokens=total,
-        cache_read_tokens=cache_read_input_tokens,
-        cache_write_tokens=cache_creation_input_tokens,
-        reasoning_tokens=(
-            None
-            if output_tokens_details is None
-            else output_tokens_details.thinking_tokens
-        ),
-    )
+
+    def __call__(self, source: Usage, /) -> TokenUsage:
+        """Convert the counts of a message.
+
+        Args:
+            source: Token counts of a message.
+
+        Returns:
+            The shared token counts.
+        """
+        cache_write = source.cache_creation_input_tokens
+        cache_read = source.cache_read_input_tokens
+        input_tokens = (
+            source.input_tokens + (cache_write or 0) + (cache_read or 0)
+        )
+        details = source.output_tokens_details
+        return TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=source.output_tokens,
+            total_tokens=input_tokens + source.output_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            reasoning_tokens=(
+                None if details is None else details.thinking_tokens
+            ),
+        )
 
 
-def message_usage(usage: Usage) -> TokenUsage:
-    """Convert the token counts of a whole message.
+class StopConversion(BaseConversion[Message | MessageDelta, Stop]):
+    """Tells how a message stopped.
 
-    Args:
-        usage: Token counts of a message.
-
-    Returns:
-        The shared token counts.
+    It takes a ``Message``, or for a stream the ``MessageDelta`` that
+    ``StreamState`` collects: both carry ``stop_reason`` and
+    ``stop_details``.
     """
-    return to_usage(
-        input_tokens=usage.input_tokens,
-        cache_creation_input_tokens=usage.cache_creation_input_tokens,
-        cache_read_input_tokens=usage.cache_read_input_tokens,
-        output_tokens=usage.output_tokens,
-        output_tokens_details=usage.output_tokens_details,
-    )
+
+    def __call__(self, source: Message | MessageDelta, /) -> Stop:
+        """Convert the stop of a finished message.
+
+        Args:
+            source: The message, or the collected changes of a stream.
+
+        Returns:
+            Nothing set if the message reached its end; else the shared and
+            Anthropic's reason, and for a refusal its explanation, else its
+            category.
+
+        Raises:
+            APIResponseError: There is no stop reason, which Anthropic
+                sends on every finished message.
+        """
+        stop_reason = source.stop_reason
+        if stop_reason is None:
+            message = "Anthropic message finished without a stop_reason"
+            raise APIResponseError(message)
+        if stop_reason in FINISHED:
+            return Stop()
+        details = source.stop_details
+        refusal = None
+        if stop_reason == REFUSAL and details is not None:
+            refusal = details.explanation or details.category
+        return Stop(
+            INCOMPLETE_REASONS.get(stop_reason, IncompleteReason.OTHER),
+            stop_reason,
+            refusal,
+        )
+
+
+INPUT_CONVERSION: Final = InputConversion()
+"""The default conversion of the shared ``input``."""
+
+USAGE_CONVERSION: Final = UsageConversion()
+"""The default conversion of token counts."""
+
+STOP_CONVERSION: Final = StopConversion()
+"""The default conversion of a message's stop."""
 
 
 @dataclass
 class StreamState:
     """What a message stream has told so far about the whole message.
 
-    ``message_start`` carries the input tokens, and every
+    ``message_start`` carries the message's ``Usage``, and every
     ``message_delta`` the stop reason and the cumulative counts, so the
-    counts are replaced, never added up.
+    counts are replaced, never added up. At the end the state gives a
+    real ``Usage`` and ``MessageDelta``, so a stream goes through the
+    same conversions as a message.
 
     Attributes:
-        input_tokens: Input tokens outside the cache.
-        cache_creation_input_tokens: Input tokens written to the cache.
-        cache_read_input_tokens: Input tokens read from the cache.
-        output_tokens: Generated tokens so far.
-        output_tokens_details: Breakdown of the output tokens, if sent.
-        stop_reason: Why generation stopped, once known.
-        stop_details: More about the stop, once known.
+        delta: The stop reason and details sent so far.
     """
 
-    input_tokens: int | None = None
-    cache_creation_input_tokens: int | None = None
-    cache_read_input_tokens: int | None = None
-    output_tokens: int | None = None
-    output_tokens_details: OutputTokensDetails | None = None
-    stop_reason: str | None = None
-    stop_details: StopDetails | None = None
+    delta: MessageDelta = field(default_factory=MessageDelta)
+    _usage: Usage | None = field(default=None, init=False, repr=False)
 
     def start(self, event: MessageStartEvent) -> None:
         """Take the counts of ``message_start``.
@@ -191,60 +176,61 @@ class StreamState:
         Args:
             event: The first event of the stream.
         """
-        usage = event.message.usage
-        self.input_tokens = usage.input_tokens
-        self.cache_creation_input_tokens = usage.cache_creation_input_tokens
-        self.cache_read_input_tokens = usage.cache_read_input_tokens
-        self.output_tokens = usage.output_tokens
-        self.output_tokens_details = usage.output_tokens_details
+        self._usage = event.message.usage
 
     def update(self, event: MessageDeltaEvent) -> None:
         """Take the stop reason and counts of a ``message_delta``.
 
         Args:
             event: A ``message_delta`` event.
+
+        Raises:
+            APIResponseError: The event has counts, but no
+                ``message_start`` came before it to take them into.
         """
-        if event.delta.stop_reason is not None:
-            self.stop_reason = event.delta.stop_reason
-        if event.delta.stop_details is not None:
-            self.stop_details = event.delta.stop_details
+        changes = _sent(event.delta)
+        if changes:
+            self.delta = self.delta.model_copy(update=changes)
         usage = event.usage
         if usage is None:
             return
-        self.output_tokens = usage.output_tokens
-        if usage.output_tokens_details is not None:
-            self.output_tokens_details = usage.output_tokens_details
-        if usage.input_tokens is not None:
-            self.input_tokens = usage.input_tokens
-        if usage.cache_creation_input_tokens is not None:
-            self.cache_creation_input_tokens = (
-                usage.cache_creation_input_tokens
+        if self._usage is None:
+            message = (
+                "Anthropic stream sent message_delta before message_start"
             )
-        if usage.cache_read_input_tokens is not None:
-            self.cache_read_input_tokens = usage.cache_read_input_tokens
+            raise APIResponseError(message)
+        self._usage = self._usage.model_copy(update=_sent(usage))
 
-    def usage(self) -> TokenUsage:
-        """Convert the counts known so far.
-
-        Returns:
-            The shared token counts.
-        """
-        return to_usage(
-            input_tokens=self.input_tokens,
-            cache_creation_input_tokens=self.cache_creation_input_tokens,
-            cache_read_input_tokens=self.cache_read_input_tokens,
-            output_tokens=self.output_tokens,
-            output_tokens_details=self.output_tokens_details,
-        )
-
-    def stop(self) -> Stop:
-        """Tell how the message stopped, from what was sent so far.
+    def usage(self) -> Usage:
+        """Give the counts of the whole message.
 
         Returns:
-            The shared and Anthropic's reason, and a refusal's
-            explanation.
+            The counts of ``message_start`` with the last cumulative
+            counts of ``message_delta``.
 
         Raises:
-            APIResponseError: No ``message_delta`` gave a stop reason.
+            APIResponseError: The stream had no ``message_start``.
         """
-        return to_stop(self.stop_reason, self.stop_details)
+        if self._usage is None:
+            message = "Anthropic stream finished without message_start"
+            raise APIResponseError(message)
+        return self._usage
+
+
+def _sent(model: BaseModel) -> dict[str, object]:
+    """Take the fields of a model that have a value.
+
+    The values stay as they are, nested models included, so they can
+    update another model with ``model_copy``.
+
+    Args:
+        model: A partial update, such as a ``message_delta``'s counts.
+
+    Returns:
+        Each field that is not ``None``, with its value.
+    """
+    return {
+        name: value
+        for name in type(model).model_fields
+        if (value := getattr(model, name)) is not None
+    }

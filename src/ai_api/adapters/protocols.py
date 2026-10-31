@@ -11,6 +11,26 @@ from ai_api.types.responses.base import BaseResponse
 from ai_api.types.responses.events import BaseResponseEvent
 
 
+class IConversion[SourceT, TargetT](Protocol):
+    """Converts one provider value into a shared one, or back.
+
+    An adapter takes its conversions as keyword arguments, so one can be
+    swapped without subclassing the adapter. A plain function matches
+    too: the source is positional-only, so its name does not matter.
+    """
+
+    def __call__(self, source: SourceT, /) -> TargetT:
+        """Convert a value.
+
+        Args:
+            source: The value to convert.
+
+        Returns:
+            The converted value.
+        """
+        ...
+
+
 class IAdapter[
     ReqT: BaseRequest,
     RawT,

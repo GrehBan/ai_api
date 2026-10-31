@@ -3,28 +3,42 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.adapters.validation import check_last_turn, request_errors
 from ai_api.enums import Provider
 from ai_api.providers.openai.adapters.conversions import (
+    INPUT_CONVERSION,
+    STOP_CONVERSION,
+    USAGE_CONVERSION,
     check_status,
-    incomplete_reason,
-    raw_incomplete_reason,
-    refusal,
-    to_event,
-    to_usage,
 )
 from ai_api.providers.openai.methods.responses import (
     CreateResponse,
     StreamResponse,
 )
-from ai_api.providers.openai.types.events import ResponseStreamEvent
+from ai_api.providers.openai.types.events import (
+    OutputTextDeltaEvent,
+    ResponseStateEvent,
+    ResponseStreamEvent,
+)
 from ai_api.providers.openai.types.responses import Response
 from ai_api.types.requests.generation import GenerationRequest
-from ai_api.types.responses.events import GenerationEvent
+from ai_api.types.responses.events import (
+    CompletedEvent,
+    GenerationEvent,
+    OtherEvent,
+    TextDeltaEvent,
+)
 from ai_api.types.responses.generation import GenerationResponse
+
+if TYPE_CHECKING:
+    from ai_api.adapters.protocols import IConversion
+    from ai_api.adapters.stop import Stop
+    from ai_api.providers.openai.types.responses import ResponseUsage
+    from ai_api.types.requests.generation import Turn
+    from ai_api.types.responses.generation import TokenUsage
 
 
 class OpenAIGenerationAdapter(
@@ -45,12 +59,45 @@ class OpenAIGenerationAdapter(
     conversation that does not end with a ``user`` turn, raises
     ``RequestValidationError`` before anything is sent.
 
+    The conversions of the input, the token counts and the stop are
+    keyword arguments, so any of them can be swapped without a subclass;
+    a stream's terminal event goes through the same ones as a response.
+
+    Attributes:
+        input_conversion: Turns the shared ``input`` into OpenAI's.
+        usage_conversion: Turns OpenAI's ``ResponseUsage`` into shared
+            counts.
+        stop_conversion: Tells how a finished response stopped.
+
     Example:
         >>> generation = GenerationResource(session, OpenAIGenerationAdapter())
         >>> response = await generation.create(
         ...     GenerationRequest(model="gpt-5", input="Hi")
         ... )
     """
+
+    def __init__(
+        self,
+        *,
+        input_conversion: IConversion[
+            str | list[Turn], str | list[dict[str, Any]]
+        ] = INPUT_CONVERSION,
+        usage_conversion: IConversion[
+            ResponseUsage, TokenUsage
+        ] = USAGE_CONVERSION,
+        stop_conversion: IConversion[Response, Stop] = STOP_CONVERSION,
+    ) -> None:
+        """Store the conversions.
+
+        Args:
+            input_conversion: Turns the shared ``input`` into OpenAI's.
+            usage_conversion: Turns OpenAI's ``ResponseUsage`` into
+                shared counts.
+            stop_conversion: Tells how a finished response stopped.
+        """
+        self.input_conversion = input_conversion
+        self.usage_conversion = usage_conversion
+        self.stop_conversion = stop_conversion
 
     def to_method(self, request: GenerationRequest) -> CreateResponse:
         """Build the method that creates a response at once.
@@ -89,15 +136,16 @@ class OpenAIGenerationAdapter(
                 is raised by ``CreateResponse`` before it gets here.
         """
         check_status(raw)
+        stop = self.stop_conversion(raw)
         return GenerationResponse[Response](
             id=raw.id,
             provider=Provider.OPENAI,
             model=raw.model,
             text=raw.output_text,
-            usage=to_usage(raw.usage),
-            incomplete_reason=incomplete_reason(raw),
-            raw_incomplete_reason=raw_incomplete_reason(raw),
-            refusal=refusal(raw),
+            usage=self._usage(raw.usage),
+            incomplete_reason=stop.incomplete_reason,
+            raw_incomplete_reason=stop.raw_incomplete_reason,
+            refusal=stop.refusal,
             raw=raw,
         )
 
@@ -133,10 +181,54 @@ class OpenAIGenerationAdapter(
             checked by ``StreamResponse`` and by the use case.
         """
         async for item in items:
-            yield to_event(item)
+            yield self._to_event(item)
 
-    @staticmethod
-    def _fields(request: GenerationRequest) -> dict[str, Any]:
+    def _to_event(
+        self,
+        event: ResponseStreamEvent,
+    ) -> GenerationEvent[ResponseStreamEvent]:
+        """Convert one event of a Responses stream.
+
+        Args:
+            event: The event OpenAI sent.
+
+        Returns:
+            A text delta, the completion (also of an incomplete
+            response), or ``OtherEvent`` for every other event.
+            ``response.failed`` never gets here: ``StreamResponse``
+            raises it as an ``APIStatusError``.
+        """
+        match event:
+            case OutputTextDeltaEvent():
+                return TextDeltaEvent[ResponseStreamEvent](
+                    text=event.delta, raw=event
+                )
+            case ResponseStateEvent(
+                type="response.completed" | "response.incomplete"
+            ):
+                stop = self.stop_conversion(event.response)
+                return CompletedEvent[ResponseStreamEvent](
+                    usage=self._usage(event.response.usage),
+                    incomplete_reason=stop.incomplete_reason,
+                    raw_incomplete_reason=stop.raw_incomplete_reason,
+                    refusal=stop.refusal,
+                    raw=event,
+                )
+            case _:
+                return OtherEvent[ResponseStreamEvent](raw=event)
+
+    def _usage(self, usage: ResponseUsage | None) -> TokenUsage | None:
+        """Convert the token counts, if OpenAI reported them.
+
+        Args:
+            usage: Token counts of a response, if sent.
+
+        Returns:
+            The shared counts, or ``None`` without counts.
+        """
+        return None if usage is None else self.usage_conversion(usage)
+
+    def _fields(self, request: GenerationRequest) -> dict[str, Any]:
         """Take the method fields of a request.
 
         Args:
@@ -152,14 +244,7 @@ class OpenAIGenerationAdapter(
         check_last_turn(request, Provider.OPENAI)
         return {
             "model": request.model,
-            "input": (
-                request.input
-                if isinstance(request.input, str)
-                else [
-                    {"role": turn.role.value, "content": turn.content}
-                    for turn in request.input
-                ]
-            ),
+            "input": self.input_conversion(request.input),
             "instructions": request.instructions,
             "max_output_tokens": request.max_output_tokens,
             "metadata": request.metadata,
