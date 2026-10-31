@@ -1,0 +1,209 @@
+{
+ "docs_revision": "30524ef105a10509e9d1402f5f855c99865a206c",
+ "sdk_versions": {
+  "openai": "3.41.0",
+  "anthropic": "2.3.0"
+ },
+ "endpoints": {
+  "openai/responses": {
+   "operation": "openai:post:688886f44f64cc",
+   "stream_contract": "openai.responses",
+   "request": {
+    "file": "providers/openai/schemas/derived/080ec51f9714243a47ffeca107035cfb6d6facbac11eea55c5ec1b2f0f680b4e.json",
+    "sha256": "fcfdeba1c6e51e0f072127b4f1c96bc7a7fca36c77149747f0adc6170664c4e8",
+    "provenance": {
+     "api_version": null,
+     "kind": "official_sdk_derived",
+     "package": "openai",
+     "version": "3.41.0",
+     "source": "https://github.com/openai/openai-python/blob/v3.41.0/src/openai/resources/responses/responses.py",
+     "source_sha256": "b9a2ef1b61d33450318babc49e2b25f604628983804e7ebf4291f8802f372aee",
+     "class": "Responses",
+     "method": "create",
+     "transformation": "pydantic.TypeAdapter.json_schema(validation)",
+     "request_mode": "streaming and nonstreaming request variants; stream event types are separate contracts",
+     "documented_constraint_overlay": {
+      "context_management": {
+       "minItems": 1
+      },
+      "max_output_tokens": {
+       "minimum": 16
+      },
+      "safety_identifier": {
+       "maxLength": 128
+      }
+     },
+     "constraint_source": "providers/openai/api/reference/resources/responses/methods/create.md"
+    }
+   },
+   "response": {
+    "file": "providers/openai/schemas/derived/4690ac631f57a0f3bb7e8e46da165e084960c47c9251757c08f6a6e49f44681a.json",
+    "sha256": "0ff551484345bc6d70022a3d33fabf3979344e99e1a1d4b7175067251481347c",
+    "provenance": {
+     "api_version": null,
+     "kind": "official_sdk_derived",
+     "package": "openai",
+     "version": "3.41.0",
+     "source": "https://github.com/openai/openai-python/blob/v3.41.0/src/openai/resources/responses/responses.py",
+     "source_sha256": "b9a2ef1b61d33450318babc49e2b25f604628983804e7ebf4291f8802f372aee",
+     "class": "Responses",
+     "method": "create",
+     "transformation": "pydantic.TypeAdapter.json_schema(validation)",
+     "request_mode": "streaming and nonstreaming request variants; stream event types are separate contracts"
+    }
+   },
+   "stream": {
+    "file": "providers/openai/schemas/derived/stream-responses.json",
+    "provenance": {
+     "kind": "official_sdk_derived",
+     "type": "openai.types.responses.ResponseStreamEvent",
+     "package": "openai",
+     "version": "3.41.0"
+    }
+   },
+   "responses": 9,
+   "events": 9,
+   "rejected": [
+    {
+     "id": "8a2a2dca3359dc114f4501de",
+     "group": "responses",
+     "error": "{'input_tokens': 17, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 150, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 167} is not valid under any of the given sche"
+    },
+    {
+     "id": "c6a73770efd350c4dcd9ea68",
+     "group": "responses",
+     "error": "{'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'Hello!'}]} is not valid under any of the given schemas"
+    },
+    {
+     "id": "23d24556aba34b908e21c74a",
+     "group": "responses",
+     "error": "{'input_tokens': 17, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 150, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 167} is not valid under any of the given sche"
+    },
+    {
+     "id": "0920f59c3e1c8e8f6b9263e1",
+     "group": "responses",
+     "error": "{'input_tokens': 17, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 150, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 167} is not valid under any of the given sche"
+    },
+    {
+     "id": "e5037368b08e0c40d9bea39f",
+     "group": "responses",
+     "error": "{'input_tokens': 17, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 150, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 167} is not valid under any of the given sche"
+    },
+    {
+     "id": "183c698e07e2a2052e0fd15d",
+     "group": "responses",
+     "error": "{'input_tokens': 17, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 150, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 167} is not valid under any of the given sche"
+    },
+    {
+     "id": "ca63244befb36605547a6bfd",
+     "group": "responses",
+     "error": "{'input_tokens': 17, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 150, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 167} is not valid under any of the given sche"
+    }
+   ]
+  },
+  "anthropic/messages": {
+   "operation": "anthropic:post:c64fb925aa6487",
+   "stream_contract": "anthropic.messages",
+   "request": {
+    "file": "providers/anthropic/schemas/derived/7a032db47e6018cd96cfdecd153ac2b299bb61d15b0ce01ca3f2b2e3bc8e4d28.json",
+    "sha256": "d8784df183af4fbba4d8ee352ba4090005f40751ad6652403ab3ffd9d81cbd72",
+    "provenance": {
+     "api_version": "2026-10-21",
+     "kind": "official_sdk_derived",
+     "package": "anthropic",
+     "version": "2.3.0",
+     "source": "https://github.com/anthropics/anthropic-sdk-python/blob/v2.3.0/src/anthropic/resources/messages/messages.py",
+     "source_sha256": "7aaac5aa479b62ebe7dc23e4e7fd10f0f9c32503efd2ef9fa960170a5c737fa9",
+     "class": "Messages",
+     "method": "create",
+     "transformation": "pydantic.TypeAdapter.json_schema(validation)",
+     "request_mode": "streaming and nonstreaming request variants; stream event types are separate contracts"
+    }
+   },
+   "response": {
+    "file": "providers/anthropic/schemas/derived/1e6b49ceae6569820d4ef2d8c6c074a1b760533a44e2b7c7eddb17e48cf950fe.json",
+    "sha256": "c2b67bebb9d1d8e26530bf13ef2143aae0d89dc8b0cb8290a4e08b1338d25335",
+    "provenance": {
+     "api_version": "2026-10-21",
+     "kind": "official_sdk_derived",
+     "package": "anthropic",
+     "version": "2.3.0",
+     "source": "https://github.com/anthropics/anthropic-sdk-python/blob/v2.3.0/src/anthropic/resources/messages/messages.py",
+     "source_sha256": "7aaac5aa479b62ebe7dc23e4e7fd10f0f9c32503efd2ef9fa960170a5c737fa9",
+     "class": "Messages",
+     "method": "create",
+     "transformation": "pydantic.TypeAdapter.json_schema(validation)",
+     "request_mode": "streaming and nonstreaming request variants; stream event types are separate contracts"
+    }
+   },
+   "stream": {
+    "file": "providers/anthropic/schemas/derived/stream-messages.json",
+    "provenance": {
+     "kind": "official_sdk_derived",
+     "type": "anthropic.types.RawMessageStreamEvent",
+     "package": "anthropic",
+     "version": "2.3.0"
+    }
+   },
+   "responses": 3,
+   "events": 51,
+   "rejected": [
+    {
+     "id": "200f9a18657eccfa23864ef1",
+     "group": "events",
+     "error": "{'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'server_tool_use', 'id': 'srvtoolu_xyz789', 'name': 'bash_code_execution'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "0bb33a2ff46d86e0c416f1aa",
+     "group": "events",
+     "error": "{'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'server_tool_use', 'id': 'srvtoolu_xyz789', 'name': 'tool_search_tool_regex'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "9fdf96c64621f269b1a76a67",
+     "group": "events",
+     "error": "{'type': 'message_start', 'message': {'id': 'msg_abc123', 'type': 'message'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "9fdf96c64621f269b1a76a67",
+     "group": "events",
+     "error": "{'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'server_tool_use', 'id': 'srvtoolu_xyz789', 'name': 'web_fetch'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "b7c93f0244744dd2ffbf7649",
+     "group": "events",
+     "error": "{'type': 'message_start', 'message': {'id': 'msg_abc123', 'type': 'message'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "b7c93f0244744dd2ffbf7649",
+     "group": "events",
+     "error": "{'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'server_tool_use', 'id': 'srvtoolu_xyz789', 'name': 'web_search'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "b7c93f0244744dd2ffbf7649",
+     "group": "events",
+     "error": "{'type': 'content_block_start', 'index': 2, 'content_block': {'type': 'web_search_tool_result', 'tool_use_id': 'srvtoolu_xyz789', 'content': [{'type': 'web_search_result', 'title': 'Quantum Computing "
+    },
+    {
+     "id": "2dd575059024e1b4333f2872",
+     "group": "responses",
+     "error": "'model' is a required property"
+    },
+    {
+     "id": "323527cd25df5e9ae5a54825",
+     "group": "responses",
+     "error": "{'type': 'fallback', 'from': {'model': 'claude-fable-5'}, 'to': {'model': 'claude-opus-4-8'}, 'trigger': {'type': 'refusal', 'category': 'cyber'}} is not valid under any of the given schemas"
+    },
+    {
+     "id": "9e4ebabb83821bae6d789255",
+     "group": "events",
+     "error": "{'type': 'message_start', 'message': {'id': 'msg_01...', 'type': 'message', 'role': 'assistant', 'content': [], 'model': 'claude-opus-5-5', 'stop_reason': None, 'stop_sequence': None}} is not valid un"
+    },
+    {
+     "id": "9e4ebabb83821bae6d789255",
+     "group": "events",
+     "error": "{'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}} is not valid under any of the given schemas"
+    }
+   ]
+  }
+ }
+}
