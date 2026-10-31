@@ -6,10 +6,13 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 from ai_api.adapters.base import BaseCompositeAdapter
+from ai_api.adapters.validation import check_last_turn, request_errors
 from ai_api.enums import Provider
 from ai_api.providers.openai.adapters.conversions import (
     check_status,
     incomplete_reason,
+    raw_incomplete_reason,
+    refusal,
     to_event,
     to_usage,
 )
@@ -35,10 +38,12 @@ class OpenAIGenerationAdapter(
 ):
     """Generates text with ``POST /responses``.
 
-    Request fields map one to one. OpenAI's own limits are checked when
-    the method is built, so a request that OpenAI would reject, such as
-    ``max_output_tokens`` below 16 or more than 16 metadata pairs, fails
-    with a ``ValidationError`` before anything is sent.
+    Request fields map one to one; a list of turns becomes a list of
+    ``EasyInputMessage`` items. OpenAI's own limits are checked when the
+    method is built, so a request that OpenAI would reject, such as
+    ``max_output_tokens`` below 16, more than 16 metadata pairs or a
+    conversation that does not end with a ``user`` turn, raises
+    ``RequestValidationError`` before anything is sent.
 
     Example:
         >>> generation = GenerationResource(session, OpenAIGenerationAdapter())
@@ -55,8 +60,13 @@ class OpenAIGenerationAdapter(
 
         Returns:
             ``CreateResponse`` with the request's fields.
+
+        Raises:
+            RequestValidationError: OpenAI cannot take the request.
         """
-        return CreateResponse(**self._fields(request))
+        fields = self._fields(request)
+        with request_errors(Provider.OPENAI):
+            return CreateResponse(**fields)
 
     def to_response(
         self,
@@ -71,7 +81,8 @@ class OpenAIGenerationAdapter(
 
         Returns:
             The generated text with its token counts; an incomplete
-            response keeps its text and gets ``incomplete_reason``.
+            response keeps its text and gets ``incomplete_reason``, and
+            a refusal gets ``IncompleteReason.REFUSAL`` and ``refusal``.
 
         Raises:
             APIResponseError: The response did not finish. A failed one
@@ -85,6 +96,8 @@ class OpenAIGenerationAdapter(
             text=raw.output_text,
             usage=to_usage(raw.usage),
             incomplete_reason=incomplete_reason(raw),
+            raw_incomplete_reason=raw_incomplete_reason(raw),
+            refusal=refusal(raw),
             raw=raw,
         )
 
@@ -96,8 +109,13 @@ class OpenAIGenerationAdapter(
 
         Returns:
             ``StreamResponse`` with the request's fields.
+
+        Raises:
+            RequestValidationError: OpenAI cannot take the request.
         """
-        return StreamResponse(**self._fields(request))
+        fields = self._fields(request)
+        with request_errors(Provider.OPENAI):
+            return StreamResponse(**fields)
 
     async def to_events(
         self,
@@ -126,10 +144,22 @@ class OpenAIGenerationAdapter(
 
         Returns:
             The fields that both methods take.
+
+        Raises:
+            RequestValidationError: The conversation does not end with a
+                ``user`` turn.
         """
+        check_last_turn(request, Provider.OPENAI)
         return {
             "model": request.model,
-            "input": request.input,
+            "input": (
+                request.input
+                if isinstance(request.input, str)
+                else [
+                    {"role": turn.role.value, "content": turn.content}
+                    for turn in request.input
+                ]
+            ),
             "instructions": request.instructions,
             "max_output_tokens": request.max_output_tokens,
             "metadata": request.metadata,

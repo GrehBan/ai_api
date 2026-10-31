@@ -10,7 +10,8 @@ from typing import Any, ClassVar
 
 import pytest
 
-from ai_api.exceptions import AIAPIError
+from ai_api.enums import Provider
+from ai_api.exceptions import AIAPIError, RequestValidationError
 from ai_api.http.exceptions import status as http_errors
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.exceptions.status import HTTP_ERRORS, APIStatusError
@@ -203,9 +204,46 @@ def test_response_error_is_not_a_transport_error() -> None:
     assert issubclass(APIResponseError, AIAPIError)
 
 
+def test_request_validation_error_names_provider_and_field() -> None:
+    error = RequestValidationError(
+        "must be at least 16", provider=Provider.OPENAI, field="max_tokens"
+    )
+
+    assert isinstance(error, ValueError)
+    assert error.provider is Provider.OPENAI
+    assert error.field == "max_tokens"
+    assert str(error) == (
+        "openai cannot take the request field 'max_tokens'. "
+        "detail: must be at least 16"
+    )
+
+
+@pytest.mark.parametrize("clone", [copy.copy, copy.deepcopy, "pickle"])
+def test_request_validation_error_copies(clone: Any) -> None:
+    error = RequestValidationError(
+        "bad", provider=Provider.ANTHROPIC, field="metadata"
+    )
+
+    copied = (
+        pickle.loads(pickle.dumps(error))
+        if clone == "pickle"
+        else clone(error)
+    )
+
+    assert type(copied) is RequestValidationError
+    assert str(copied) == str(error)
+    assert copied.provider is Provider.ANTHROPIC
+    assert copied.field == "metadata"
+
+
 @pytest.mark.parametrize(
     "error_cls",
-    [APIStatusError, APITransportError, APIResponseError],
+    [
+        APIStatusError,
+        APITransportError,
+        APIResponseError,
+        RequestValidationError,
+    ],
     ids=lambda cls: cls.__name__,
 )
 def test_everything_derives_from_root(error_cls: type[Exception]) -> None:

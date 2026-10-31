@@ -53,6 +53,16 @@ class StopDetails(BaseAPIType):
     explanation: str | None = None
 
 
+class OutputTokensDetails(BaseAPIType):
+    """Breakdown of the output tokens.
+
+    Attributes:
+        thinking_tokens: Output tokens spent on thinking.
+    """
+
+    thinking_tokens: int
+
+
 class Usage(BaseAPIType):
     """Token counts of a message.
 
@@ -60,15 +70,17 @@ class Usage(BaseAPIType):
 
     Attributes:
         input_tokens: Input tokens not read from or written to the cache.
-        output_tokens: Generated tokens.
+        output_tokens: Generated tokens, thinking included.
         cache_creation_input_tokens: Input tokens written to the cache.
         cache_read_input_tokens: Input tokens read from the cache.
+        output_tokens_details: Breakdown of the output tokens, if sent.
     """
 
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    output_tokens_details: OutputTokensDetails | None = None
 
 
 class Message(BaseAPIType):

@@ -20,7 +20,7 @@ import pytest
 from aiohttp import ClientTimeout
 
 from ai_api.client.factory import SessionFactory
-from ai_api.enums import Provider
+from ai_api.enums import IncompleteReason, Provider
 from ai_api.http.exceptions.status import (
     BadRequestError,
     ServiceUnavailableError,
@@ -41,7 +41,7 @@ from ai_api.providers.openai.client import session_factory as openai_factory
 from ai_api.providers.openai.methods import StreamResponse
 from ai_api.resources import IGenerationResource
 from ai_api.response.stream import Stream
-from ai_api.types.requests import GenerationRequest
+from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
     CompletedEvent,
     TextDeltaEvent,
@@ -86,6 +86,8 @@ class Case:
         text: Its text.
         usage: Its shared token counts.
         truncated: A response cut off by the token limit.
+        refused: A response in which the model refused.
+        refusal: The refusal's text in it.
         stream: Events of a finished stream, its last event terminal.
         deltas: Text deltas of that stream.
         stream_usage: Shared token counts of that stream.
@@ -102,6 +104,8 @@ class Case:
     text: str
     usage: TokenUsage
     truncated: dict[str, Any]
+    refused: dict[str, Any]
+    refusal: str
     stream: list[dict[str, Any]]
     deltas: list[str]
     stream_usage: TokenUsage
@@ -127,16 +131,36 @@ OPENAI = Case(
     path="/v1/responses",
     response=openai.RESPONSE,
     text=openai.MESSAGE["content"][0]["text"],
-    usage=TokenUsage(input_tokens=328, output_tokens=52, total_tokens=380),
+    usage=TokenUsage(
+        input_tokens=328,
+        output_tokens=52,
+        total_tokens=380,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
+    ),
     truncated=openai.RESPONSE
     | {
         "status": "incomplete",
         "incomplete_details": {"reason": "max_output_tokens"},
     },
+    refused=openai.RESPONSE
+    | {
+        "output": [
+            openai.MESSAGE
+            | {"content": [{"type": "refusal", "refusal": "I can't."}]}
+        ]
+    },
+    refusal="I can't.",
     stream=openai.STREAM,
     deltas=["Hi"],
     stream_usage=TokenUsage(
-        input_tokens=328, output_tokens=52, total_tokens=380
+        input_tokens=328,
+        output_tokens=52,
+        total_tokens=380,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
     ),
     overloaded={
         "type": "error",
@@ -161,8 +185,17 @@ ANTHROPIC = Case(
     path="/v1/messages",
     response=anthropic.MESSAGE,
     text="Hi! My name is Claude.",
-    usage=TokenUsage(input_tokens=6197, output_tokens=503, total_tokens=6700),
+    usage=TokenUsage(
+        input_tokens=6197,
+        output_tokens=503,
+        total_tokens=6700,
+        cache_read_tokens=2051,
+        cache_write_tokens=2051,
+        reasoning_tokens=0,
+    ),
     truncated=anthropic.MESSAGE | {"stop_reason": "max_tokens"},
+    refused=anthropic.MESSAGE | {"stop_reason": "refusal"},
+    refusal=anthropic.MESSAGE["stop_details"]["explanation"],
     stream=anthropic.STREAM,
     deltas=["Hello", "!"],
     stream_usage=TokenUsage(
@@ -256,7 +289,50 @@ async def test_truncated_response_keeps_text_and_reason(
         response = await client.generation.create(REQUEST)
 
     assert response.text == case.text
-    assert response.incomplete_reason is not None
+    assert response.incomplete_reason is IncompleteReason.MAX_TOKENS
+
+
+async def test_refusal_is_an_answer(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(json=case.refused))
+
+    async with client:
+        response = await client.generation.create(REQUEST)
+
+    assert response.incomplete_reason is IncompleteReason.REFUSAL
+    assert response.refusal == case.refusal
+
+
+async def test_conversation_continues_with_the_response(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(json=case.response), Reply(json=case.response))
+
+    async with client:
+        first = await client.generation.create(REQUEST)
+        request = REQUEST.model_copy(
+            update={
+                "input": [Turn.user("Hi"), first.to_turn(), Turn.user("More")]
+            }
+        )
+        await client.generation.create(request)
+
+    sent = json.loads(recorder.last.body)
+    turns = (
+        sent["input"]
+        if case.provider is Provider.OPENAI
+        else (sent["messages"])
+    )
+    assert turns == [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": case.text},
+        {"role": "user", "content": "More"},
+    ]
 
 
 async def test_stream_yields_deltas_then_completes(

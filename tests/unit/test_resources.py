@@ -15,7 +15,14 @@ from ai_api.adapters.base import (
     BaseStreamAdapter,
 )
 from ai_api.adapters.protocols import ICompositeAdapter
-from ai_api.enums import BodyFormat, Provider, ResponseFormat
+from ai_api.enums import (
+    BodyFormat,
+    GenerationEventType,
+    IncompleteReason,
+    Provider,
+    ResponseFormat,
+    Role,
+)
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
@@ -37,7 +44,7 @@ from ai_api.resources.usecases import (
 from ai_api.response.buffered import BufferedResponse
 from ai_api.response.stream import Stream, map_stream
 from ai_api.types.base import BaseAPIType
-from ai_api.types.requests.generation import GenerationRequest
+from ai_api.types.requests.generation import GenerationRequest, Turn
 from ai_api.types.responses.events import (
     GENERATION_TERMINAL,
     CompletedEvent,
@@ -65,7 +72,7 @@ class Create(BaseAPIMethod[RawResponse]):
     __request_body_format__ = BodyFormat.JSON
 
     model: str
-    input: str
+    input: str | list[Turn]
 
 
 class CreateStream(BaseStreamMethod[RawEvent]):
@@ -75,7 +82,7 @@ class CreateStream(BaseStreamMethod[RawEvent]):
     __response_format__ = ResponseFormat.SSE
 
     model: str
-    input: str
+    input: str | list[Turn]
     stream: bool = True
 
 
@@ -450,6 +457,79 @@ def test_request_rejects_unknown_fields_and_bad_limits() -> None:
 
     with pytest.raises(ValidationError, match="greater_than"):
         GenerationRequest(model="m", input="i", max_output_tokens=0)
+
+
+def test_input_is_text_or_a_non_empty_list_of_turns() -> None:
+    request = GenerationRequest.model_validate(
+        {
+            "model": "m",
+            "input": [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": "user", "content": "More"},
+            ],
+        }
+    )
+
+    assert request.input == [
+        Turn.user("Hi"),
+        Turn.assistant("Hello"),
+        Turn.user("More"),
+    ]
+    assert GenerationRequest(model="m", input="").input == ""
+    with pytest.raises(ValidationError, match="too_short"):
+        GenerationRequest(model="m", input=[])
+
+
+def test_turn_is_frozen_and_strict() -> None:
+    turn = Turn.user("Hi")
+
+    assert turn.role is Role.USER
+    assert Turn.assistant("Hey").role is Role.ASSISTANT
+    with pytest.raises(ValidationError, match="frozen"):
+        turn.content = "Bye"  # type: ignore[misc]
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        Turn.model_validate({"role": "user", "content": "Hi", "name": "x"})
+    with pytest.raises(ValidationError, match="enum"):
+        Turn.model_validate({"role": "system", "content": "Hi"})
+
+
+def test_response_becomes_an_assistant_turn() -> None:
+    response: GenerationResponse[Any] = GenerationResponse(
+        id="r", provider=Provider.OPENAI, model="m", text="Hello", raw={}
+    )
+
+    assert response.to_turn() == Turn.assistant("Hello")
+
+
+def test_response_without_text_is_no_turn() -> None:
+    response: GenerationResponse[Any] = GenerationResponse(
+        id="r",
+        provider=Provider.ANTHROPIC,
+        model="m",
+        incomplete_reason=IncompleteReason.REFUSAL,
+        raw={},
+    )
+
+    with pytest.raises(ValueError, match="response r has no text"):
+        response.to_turn()
+
+
+def test_event_types_are_enum_members() -> None:
+    events: TypeAdapter[GenerationEvent[Any]] = TypeAdapter(
+        GenerationEvent[Any]
+    )
+
+    event = events.validate_python({"type": "completed", "raw": {}})
+
+    assert isinstance(event, CompletedEvent)
+    assert event.type is GenerationEventType.COMPLETED
+    assert GENERATION_TERMINAL.matches(event)
+    assert GENERATION_TERMINAL.matches({"type": "completed"})
+    assert TextDeltaEvent[Any](text="x", raw={}).type is (
+        GenerationEventType.TEXT_DELTA
+    )
+    assert OtherEvent[Any](raw={}).type is GenerationEventType.OTHER
 
 
 def test_response_without_a_parameter_keeps_raw() -> None:

@@ -10,6 +10,7 @@ from pydantic import Discriminator, Tag
 from ai_api.providers.anthropic.types.messages import (
     ContentBlock,
     Message,
+    OutputTokensDetails,
     StopDetails,
 )
 from ai_api.types.base import BaseAPIType
@@ -115,15 +116,17 @@ class MessageDeltaUsage(BaseAPIType):
 
     Attributes:
         input_tokens: Input tokens, if sent again.
-        output_tokens: Generated tokens so far.
+        output_tokens: Generated tokens so far, thinking included.
         cache_creation_input_tokens: Input tokens written to the cache.
         cache_read_input_tokens: Input tokens read from the cache.
+        output_tokens_details: Breakdown of the output tokens, if sent.
     """
 
     input_tokens: int | None = None
     output_tokens: int
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    output_tokens_details: OutputTokensDetails | None = None
 
 
 class MessageDeltaEvent(BaseAPIType):

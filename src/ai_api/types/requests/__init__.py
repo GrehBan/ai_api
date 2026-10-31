@@ -7,9 +7,11 @@ from ai_api.types.requests.base import (
 )
 from ai_api.types.requests.generation import (
     GenerationRequest,
+    Turn,
 )
 
 __all__ = [
     "BaseRequest",
     "GenerationRequest",
+    "Turn",
 ]

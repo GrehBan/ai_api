@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import Any, Final
 
 from ai_api.adapters.base import BaseCompositeAdapter
-from ai_api.enums import Provider
+from ai_api.adapters.validation import check_last_turn, request_errors
+from ai_api.enums import Provider, Role
+from ai_api.exceptions import RequestValidationError
 from ai_api.providers.anthropic.adapters.conversions import (
     StreamState,
-    incomplete_reason,
     message_usage,
+    to_stop,
 )
 from ai_api.providers.anthropic.methods.messages import (
     CreateMessage,
@@ -40,6 +42,13 @@ DEFAULT_MAX_TOKENS: Final = 1024
 METADATA_KEYS: Final = frozenset({"user_id"})
 """The only metadata keys Anthropic accepts."""
 
+SHARED_FIELDS: Final[Mapping[str, str]] = {
+    "messages": "input",
+    "max_tokens": "max_output_tokens",
+    "system": "instructions",
+}
+"""Shared request field of each method field with another name."""
+
 
 class AnthropicGenerationAdapter(
     BaseCompositeAdapter[
@@ -52,11 +61,14 @@ class AnthropicGenerationAdapter(
 ):
     """Generates text with ``POST /messages``.
 
-    ``input`` becomes one ``user`` turn and ``instructions`` the
-    ``system`` prompt. Anthropic requires ``max_tokens``, so a request
-    without ``max_output_tokens`` gets ``default_max_tokens``. Anthropic
-    takes only ``user_id`` as metadata; any other key raises
-    ``ValueError`` instead of being dropped.
+    A text ``input`` becomes one ``user`` turn, a list of turns the
+    ``messages`` as they are, and ``instructions`` the ``system``
+    prompt. Anthropic requires ``max_tokens``, so a request without
+    ``max_output_tokens`` gets ``default_max_tokens``. A request that
+    Anthropic would reject raises ``RequestValidationError`` before
+    anything is sent: Anthropic takes only ``user_id`` as metadata, so
+    any other key raises instead of being dropped, and a conversation
+    must end with a ``user`` turn.
 
     Attributes:
         default_max_tokens: ``max_tokens`` of a request without
@@ -98,9 +110,11 @@ class AnthropicGenerationAdapter(
             ``CreateMessage`` for the request.
 
         Raises:
-            ValueError: If the metadata has keys other than ``user_id``.
+            RequestValidationError: Anthropic cannot take the request.
         """
-        return CreateMessage(**self._fields(request))
+        fields = self._fields(request)
+        with request_errors(Provider.ANTHROPIC, SHARED_FIELDS):
+            return CreateMessage(**fields)
 
     def to_response(
         self,
@@ -116,18 +130,21 @@ class AnthropicGenerationAdapter(
         Returns:
             The generated text with its token counts; a message stopped
             early, by ``max_tokens`` for example, keeps its text and gets
-            ``incomplete_reason``.
+            ``incomplete_reason``, and a refusal gets ``refusal``.
 
         Raises:
             APIResponseError: The message has no stop reason.
         """
+        stop = to_stop(raw.stop_reason, raw.stop_details)
         return GenerationResponse[Message](
             id=raw.id,
             provider=Provider.ANTHROPIC,
             model=raw.model,
             text=raw.text,
             usage=message_usage(raw.usage),
-            incomplete_reason=incomplete_reason(raw.stop_reason),
+            incomplete_reason=stop.incomplete_reason,
+            raw_incomplete_reason=stop.raw_incomplete_reason,
+            refusal=stop.refusal,
             raw=raw,
         )
 
@@ -141,9 +158,11 @@ class AnthropicGenerationAdapter(
             ``StreamMessage`` for the request.
 
         Raises:
-            ValueError: If the metadata has keys other than ``user_id``.
+            RequestValidationError: Anthropic cannot take the request.
         """
-        return StreamMessage(**self._fields(request))
+        fields = self._fields(request)
+        with request_errors(Provider.ANTHROPIC, SHARED_FIELDS):
+            return StreamMessage(**fields)
 
     async def to_events(
         self,
@@ -182,9 +201,12 @@ class AnthropicGenerationAdapter(
                 case MessageDeltaEvent():
                     state.update(item)
                 case MessageStopEvent():
+                    stop = state.stop()
                     yield CompletedEvent[MessageStreamEvent](
                         usage=state.usage(),
-                        incomplete_reason=incomplete_reason(state.stop_reason),
+                        incomplete_reason=stop.incomplete_reason,
+                        raw_incomplete_reason=stop.raw_incomplete_reason,
+                        refusal=stop.refusal,
                         raw=item,
                     )
                     continue
@@ -202,11 +224,22 @@ class AnthropicGenerationAdapter(
             The fields that both methods take.
 
         Raises:
-            ValueError: If the metadata has keys other than ``user_id``.
+            RequestValidationError: The conversation does not end with a
+                ``user`` turn, or the metadata has keys other than
+                ``user_id``.
         """
+        check_last_turn(request, Provider.ANTHROPIC)
+        messages = (
+            [{"role": Role.USER.value, "content": request.input}]
+            if isinstance(request.input, str)
+            else [
+                {"role": turn.role.value, "content": turn.content}
+                for turn in request.input
+            ]
+        )
         fields: dict[str, Any] = {
             "model": request.model,
-            "messages": [{"role": "user", "content": request.input}],
+            "messages": messages,
             "max_tokens": request.max_output_tokens or self.default_max_tokens,
             "system": request.instructions,
         }
@@ -217,6 +250,8 @@ class AnthropicGenerationAdapter(
                     "Anthropic accepts only 'user_id' as metadata; "
                     f"unsupported keys: {', '.join(unknown)}"
                 )
-                raise ValueError(message)
+                raise RequestValidationError(
+                    message, provider=Provider.ANTHROPIC, field="metadata"
+                )
             fields["metadata"] = request.metadata
         return fields

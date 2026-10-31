@@ -18,6 +18,7 @@ from ai_api import (
     APIStreamInterruptedError,
     BadRequestError,
     BaseErrorResolver,
+    IncompleteReason,
     QuotaExceededError,
     RateLimitError,
     ResponseFormat,
@@ -659,7 +660,8 @@ async def test_shared_generation(
         assert await examples.generate_streamed(client) == "Hey"
 
     assert (response.id, response.text) == ("resp_1", "Hel")
-    assert response.incomplete_reason == "max_output_tokens"
+    assert response.incomplete_reason is IncompleteReason.MAX_TOKENS
+    assert response.raw_incomplete_reason == "max_output_tokens"
     assert response.usage is not None
     assert response.usage.total_tokens == 69
     assert response.raw.status == "incomplete"
@@ -676,6 +678,41 @@ async def test_shared_generation(
         "input": "Hi",
         "stream": True,
     }
+
+
+async def test_shared_generation_continues_a_conversation(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, CLIENT, SHARED_GENERATION)
+    monkeypatch.setattr(session_factory, "api", api)
+    answer = {
+        "id": "resp_1",
+        "created_at": 1741476777,
+        "status": "completed",
+        "model": "gpt-6-astra",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Hello!"}],
+            }
+        ],
+    }
+    recorder.reply(Reply(json=answer), Reply(json=answer))
+
+    async with examples.OpenAIClient("sk-...") as client:
+        response = await examples.chat(client)
+
+    assert response.text == "Hello!"
+    assert json.loads(recorder.last.body)["input"] == [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "user", "content": "Tell me more"},
+    ]
 
 
 async def test_shared_generation_works_with_anthropic(
@@ -703,10 +740,8 @@ async def test_shared_generation_works_with_anthropic(
     async with AnthropicClient("sk-ant-...") as client:
         response = await examples.generate(client)
 
-    assert (response.text, response.incomplete_reason) == (
-        "Hel",
-        "max_tokens",
-    )
+    assert response.text == "Hel"
+    assert response.incomplete_reason is IncompleteReason.MAX_TOKENS
     assert json.loads(recorder.last.body) == {
         "model": "gpt-6-astra",
         "messages": [{"role": "user", "content": "Hi"}],

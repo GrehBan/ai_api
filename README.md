@@ -4,7 +4,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 
 You describe each API call as a small declarative class. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming.
 
-> **Status: pre-alpha (0.1.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
+> **Status: pre-alpha (0.2.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
 
 ## Contents
 
@@ -896,7 +896,7 @@ async def ask_claude_streamed(client: AnthropicClient) -> str:
 
 ```python
 from ai_api.providers.openai.types import Response
-from ai_api.types.requests import GenerationRequest
+from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import GenerationResponse, TextDeltaEvent
 
 
@@ -920,13 +920,29 @@ async def generate_streamed(client: OpenAIClient) -> str:
                 text += event.text
 
     return text
+
+
+async def chat(client: OpenAIClient) -> GenerationResponse[Response]:
+    first = await client.generation.create(
+        GenerationRequest(model="gpt-6-astra", input="Hi")
+    )
+    request = GenerationRequest(
+        model="gpt-6-astra",
+        input=[Turn.user("Hi"), first.to_turn(), Turn.user("Tell me more")],
+    )
+    return await client.generation.create(request)
 ```
 
-- **OpenAI mapping.** `OpenAIGenerationAdapter` (`ai_api.providers.openai.adapters`) builds `CreateResponse` or `StreamResponse` from the request, so OpenAI's limits, such as `max_output_tokens` of at least 16, are checked before sending. Parameters the shared request lacks, such as `temperature`, stay on the methods above.
-- **OpenAI stopped early.** An `incomplete` response, cut off by `max_output_tokens` for example, keeps its `text` and gets `incomplete_reason`, OpenAI's reason such as `"max_output_tokens"`; in a stream, `response.incomplete` is a `CompletedEvent` with it.
+What each shared field becomes for each provider, what is lost and when a request raises is listed in [docs/unification.md](docs/unification.md).
+
+- **A conversation is a list of turns.** `input` is a text, taken as one `user` turn, or a list of `Turn`s (`Turn.user(...)`, `Turn.assistant(...)`, or `response.to_turn()` for an earlier answer); the list must not be empty, and its last turn must be a `user` one. System prompts go in `instructions`, not in turns.
+- **A request a provider cannot take raises `RequestValidationError`** (from `ai_api`, a `ValueError`) before anything is sent, with the `provider` and the shared `field` at fault; a pydantic error behind it is its `__cause__`. Errors of `GenerationRequest` itself stay pydantic `ValidationError`s.
+- **Why it stopped.** `incomplete_reason` is an `IncompleteReason` (`MAX_TOKENS`, `REFUSAL` or `OTHER`; `None` if the generation finished), and `raw_incomplete_reason` keeps the provider's own reason. A refusal is an answer, not an error, as in both SDKs: it sets `incomplete_reason` to `REFUSAL` and `refusal` to the provider's explanation.
+- **OpenAI mapping.** `OpenAIGenerationAdapter` (`ai_api.providers.openai.adapters`) builds `CreateResponse` or `StreamResponse` from the request, turns as `EasyInputMessage` items, so OpenAI's limits, such as `max_output_tokens` of at least 16, are checked before sending. Parameters the shared request lacks, such as `temperature`, stay on the methods above.
+- **OpenAI stopped early.** An `incomplete` response, cut off by `max_output_tokens` for example, keeps its `text` and gets `incomplete_reason` (`MAX_TOKENS` for `max_output_tokens`, `OTHER` for any other reason) with OpenAI's reason in `raw_incomplete_reason`; in a stream, `response.incomplete` is a `CompletedEvent` with them. A `refusal` content part makes the response a refusal, with the part's text in `refusal`.
 - **OpenAI failures are raised.** A `failed` response raises the `APIStatusError` described under the Responses API, before the adapter sees it, in `create` and in `stream` alike. Any other buffered status that is not `completed` or `incomplete` (`cancelled`, `in_progress`, ...) raises `APIResponseError`, since there is no generated text to return.
-- **Anthropic mapping.** `AnthropicGenerationAdapter` (`ai_api.providers.anthropic.adapters`) sends `input` as one `user` turn and `instructions` as `system`. Anthropic requires `max_tokens`, so a request without `max_output_tokens` gets the client's `default_max_tokens` (`AnthropicClient(..., default_max_tokens=1024)`). Metadata other than `user_id` raises `ValueError` instead of being dropped.
-- **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it. A `stop_reason` other than `end_turn` or `stop_sequence` (`max_tokens`, `refusal`, ...) becomes `incomplete_reason`, with the text kept. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a message without a `stop_reason` raises `APIResponseError`. Anthropic reports failures as `error` events, which are raised as `APIStatusError`.
+- **Anthropic mapping.** `AnthropicGenerationAdapter` (`ai_api.providers.anthropic.adapters`) sends a text `input` as one `user` turn, a list of turns as `messages`, and `instructions` as `system`. Anthropic requires `max_tokens`, so a request without `max_output_tokens` gets the client's `default_max_tokens` (`AnthropicClient(..., default_max_tokens=1024)`). Metadata other than `user_id` raises `RequestValidationError` instead of being dropped.
+- **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it (`cache_read_tokens`, `cache_write_tokens`), and `reasoning_tokens` are the thinking tokens. A `stop_reason` other than `end_turn` or `stop_sequence` stops the generation early, with the text kept: `max_tokens` is `MAX_TOKENS`, `refusal` is `REFUSAL` (with `stop_details.explanation`, else its `category`, in `refusal`) and any other is `OTHER`, with the `stop_reason` in `raw_incomplete_reason`. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a message without a `stop_reason` raises `APIResponseError`. Anthropic reports failures as `error` events, which are raised as `APIStatusError`.
 - **The end is checked for every provider.** `stream` yields exactly one `CompletedEvent`, as the last event: a stream that ends without it raises `APIStreamInterruptedError` (the provider method's terminal check usually raises it first), and an event after it raises `APIResponseError`. A failure is always an exception, never an event.
 
 ### Adding a provider
@@ -944,9 +960,9 @@ The package `__init__.py` re-exports the client, which makes it the one `__init_
 
 Methods are specific to one provider. Resources and use cases are the layer above them that offers one API for all providers, in shared types:
 
-- **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
-- **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage`, `incomplete_reason` (why the provider stopped early, such as a token limit; `None` if it finished) and the provider's own response in `raw`, so nothing the shared type lacks is lost.
-- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `usage` and `incomplete_reason` too. A failure is an exception at every level, never an event.
+- **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, a text or a list of `Turn`s, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
+- **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage` (`TokenUsage`: input, output and total tokens, with the cached and reasoning tokens among them), `incomplete_reason` (why the provider stopped early, an `IncompleteReason`; `None` if it finished), `raw_incomplete_reason`, `refusal` and the provider's own response in `raw`, so nothing the shared type lacks is lost.
+- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
 - **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
 - **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError`, an event after it `APIResponseError`.
 - **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(request)` and `stream(request)`, typed by the adapter's raw types. `BaseResource` groups the use cases of any other area.
