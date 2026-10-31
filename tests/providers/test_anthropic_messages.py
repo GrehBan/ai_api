@@ -49,7 +49,9 @@ MESSAGE: dict[str, Any] = {
     "container": {
         "id": "container_011CpZohnwH4vuy7gazohgSP",
         "expires_at": "2019-12-27T18:11:19.117Z",
-        "skills": [{"skill_id": "pdf", "type": "anthropic"}],
+        "skills": [
+            {"skill_id": "pdf", "type": "anthropic", "version": "latest"}
+        ],
     },
     "content": [
         {

@@ -41,9 +41,11 @@ dev = [
     "pyright>=1.1.414",
     "ruff>=0.17.3",
     "types-aiofiles>=25.1.0.20260518",
+    "types-jsonschema>=4.26.0.20261006",
 ]
 test = [
     "aresponses>=3.0.0",
+    "jsonschema>=4.25",
     "pytest>=9.2.0",
     "pytest-aiohttp>=1.1.1",
     "pytest-asyncio>=1.4.1",

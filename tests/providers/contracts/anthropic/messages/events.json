@@ -1,0 +1,706 @@
+[
+ {
+  "id": "200f9a18657eccfa23864ef1",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"command\": \"python analyze.py\"}"
+   }
+  }
+ },
+ {
+  "id": "200f9a18657eccfa23864ef1",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 2,
+   "content_block": {
+    "type": "bash_code_execution_tool_result",
+    "tool_use_id": "srvtoolu_xyz789",
+    "content": {
+     "type": "bash_code_execution_result",
+     "stdout": "   A  B  C\n0  1  2  3\n1  4  5  6",
+     "stderr": "",
+     "return_code": 0,
+     "content": []
+    }
+   }
+  }
+ },
+ {
+  "id": "0bb33a2ff46d86e0c416f1aa",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"pattern\":\"weather\"}"
+   }
+  }
+ },
+ {
+  "id": "0bb33a2ff46d86e0c416f1aa",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 2,
+   "content_block": {
+    "type": "tool_search_tool_result",
+    "tool_use_id": "srvtoolu_xyz789",
+    "content": {
+     "type": "tool_search_tool_search_result",
+     "tool_references": [
+      {
+       "type": "tool_reference",
+       "tool_name": "get_weather"
+      }
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "9fdf96c64621f269b1a76a67",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 0,
+   "content_block": {
+    "type": "text",
+    "text": ""
+   }
+  }
+ },
+ {
+  "id": "9fdf96c64621f269b1a76a67",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"url\":\"https://example.com/article\"}"
+   }
+  }
+ },
+ {
+  "id": "9fdf96c64621f269b1a76a67",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 2,
+   "content_block": {
+    "type": "web_fetch_tool_result",
+    "tool_use_id": "srvtoolu_xyz789",
+    "content": {
+     "type": "web_fetch_result",
+     "url": "https://example.com/article",
+     "content": {
+      "type": "document",
+      "source": {
+       "type": "text",
+       "media_type": "text/plain",
+       "data": "Article content..."
+      }
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "b7c93f0244744dd2ffbf7649",
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"query\":\"latest quantum computing breakthroughs 2025\"}"
+   }
+  }
+ },
+ {
+  "id": "09af5a6d4d98d9dd79d658c8",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "ello frien"
+   }
+  }
+ },
+ {
+  "id": "02549f6affcc8f02f6c02ae2",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "thinking_delta",
+    "thinking": "I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147"
+   }
+  }
+ },
+ {
+  "id": "213c570bf66a39ce5cb7c44a",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "signature_delta",
+    "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds..."
+   }
+  }
+ },
+ {
+  "id": "a05fa22e7dbb9b3ce98f20c6",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "message_start",
+   "message": {
+    "id": "msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY",
+    "type": "message",
+    "role": "assistant",
+    "content": [],
+    "model": "claude-opus-5-5",
+    "stop_reason": null,
+    "stop_sequence": null,
+    "usage": {
+     "input_tokens": 25,
+     "output_tokens": 1
+    }
+   }
+  }
+ },
+ {
+  "id": "a05fa22e7dbb9b3ce98f20c6",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "Hello"
+   }
+  }
+ },
+ {
+  "id": "a05fa22e7dbb9b3ce98f20c6",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "!"
+   }
+  }
+ },
+ {
+  "id": "a05fa22e7dbb9b3ce98f20c6",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_stop",
+   "index": 0
+  }
+ },
+ {
+  "id": "a05fa22e7dbb9b3ce98f20c6",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "message_delta",
+   "delta": {
+    "stop_reason": "end_turn",
+    "stop_sequence": null
+   },
+   "usage": {
+    "output_tokens": 15
+   }
+  }
+ },
+ {
+  "id": "a05fa22e7dbb9b3ce98f20c6",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "message_stop"
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "message_start",
+   "message": {
+    "id": "msg_014p7gG3wDgGV9EUtLvnow3U",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5",
+    "stop_sequence": null,
+    "usage": {
+     "input_tokens": 472,
+     "output_tokens": 2
+    },
+    "content": [],
+    "stop_reason": null
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "Okay"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": ","
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " let"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "'s"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " check"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " the"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " weather"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " for"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " San"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " Francisco"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " CA"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": ":"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 1,
+   "content_block": {
+    "type": "tool_use",
+    "id": "toolu_01T1x1fJ34qAmk2tNTrN7Up6",
+    "name": "get_weather",
+    "input": {}
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": ""
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"location\":"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": " \"San"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": " Francisc"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "o,"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": " CA\"}"
+   }
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_stop",
+   "index": 1
+  }
+ },
+ {
+  "id": "a85824e4e73d9a9aa8d8e88c",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "message_delta",
+   "delta": {
+    "stop_reason": "tool_use",
+    "stop_sequence": null
+   },
+   "usage": {
+    "output_tokens": 89
+   }
+  }
+ },
+ {
+  "id": "9e4ebabb83821bae6d789255",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 0,
+   "content_block": {
+    "type": "thinking",
+    "thinking": "",
+    "signature": ""
+   }
+  }
+ },
+ {
+  "id": "9e4ebabb83821bae6d789255",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "thinking_delta",
+    "thinking": "\n462 = 3 × 147 + 21"
+   }
+  }
+ },
+ {
+  "id": "9e4ebabb83821bae6d789255",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "thinking_delta",
+    "thinking": "\n147 = 7 × 21 + 0"
+   }
+  }
+ },
+ {
+  "id": "9e4ebabb83821bae6d789255",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "thinking_delta",
+    "thinking": "\nThe remainder is 0, so GCD(1071, 462) = 21."
+   }
+  }
+ },
+ {
+  "id": "9e4ebabb83821bae6d789255",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 1,
+   "content_block": {
+    "type": "text",
+    "text": ""
+   }
+  }
+ },
+ {
+  "id": "9e4ebabb83821bae6d789255",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "text_delta",
+    "text": "The greatest common divisor of 1071 and 462 is **21**."
+   }
+  }
+ },
+ {
+  "id": "b5c54c02414f2bf20cbff856",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "thinking_delta",
+    "thinking": ""
+   }
+  }
+ },
+ {
+  "id": "b5c54c02414f2bf20cbff856",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "signature_delta",
+    "signature": "EosnCkYICxIMMb3LzNrMu..."
+   }
+  }
+ },
+ {
+  "id": "241d85cbe62c7071d41f5898",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 1,
+   "content_block": {
+    "type": "thinking",
+    "thinking": "",
+    "signature": ""
+   }
+  }
+ },
+ {
+  "id": "241d85cbe62c7071d41f5898",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "thinking_delta",
+    "thinking": "Confirmed the retry path never refreshes the expired token. Editing auth.py to add the refresh call."
+   }
+  }
+ },
+ {
+  "id": "241d85cbe62c7071d41f5898",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_delta",
+   "index": 1,
+   "delta": {
+    "type": "signature_delta",
+    "signature": "Es8CCkYICxIM..."
+   }
+  }
+ },
+ {
+  "id": "241d85cbe62c7071d41f5898",
+  "source": "https://platform.claude.com/docs/en/build-with-claude/thinking",
+  "api_version": "2023-06-01",
+  "body": {
+   "type": "content_block_start",
+   "index": 2,
+   "content_block": {
+    "type": "tool_use",
+    "id": "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
+    "name": "edit_file",
+    "input": {}
+   }
+  }
+ }
+]

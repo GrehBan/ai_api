@@ -103,6 +103,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OpenAIClient.generation`: a `GenerationResource` with
   `OpenAIGenerationAdapter`, so `await client.generation.create(request)` and
   `client.generation.stream(request)` work with shared types.
+- Wire-contract tests (`tests/providers/test_wire_contracts.py`): requests of
+  `CreateResponse`/`StreamResponse` and `CreateMessage`/`StreamMessage` are
+  validated against the providers' SDK-derived JSON schemas (closed, so an
+  unknown field fails), and the documented response bodies and stream events
+  are parsed by the library's types. The schemas and examples are a snapshot
+  in `tests/providers/contracts/` (OpenAI SDK 3.41.0, Anthropic SDK 2.3.0),
+  rebuilt from the offline docs dump by
+  `python -m tests.providers.contracts.update`. New test dependency
+  `jsonschema`, new dev dependency `types-jsonschema`.
 
 ### Changed
 
