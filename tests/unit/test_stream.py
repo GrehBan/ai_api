@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +13,12 @@ import pytest
 from ai_api.enums import ResponseFormat
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.transport import (
+    APIConnectionError,
+    APIStreamInterruptedError,
+    APITimeoutError,
+    APITransportError,
+)
 from ai_api.methods.base import BaseStreamMethod
 from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.response.stream import Stream, map_stream, transform_stream
@@ -363,3 +370,82 @@ async def test_transform_stream_closes_the_transform_first() -> None:
             break
 
     assert log == ["transform closed", "source items closed", "source closed"]
+
+
+async def failing(
+    items: list[int], error: BaseException
+) -> AsyncGenerator[int]:
+    for item in items:
+        yield item
+    raise error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [APIConnectionError(), APITimeoutError(), APITransportError("x")],
+    ids=["connection", "timeout", "transport"],
+)
+async def test_transport_failure_while_iterating_is_an_interruption(
+    error: APITransportError,
+) -> None:
+    stream = Stream(failing([1, 2], error))
+    received: list[int] = []
+
+    with pytest.raises(APIStreamInterruptedError) as info:
+        async for item in stream:
+            received.append(item)  # noqa: PERF401 - fails mid-loop
+
+    assert received == [1, 2]
+    assert info.value.__cause__ is error
+    assert info.value.items_received == 2
+    assert info.value.transient is False
+    assert type(error).__name__ in str(info.value)
+
+
+async def test_an_interruption_passes_through_unwrapped() -> None:
+    interrupted = APIStreamInterruptedError("cut", items_received=5)
+    stream = Stream(failing([1], interrupted))
+
+    await anext(stream)
+
+    with pytest.raises(APIStreamInterruptedError) as info:
+        await anext(stream)
+
+    assert info.value is interrupted
+    assert info.value.items_received == 5
+
+
+@pytest.mark.parametrize(
+    "error",
+    [APIResponseError("bad"), ValueError("bad"), asyncio.CancelledError()],
+    ids=["response", "value", "cancelled"],
+)
+async def test_other_errors_are_not_wrapped(error: BaseException) -> None:
+    stream = Stream(failing([], error))
+
+    with pytest.raises(type(error)) as info:
+        await anext(stream)
+
+    assert info.value is error
+
+
+async def test_nested_streams_report_the_inner_interruption() -> None:
+    @asynccontextmanager
+    async def source() -> AsyncGenerator[Stream[int]]:
+        stream = Stream(failing([1, 2, 3], APIConnectionError()))
+        try:
+            yield stream
+        finally:
+            await stream.aclose()
+
+    async def pairs(items: AsyncIterator[int]) -> AsyncGenerator[int]:
+        async for item in items:
+            if item % 2 == 0:
+                yield item
+
+    async with transform_stream(source(), pairs) as stream:
+        with pytest.raises(APIStreamInterruptedError) as info:
+            await collect(stream)
+
+    assert info.value.items_received == 3
+    assert isinstance(info.value.__cause__, APIConnectionError)

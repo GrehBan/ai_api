@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
 
 from ai_api.exceptions import AIAPIError
 
@@ -25,6 +25,11 @@ class APIStatusError(AIAPIError):
             ``Retry-After`` header.
         transient: Whether retrying the same request may succeed. This is
             the only flag the retry strategy looks at.
+        raw: The parsed result that reported the failure, when a
+            successful response or a stream event did: OpenAI's
+            ``Response`` with status ``failed``, or its
+            ``response.failed`` event. ``None`` for an error status and
+            for events that do not fit the item type.
     """
 
     def __init__(
@@ -38,6 +43,7 @@ class APIStatusError(AIAPIError):
         request_id: str | None = None,
         retry_after: float | None = None,
         transient: bool = False,
+        raw: Any = None,
     ) -> None:
         """Store the error details.
 
@@ -50,6 +56,7 @@ class APIStatusError(AIAPIError):
             request_id: Request id of the failed request.
             retry_after: Seconds to wait before retrying.
             transient: Whether the request may be retried.
+            raw: The parsed result that reported the failure, if any.
         """
         self.status = status
         self.code = code
@@ -58,6 +65,7 @@ class APIStatusError(AIAPIError):
         self.request_id = request_id
         self.retry_after = retry_after
         self.transient = transient
+        self.raw = raw
 
         super().__init__(message)
 

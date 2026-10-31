@@ -45,6 +45,7 @@ dev = [
 ]
 test = [
     "aresponses>=3.0.0",
+    "hypothesis>=6.170.14",
     "jsonschema>=4.25",
     "pytest>=9.2.0",
     "pytest-aiohttp>=1.1.1",

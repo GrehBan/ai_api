@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         IResponseParser,
         IStreamParser,
     )
+    from ai_api.types.protocols import IEventMatcher
 
 
 class IBaseMethod[ResponseT](Protocol):
@@ -100,6 +101,11 @@ class IStreamMethod[ItemT](IBaseMethod[ItemT], Protocol):
     @property
     def stream_parser(self) -> IStreamParser:
         """Parser of the stream."""
+        ...
+
+    @property
+    def stream_terminal(self) -> IEventMatcher | None:
+        """Recognizes the item that ends a complete stream, if declared."""
         ...
 
     @property

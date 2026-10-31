@@ -9,6 +9,11 @@ from typing import Self
 
 import aiofiles
 
+from ai_api.http.exceptions.transport import (
+    APIStreamInterruptedError,
+    APITransportError,
+)
+
 
 class Stream[T]:
     """Async iterator over the items of a streamed response.
@@ -16,6 +21,10 @@ class Stream[T]:
     Obtained from ``async with session.stream(method) as stream``; the
     session closes it when the ``async with`` block exits, and iterating
     it after that raises ``RuntimeError``.
+
+    A transport failure while iterating (a lost connection, a silent
+    stream timing out) is raised as ``APIStreamInterruptedError``, which
+    is never retried, with the original error as its ``__cause__``.
 
     Example:
         >>> async with session.stream(Download()) as stream:
@@ -31,6 +40,7 @@ class Stream[T]:
         """
         self._items = items
         self._closed = False
+        self._received = 0
 
     def __aiter__(self) -> Self:
         """Return the stream itself.
@@ -57,9 +67,26 @@ class Stream[T]:
         Raises:
             RuntimeError: If the stream is closed.
             StopAsyncIteration: When the items are exhausted.
+            APIStreamInterruptedError: If the transport fails or the body
+                ends before the method's terminal event. One raised by
+                an inner stream (``transform_stream``) or by the parser
+                passes through as it is.
         """
         self._check_open()
-        return await anext(self._items)
+
+        try:
+            item = await anext(self._items)
+        except APIStreamInterruptedError:
+            raise
+        except APITransportError as exc:
+            raise APIStreamInterruptedError(
+                f"Stream interrupted by {type(exc).__name__} after "
+                f"{self._received} items",
+                items_received=self._received,
+            ) from exc
+
+        self._received += 1
+        return item
 
     def _check_open(self) -> None:
         """Ensure the stream has not been closed.
@@ -97,6 +124,8 @@ class Stream[T]:
         Raises:
             RuntimeError: If the stream is closed; the file is not
                 touched.
+            APIStreamInterruptedError: If the stream breaks mid-way; the
+                file keeps what was written.
         """
         self._check_open()
         written = 0

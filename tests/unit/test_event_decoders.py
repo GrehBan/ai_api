@@ -81,6 +81,24 @@ def test_cr_and_lf_in_separate_chunks_end_one_line() -> None:
     assert decoder.decode(b"\nb\n") == ["b"]
 
 
+@pytest.mark.parametrize(
+    "chunks",
+    [[b"a\r", b"\n"], [b"a\r", b"\n", b""], [b"\r", b"\n"]],
+    ids=["line", "empty-chunk-after", "empty-line"],
+)
+def test_split_crlf_at_the_end_adds_no_line(chunks: list[bytes]) -> None:
+    # Found by the property tests: the "\n" left nothing to split, yet an
+    # empty part was held back and flush() made it an extra empty line,
+    # which would complete an unfinished SSE event at the end of a body.
+    decoder = LineDecoder()
+    lines = [line for chunk in chunks for line in decoder.decode(chunk)]
+    whole = LineDecoder()
+
+    assert lines + decoder.flush() == whole.decode(b"".join(chunks)) + (
+        whole.flush()
+    )
+
+
 def test_long_line_is_joined_from_many_chunks() -> None:
     decoder = LineDecoder()
 

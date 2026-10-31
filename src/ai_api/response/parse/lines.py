@@ -101,6 +101,11 @@ class LineDecoder:
             self._pending_cr = False
             text = text.removeprefix("\n")
 
+            # A lone "\n" leaves nothing; splitting "" would hold back an
+            # empty part, which flush() would turn into an extra line.
+            if not text:
+                return []
+
         parts = _NEWLINE.split(text)
 
         if len(parts) == 1:

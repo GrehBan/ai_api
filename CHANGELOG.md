@@ -69,9 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AnthropicClient.generation`.
 - `OpenAIGenerationAdapter` in `ai_api.providers.openai.adapters`: shared
   generation over the Responses API, for `GenerationResource`. A buffered
-  response that failed or did not finish raises `APIResponseError`, and so
-  does a stream that ends without `response.completed`, `response.failed` or
-  `response.incomplete`; `response.failed` in a stream is a `FailedEvent`.
+  response that did not finish (`cancelled`, `in_progress`, ...) raises
+  `APIResponseError`; a failed one is raised by `CreateResponse` and
+  `StreamResponse` themselves (see below).
 - `incomplete_reason` on `GenerationResponse` and `CompletedEvent`: why the
   provider stopped early, such as a token limit; `None` if it finished.
 - Anthropic provider (`ai_api.providers.anthropic`): `AnthropicClient` (a
@@ -95,8 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Metadata other than `user_id` raises `ValueError`; a `stop_reason` other
   than `end_turn` or `stop_sequence` becomes `incomplete_reason`; the stream's
   `CompletedEvent` comes on `message_stop` with the counts of `message_start`
-  and the cumulative `message_delta`; a stream without `message_stop` or a
-  message without `stop_reason` raises `APIResponseError`.
+  and the cumulative `message_delta`; a message without `stop_reason` raises
+  `APIResponseError`.
 - `BaseUnknown`, `by_type` and `UNKNOWN` in `ai_api.types` (moved from the
   OpenAI types, now shared by both providers): a pydantic discriminator that
   keeps a value of an unknown `type` whole instead of rejecting it.
@@ -113,6 +113,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python -m tests.providers.contracts.update`. New test dependency
   `jsonschema`, new dev dependency `types-jsonschema`.
 
+- Event matchers in `ai_api.types`: the `IEventMatcher` protocol
+  (`matches(item) -> bool`, for models and decoded JSON alike), `BaseMatcher`,
+  `EventTypes(*types)`, `FieldValues(name, *values)`, `TopLevelError()`,
+  `DONE` (matches `DONE_MARKER`, the `data: [DONE]` line) and `AnyOf`, built
+  with `a | b`. Matchers compare by value and show what they match.
+- Stream terminals: `BaseStreamMethod.__stream_terminal__` (an
+  `IEventMatcher`, `None` by default; the `stream_terminal` property, also on
+  `IStreamMethod`) names the protocol's last event. The SSE and NDJSON
+  parsers then read the body to its end: a body that ends without the
+  terminal raises `APIStreamInterruptedError`, an item after it raises
+  `APIResponseError`, and `[DONE]` is matched as `DONE_MARKER` instead of
+  ending the stream. `StreamResponse` declares `response.completed`,
+  `response.incomplete` and `response.failed`; `StreamMessage` declares
+  `message_stop`. Without a terminal nothing changes. A contract test checks
+  that the declared terminal and error event types exist upstream.
+- `StreamResponseParser(error_events=...)`: the matcher of decoded events
+  that are raised through the error resolver, `ERROR_EVENTS`
+  (`EventTypes("error") | TopLevelError()`) by default, and the
+  `error_events` property.
+- `BufferedResponseParser(error_responses=...)`: a matcher of parsed JSON
+  results that are failures; a match is raised through the error resolver
+  with the result in `raw`.
+- `APIStreamInterruptedError` (an `APITransportError`, not transient, with
+  `items_received`): an open stream broke or ended before its terminal.
+  `Stream` wraps every transport error raised while iterating in it, with
+  the original as `__cause__`; nested streams pass it through unchanged.
+- `APIStatusError.raw`: the parsed object that reported the failure, such as
+  OpenAI's failed `Response`, or a stream's error event when it fits the item
+  type; `None` otherwise.
+- Failed OpenAI responses are raised: `CreateResponse` raises a response with
+  `status: "failed"`, and `StreamResponse` the `response.failed` event, as the
+  `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`
+  (with the `Response` or the event in `raw`). This is stricter than the
+  official SDK, which returns a failed response as a value.
+- The shared stream contract: `AdapterStreamUseCase` and
+  `AdapterCompositeUseCase` take keyword-only `terminal=`, and then require
+  exactly one event that matches it, as the last one (none:
+  `APIStreamInterruptedError`; an event after it: `APIResponseError`).
+  `GenerationResource` passes `GENERATION_TERMINAL` (`ai_api.types.responses`),
+  which matches `CompletedEvent`, so every provider's `generation.stream` ends
+  with exactly one `CompletedEvent`.
+- Tests: cancellation (`task.cancel()` while opening and while iterating
+  releases the connection, for raw and shared streams of both providers),
+  every two-chunk split of the documented provider streams, hypothesis
+  property tests of the line and SSE decoders, cuts and silence mid-stream,
+  and a close-delimited HTTP/1.1 body cut mid-event. New test dependency
+  `hypothesis`.
+
 ### Changed
 
 - Transports implement `_execute(method, *, headers=None, timeout=None)` and
@@ -125,12 +173,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_token(token, session, env)`, which also reads the environment.
   Without a token, a session and the variable, the error now names the
   variable.
+- A transport error while iterating a stream (a dropped connection, a read
+  timeout) is raised as `APIStreamInterruptedError`, with the original error
+  as its cause, instead of as that error.
+- `StreamResponseParser.is_error_event` is replaced by the `error_events`
+  matcher; the default accepts the same events as before.
+- `IResponseParser.parse` takes `error_resolver` after `json_loads`, and
+  `BaseSession` passes its own.
+- Shared streams report failures only as exceptions: the generation adapters
+  no longer check the end of a stream themselves; the provider method's
+  terminal and the use case's `terminal` do.
 
 ### Removed
 
 - `GenerationRequest.temperature`. Sampling parameters are not common to all
   providers: Anthropic removed `temperature`, `top_p` and `top_k` in API
   version `2026-10-21`. A provider's own method can still declare them.
+- `FailedEvent` from the shared events: a failure is an exception at every
+  level, so `GenerationEvent` is `TextDeltaEvent | CompletedEvent |
+  OtherEvent`.
+
+### Fixed
+
+- `LineDecoder` no longer adds an empty line at the end of a body whose last
+  `\r\n` is split between two chunks, which could complete an unfinished
+  server-sent event.
 
 ## [0.1.0] - 2026-10-30
 

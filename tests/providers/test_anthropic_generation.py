@@ -264,14 +264,11 @@ async def test_stream_stop_without_a_stop_reason_raises() -> None:
         await convert([STREAM[0], STREAM[-1]])
 
 
-async def test_stream_cut_before_message_stop_raises() -> None:
-    received: list[Any] = []
+async def test_adapter_leaves_the_end_to_the_parser_and_use_case() -> None:
+    # StreamMessage and GenerationResource check message_stop.
+    converted = await convert(STREAM[:-1])
 
-    with pytest.raises(APIResponseError, match="before message_stop"):
-        async for event in adapter.to_events(events(STREAM[:-1]), REQUEST):
-            received.append(event)  # noqa: PERF401 - kept before the error
-
-    assert len(received) == len(STREAM) - 1
+    assert len(converted) == len(STREAM) - 1
 
 
 @pytest.fixture

@@ -15,6 +15,7 @@ import pytest
 from ai_api import (
     APIConnectionError,
     APIRedirectError,
+    APIStreamInterruptedError,
     BadRequestError,
     BaseErrorResolver,
     QuotaExceededError,
@@ -370,8 +371,10 @@ async def test_restart_gives_up_after_the_last_attempt(
     )
     await examples.run(QUICK_START, STREAMING, RESTART)
 
-    with pytest.raises(APIConnectionError):
+    with pytest.raises(APIStreamInterruptedError) as info:
         await examples.generate_text("Hi", attempts=1)
+
+    assert isinstance(info.value.__cause__, APIConnectionError)
 
     with pytest.raises(ValueError, match="at least 1"):
         await examples.generate_text("Hi", attempts=0)
@@ -509,20 +512,28 @@ async def test_openai_responses(
         "content_index": 0,
         "sequence_number": 0,
     }
+    response = {
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 1741476777,
+        "model": "gpt-6-astra",
+        "output": [message],
+    }
+    completed = {
+        "type": "response.completed",
+        "sequence_number": 2,
+        "response": response | {"status": "completed"},
+    }
     recorder.reply(
-        Reply(
-            json={
-                "id": "resp_1",
-                "object": "response",
-                "created_at": 1741476777,
-                "model": "gpt-6-astra",
-                "output": [message],
-            }
-        ),
+        Reply(json=response),
         Reply(
             chunks=[
-                f"data: {json.dumps(delta | {'delta': 'He'})}\n\n".encode(),
-                f"data: {json.dumps(delta | {'delta': 'y'})}\n\n".encode(),
+                f"data: {json.dumps(data)}\n\n".encode()
+                for data in [
+                    delta | {"delta": "He"},
+                    delta | {"delta": "y"},
+                    completed,
+                ]
             ],
             content_type="text/event-stream",
         ),
@@ -565,7 +576,8 @@ async def test_anthropic_messages(
                     delta | {"delta": {"type": "signature_delta"}},
                     delta | {"delta": {"type": "text_delta", "text": "y"}},
                 ]
-            ],
+            ]
+            + [b'event: message_stop\ndata: {"type": "message_stop"}\n\n'],
             content_type="text/event-stream",
         ),
     )

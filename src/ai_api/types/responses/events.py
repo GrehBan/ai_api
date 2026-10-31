@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import Field
 
 from ai_api.types.base import BaseAPIType
+from ai_api.types.matchers import EventTypes
 from ai_api.types.responses.generation import TokenUsage
 
 
@@ -39,6 +40,10 @@ class TextDeltaEvent[RawT](RawResponseEvent[RawT]):
 class CompletedEvent[RawT](RawResponseEvent[RawT]):
     """The generation finished, or stopped early.
 
+    Every complete generation stream has exactly one, and it is the last
+    event. A failed generation raises an ``APIStatusError`` instead, in
+    a stream as in ``create()``.
+
     Attributes:
         type: Always ``"completed"``.
         usage: Token counts, if reported.
@@ -52,23 +57,6 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
     incomplete_reason: str | None = None
 
 
-class FailedEvent[RawT](RawResponseEvent[RawT]):
-    """The provider reported, as a regular event, that generation failed.
-
-    Only for a failure the provider sends as part of the stream, such as
-    OpenAI's ``response.failed``. Errors of the protocol itself (an SSE
-    ``error`` event, an error status, a broken connection) are raised as
-    exceptions by the session and never become this event.
-
-    Attributes:
-        type: Always ``"failed"``.
-        message: The provider's description of the failure.
-    """
-
-    type: Literal["failed"] = "failed"
-    message: str
-
-
 class OtherEvent[RawT](RawResponseEvent[RawT]):
     """A provider event without a shared counterpart.
 
@@ -80,10 +68,15 @@ class OtherEvent[RawT](RawResponseEvent[RawT]):
 
 
 type GenerationEvent[RawT] = Annotated[
-    TextDeltaEvent[RawT]
-    | CompletedEvent[RawT]
-    | FailedEvent[RawT]
-    | OtherEvent[RawT],
+    TextDeltaEvent[RawT] | CompletedEvent[RawT] | OtherEvent[RawT],
     Field(discriminator="type"),
 ]
 """Any shared event of a generation stream, told apart by ``type``."""
+
+GENERATION_TERMINAL: Final = EventTypes("completed")
+"""The last event of a complete generation stream, ``CompletedEvent``.
+
+``GenerationResource`` checks it: an event after it raises
+``APIResponseError`` and a stream without it raises
+``APIStreamInterruptedError``.
+"""

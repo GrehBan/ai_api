@@ -15,6 +15,7 @@ from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import NotFoundError
 from ai_api.http.exceptions.transport import (
     APIConnectionError,
+    APIStreamInterruptedError,
     APITimeoutError,
 )
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
@@ -159,13 +160,17 @@ async def test_connection_dropped_mid_stream(
     recorder.reply(Reply(chunks=[b"part"], abort=True))
     received: list[bytes] = []
 
-    with pytest.raises(APIConnectionError, match="Connection lost"):
+    with pytest.raises(APIStreamInterruptedError) as info:
         async with session.stream(RetryableDownload()) as stream:
             async for chunk in stream:
                 received.append(chunk)  # noqa: PERF401 - fails mid-loop
 
     assert received == [b"part"]
     assert len(recorder.requests) == 1
+    assert info.value.transient is False
+    assert info.value.items_received == 1
+    assert isinstance(info.value.__cause__, APIConnectionError)
+    assert "Connection lost" in str(info.value.__cause__)
 
 
 async def test_silence_between_chunks_times_out(
@@ -180,7 +185,7 @@ async def test_silence_between_chunks_times_out(
         api,
         stream_timeout=ClientTimeout(sock_read=0.3),
     ) as session:
-        with pytest.raises(APITimeoutError):
+        with pytest.raises(APIStreamInterruptedError) as info:
             async with session.stream(Download()) as stream:
                 async for chunk in stream:
                     received.append(chunk)  # noqa: PERF401 - fails mid-loop
@@ -188,6 +193,7 @@ async def test_silence_between_chunks_times_out(
         resume.set()
 
     assert received == [b"first"]
+    assert isinstance(info.value.__cause__, APITimeoutError)
 
 
 async def test_session_timeout_does_not_limit_streams(
@@ -213,10 +219,12 @@ async def test_call_timeout_limits_silence(
     resume = asyncio.Event()
     recorder.reply(Reply(chunks=[b"first", resume, b"never"]))
 
-    with pytest.raises(APITimeoutError):
+    with pytest.raises(APIStreamInterruptedError) as info:
         async with session.stream(Download(), timeout=0.3) as stream:
             async for _ in stream:
                 pass
+
+    assert isinstance(info.value.__cause__, APITimeoutError)
 
     resume.set()
 
