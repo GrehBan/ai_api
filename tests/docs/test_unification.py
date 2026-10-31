@@ -113,6 +113,9 @@ TAKEN_AS_IS = {
     "GenerationResponse.text",
     "GenerationResponse.raw",
     "CompletedEvent.type",
+    "CompletedEvent.id",
+    "CompletedEvent.model",
+    "CompletedEvent.text",
     "CompletedEvent.raw",
 }
 """The shared fields an adapter copies or sets without a conversion."""

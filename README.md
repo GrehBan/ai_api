@@ -807,7 +807,7 @@ async def list_models() -> ModelList:
 ```
 
 - **Key from the environment.** `OpenAIClient()` without a token or a session reads the key from `OPENAI_API_KEY`. An explicit token always wins over the variable, a session is never combined with it, and an empty variable counts as unset.
-- **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` with the generic `BaseErrorResolver`, or with authentication outside the `Authorization` header, gets a `UserWarning`, since both are almost certainly mistakes for OpenAI. `session_factory(token, max_body_size=...)` from `ai_api.providers.openai.client` builds a session with OpenAI's settings and your own options; type checkers check those options against `AiohttpSession`.
+- **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` with the generic `BaseErrorResolver`, or with authentication outside the `Authorization` header, gets a `UserWarning`, since both are almost certainly mistakes for OpenAI. To change only some options of the session built from a token, pass them to the client: `OpenAIClient(token, max_body_size=..., timeout=...)` takes every keyword argument of `AiohttpSession` (`AiohttpSessionOptions`), and type checkers check them; with a ready `session=` they raise `ValueError`, since they would be ignored. `session_factory(token, max_body_size=...)` from `ai_api.providers.openai.client` builds such a session on its own.
 - **Ownership.** A client closes its session when it is closed, also a session you passed in. One owner per session means no connection pool is left open by accident; create one session per client.
 - **Anthropic.** `AnthropicClient` (`ai_api.providers.anthropic`) works the same way: a token, a ready `session=` or `ANTHROPIC_API_KEY`, with the `https://api.anthropic.com/v1` URL, `BearerAuth` (Anthropic also accepts `x-api-key`, so `APIKeyAuth` in a given session gets no warning) and `AnthropicErrorResolver`. The resolver reads Anthropic's `error.type` as `error_type` and `details.error_code` as `code`; a reached spend cap (429 `enforced_spend_limit_reached`) or a spend limit you set (400) is a `QuotaExceededError` that is not retried, and the 529 `overloaded_error` is a transient `ServiceUnavailableError`, like OpenAI's 503. A stream's `error` event comes after a 200, so its class is picked by its type. Anthropic also requires an `anthropic-version` header; `API_VERSION` (`2026-10-21`) is the version the library's Anthropic types follow.
 - **Other providers.** Subclass `BaseClient`, which delegates `send_request`, `stream`, `close` and `async with` to its session, and build the session with a `SessionFactory` (`client/factory.py`). `BaseClient` is generic in the session type: `BaseClient(AiohttpSession(...)).session` is typed as `AiohttpSession`, while `OpenAIClient`, which accepts any session, is a `BaseClient[ISession]`.
@@ -892,40 +892,45 @@ async def ask_claude_streamed(client: AnthropicClient) -> str:
 
 ### Shared generation
 
-`client.generation` is the provider-neutral way to generate text: a `GenerationResource` that takes a shared `GenerationRequest` and returns shared types, with the provider's own response in `raw`. `OpenAIClient` and `AnthropicClient` both have it, so the code below works with either; with an `AnthropicClient`, `generate` returns a `GenerationResponse[Message]`.
+`client.generation` is the provider-neutral way to generate text: a `GenerationResource` that takes the fields of a shared `GenerationRequest` as keyword arguments, as the providers' SDKs do (or a ready `GenerationRequest`, not both), and returns shared types, with the provider's own response in `raw`. `OpenAIClient` and `AnthropicClient` both have it, and both are an `IGenerationClient`, so the code below works with either; with an `AnthropicClient`, `raw` is a `Message`. All of it is imported from `ai_api`.
 
 ```python
-from ai_api.providers.openai.types import Response
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import GenerationResponse, TextDeltaEvent
+from typing import Any
+
+from ai_api import (
+    CompletedEvent,
+    GenerationRequest,
+    GenerationResponse,
+    IGenerationClient,
+    Turn,
+)
 
 
-async def generate(client: OpenAIClient) -> GenerationResponse[Response]:
-    request = GenerationRequest(
+async def generate(client: IGenerationClient) -> GenerationResponse[Any]:
+    return await client.generation.create(
         model="gpt-6-astra",
         input="Hi",
         instructions="Be brief",
         max_output_tokens=64,
     )
-    return await client.generation.create(request)
 
 
-async def generate_streamed(client: OpenAIClient) -> str:
+async def generate_streamed(
+    client: IGenerationClient,
+) -> tuple[str, CompletedEvent[Any]]:
     text = ""
-    request = GenerationRequest(model="gpt-6-astra", input="Hi")
+    async with client.generation.stream(
+        model="gpt-6-astra", input="Hi"
+    ) as events:
+        async for delta in events.text():
+            text += delta
+        completed = await events.final()
 
-    async with client.generation.stream(request) as events:
-        async for event in events:
-            if isinstance(event, TextDeltaEvent):
-                text += event.text
-
-    return text
+    return text, completed
 
 
-async def chat(client: OpenAIClient) -> GenerationResponse[Response]:
-    first = await client.generation.create(
-        GenerationRequest(model="gpt-6-astra", input="Hi")
-    )
+async def chat(client: IGenerationClient) -> GenerationResponse[Any]:
+    first = await client.generation.create(model="gpt-6-astra", input="Hi")
     request = GenerationRequest(
         model="gpt-6-astra",
         input=[Turn.user("Hi"), first.to_turn(), Turn.user("Tell me more")],
@@ -935,6 +940,9 @@ async def chat(client: OpenAIClient) -> GenerationResponse[Response]:
 
 What each shared field becomes for each provider, what is lost and when a request raises is listed in [docs/unification.md](docs/unification.md).
 
+- **Keyword arguments or a request.** `create(model=..., input=...)` and `stream(...)` take exactly the fields of `GenerationRequest`; a misspelled field is a type error and, at run time, a pydantic `ValidationError`. Passing a `GenerationRequest` and fields together raises `TypeError`.
+- **Stream helpers.** `stream(...)` yields a `GenerationStream`: iterate it for every shared event, or use `events.text()` for the text deltas only and `await events.final()` for the `CompletedEvent`, which carries the response's `id`, `model`, whole `text`, `usage` and why it stopped. `final()` reads the rest of the stream, and after `text()` or a loop it returns the `CompletedEvent` already read.
+- **Any provider.** `IGenerationClient[RawT = Any, RawItemT = Any]` (from `ai_api`) is a client with `generation`; every provider client matches it, so code typed with it takes any of them.
 - **A conversation is a list of turns.** `input` is a text, taken as one `user` turn, or a list of `Turn`s (`Turn.user(...)`, `Turn.assistant(...)`, or `response.to_turn()` for an earlier answer); the list must not be empty, and its last turn must be a `user` one. System prompts go in `instructions`, not in turns.
 - **A request a provider cannot take raises `RequestValidationError`** (from `ai_api`, a `ValueError`) before anything is sent, with the `provider` and the shared `field` at fault; a pydantic error behind it is its `__cause__`. Errors of `GenerationRequest` itself stay pydantic `ValidationError`s.
 - **Why it stopped.** `incomplete_reason` is an `IncompleteReason` (`MAX_TOKENS`, `REFUSAL` or `OTHER`; `None` if the generation finished), and `raw_incomplete_reason` keeps the provider's own reason. A refusal is an answer, not an error, as in both SDKs: it sets `incomplete_reason` to `REFUSAL` and `refusal` to the provider's explanation.
@@ -962,26 +970,26 @@ Methods are specific to one provider. Resources and use cases are the layer abov
 
 - **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, a text or a list of `Turn`s, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
 - **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage` (`TokenUsage`: input, output and total tokens, with the cached and reasoning tokens among them), `incomplete_reason` (why the provider stopped early, an `IncompleteReason`; `None` if it finished), `raw_incomplete_reason`, `refusal` and the provider's own response in `raw`, so nothing the shared type lacks is lost.
-- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
+- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
 - **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
 - **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError`, an event after it `APIResponseError`.
-- **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(request)` and `stream(request)`, typed by the adapter's raw types. `BaseResource` groups the use cases of any other area.
+- **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(...)` and `stream(...)`, with keyword arguments or a request, typed by the adapter's raw types; `stream` yields a `GenerationStream` with `text()` and `final()`. `BaseResource` groups the use cases of any other area.
 
 ```python
 from collections.abc import AsyncGenerator, AsyncIterator
 
-from ai_api import Provider
-from ai_api.adapters import BaseCompositeAdapter
-from ai_api import BaseClient
-from ai_api.resources import GenerationResource
-from ai_api.session import ISession
-from ai_api.types.requests import GenerationRequest
-from ai_api.types.responses import (
+from ai_api import (
+    BaseClient,
     CompletedEvent,
     GenerationEvent,
+    GenerationRequest,
     GenerationResponse,
+    Provider,
     TextDeltaEvent,
 )
+from ai_api.adapters import BaseCompositeAdapter
+from ai_api.resources import GenerationResource
+from ai_api.session import ISession
 
 
 class CompletionAdapter(
@@ -1024,7 +1032,9 @@ class CompletionAdapter(
             if isinstance(event, TextDelta):
                 yield TextDeltaEvent[MessageEvent](text=event.text, raw=event)
             else:
-                yield CompletedEvent[MessageEvent](raw=event)
+                yield CompletedEvent[MessageEvent](
+                    model=request.model, raw=event
+                )
 
 
 class ExampleClient(BaseClient[ISession]):
@@ -1033,7 +1043,7 @@ class ExampleClient(BaseClient[ISession]):
         self.generation = GenerationResource(session, CompletionAdapter())
 ```
 
-`await client.generation.create(request)` returns a `GenerationResponse[Completion]`, and `async with client.generation.stream(request) as events` yields `GenerationEvent[MessageEvent]`s. Another provider's client builds the same `GenerationResource` with its own adapter, so the calling code does not change.
+`await client.generation.create(model=..., input=...)` returns a `GenerationResponse[Completion]`, and `async with client.generation.stream(model=..., input=...) as events` yields a `GenerationStream[MessageEvent]` of `GenerationEvent[MessageEvent]`s. Another provider's client builds the same `GenerationResource` with its own adapter, so the calling code does not change.
 
 - **Why three parts.** The session moves bytes, the adapter converts models, and the use case connects them. An adapter has no session and does no I/O, so it is tested with plain objects; a use case has no provider knowledge, so one class serves every provider.
 - **Grouped by mode, not by direction.** One adapter class holds both halves of a buffered call, so a type checker sees at the class itself whether the method it builds returns the type its `to_response` expects.

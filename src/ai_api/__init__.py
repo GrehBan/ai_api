@@ -73,6 +73,13 @@ from ai_api.methods.base import (
     BaseAPIMethod,
     BaseStreamMethod,
 )
+from ai_api.resources.protocols import (
+    IGenerationClient,
+    IGenerationResource,
+)
+from ai_api.resources.stream import (
+    GenerationStream,
+)
 from ai_api.response.parse.sse import (
     ServerSentEvent,
 )
@@ -91,6 +98,20 @@ from ai_api.types.files import (
     IOFile,
     PathFile,
     StreamFile,
+)
+from ai_api.types.requests.generation import (
+    GenerationRequest,
+    Turn,
+)
+from ai_api.types.responses.events import (
+    CompletedEvent,
+    GenerationEvent,
+    OtherEvent,
+    TextDeltaEvent,
+)
+from ai_api.types.responses.generation import (
+    GenerationResponse,
+    TokenUsage,
 )
 
 __all__ = [
@@ -119,15 +140,23 @@ __all__ = [
     "BillingError",
     "BodyFormat",
     "BytesFile",
+    "CompletedEvent",
     "ConflictError",
     "GatewayTimeoutError",
+    "GenerationEvent",
     "GenerationEventType",
+    "GenerationRequest",
+    "GenerationResponse",
+    "GenerationStream",
     "Headers",
+    "IGenerationClient",
+    "IGenerationResource",
     "IOFile",
     "IncompleteReason",
     "InputFile",
     "InternalServerError",
     "NotFoundError",
+    "OtherEvent",
     "PathFile",
     "PermissionDeniedError",
     "Provider",
@@ -141,6 +170,9 @@ __all__ = [
     "ServiceUnavailableError",
     "Stream",
     "StreamFile",
+    "TextDeltaEvent",
+    "TokenUsage",
+    "Turn",
     "UnprocessableEntityError",
     "__version__",
 ]

@@ -91,7 +91,7 @@ def to_event(raw: RawEvent) -> GenerationEvent[RawEvent]:
         case "response.output_text.delta":
             return TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
         case "response.completed":
-            return CompletedEvent[RawEvent](raw=raw)
+            return CompletedEvent[RawEvent](model="m", raw=raw)
         case _:
             return OtherEvent[RawEvent](raw=raw)
 
@@ -287,6 +287,7 @@ class ResponsesAdapter(
                 yield TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
 
         yield CompletedEvent[RawEvent](
+            model=request.model,
             raw=RawEvent(type=f"{request.model}:{deltas}"),
         )
 
@@ -520,7 +521,9 @@ def test_event_types_are_enum_members() -> None:
         GenerationEvent[Any]
     )
 
-    event = events.validate_python({"type": "completed", "raw": {}})
+    event = events.validate_python(
+        {"type": "completed", "model": "m", "raw": {}}
+    )
 
     assert isinstance(event, CompletedEvent)
     assert event.type is GenerationEventType.COMPLETED
@@ -563,7 +566,7 @@ def test_parametrized_response_validates_raw() -> None:
     ("data", "event_type"),
     [
         ({"type": "text_delta", "text": "x"}, TextDeltaEvent[RawEvent]),
-        ({"type": "completed"}, CompletedEvent[RawEvent]),
+        ({"type": "completed", "model": "m"}, CompletedEvent[RawEvent]),
         ({"type": "other"}, OtherEvent[RawEvent]),
     ],
     ids=["text-delta", "completed", "other"],
@@ -605,7 +608,7 @@ class ScriptedAdapter(
             for kind in self.types:
                 raw = RawEvent(type=kind)
                 if kind == "completed":
-                    yield CompletedEvent[RawEvent](raw=raw)
+                    yield CompletedEvent[RawEvent](model="m", raw=raw)
                 else:
                     yield OtherEvent[RawEvent](raw=raw)
         finally:
@@ -713,7 +716,9 @@ class PlainAdapter(ScriptedAdapter):
         items: AsyncIterator[RawEvent],
         request: GenerationRequest,
     ) -> AsyncIterator[GenerationEvent[RawEvent]]:
-        return PlainEvents([CompletedEvent[RawEvent](raw=RawEvent(type="x"))])
+        return PlainEvents(
+            [CompletedEvent[RawEvent](model="m", raw=RawEvent(type="x"))]
+        )
 
 
 async def test_use_case_checks_events_of_any_iterator() -> None:

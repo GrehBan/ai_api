@@ -21,7 +21,10 @@ from ai_api import (
     BaseAPIType,
     BaseClient,
     BaseStreamMethod,
+    CompletedEvent,
+    GenerationStream,
     Headers,
+    IGenerationClient,
     IncompleteReason,
     ResponseFormat,
     Role,
@@ -370,7 +373,7 @@ async def generation_resource_infers_the_types(
     request = GenerationRequest(model="m", input="x", instructions="Be brief")
     assert_type(await generation.create(request), GenerationResponse[str])
     async with generation.stream(request) as events:
-        assert_type(events, Stream[GenerationEvent[bytes]])
+        assert_type(events, GenerationStream[bytes])
     assert_type(generation.session, AiohttpSession)
     resource: IGenerationResource[str, bytes] = generation
     assert resource.session is session
@@ -395,7 +398,7 @@ async def openai_generation_infers_its_types(session: AiohttpSession) -> None:
     assert_type(response.refusal, str | None)
     assert_type(response.to_turn(), Turn)
     async with generation.stream(request) as events:
-        assert_type(events, Stream[GenerationEvent[ResponseStreamEvent]])
+        assert_type(events, GenerationStream[ResponseStreamEvent])
 
 
 def turns_are_typed() -> None:
@@ -421,7 +424,7 @@ async def anthropic_generation_infers_its_types(
     response = await client.generation.create(request)
     assert_type(response, GenerationResponse[Message])
     async with client.generation.stream(request) as events:
-        assert_type(events, Stream[GenerationEvent[MessageStreamEvent]])
+        assert_type(events, GenerationStream[MessageStreamEvent])
     AnthropicClient("sk", default_max_tokens="1")  # type: ignore[arg-type]
 
 
@@ -444,3 +447,42 @@ def conversions_are_typed(
     OpenAIGenerationAdapter(stop_conversion=stop)
     AnthropicGenerationAdapter(usage_conversion=openai_usage)  # type: ignore[arg-type]
     AnthropicGenerationAdapter(stop_conversion=stop)  # type: ignore[arg-type]
+
+
+async def generation_takes_keyword_arguments(client: OpenAIClient) -> None:
+    response = await client.generation.create(model="m", input="x")
+    assert_type(response, GenerationResponse[Response])
+    async with client.generation.stream(
+        model="m", input=[Turn.user("x")], max_output_tokens=16
+    ) as events:
+        async for text in events.text():
+            assert_type(text, str)
+        completed = await events.final()
+        assert_type(completed, CompletedEvent[ResponseStreamEvent])
+        assert_type(completed.model, str)
+        assert_type(completed.text, str | None)
+    await client.generation.create(model="m", inputs="x")  # type: ignore[call-overload]
+    await client.generation.create(input="x")  # type: ignore[call-overload]
+
+
+def clients_take_session_arguments() -> None:
+    OpenAIClient("sk", max_body_size=1_000, trust_env=True)
+    AnthropicClient("sk", default_max_tokens=8, follow_redirects=True)
+    OpenAIClient("sk", max_body_sizee=1)  # type: ignore[call-arg]
+    AnthropicClient("sk", trust_env="yes")  # type: ignore[arg-type]
+
+
+def any_generation_client(client: IGenerationClient) -> IGenerationClient:
+    return client
+
+
+def clients_are_generation_clients(
+    openai: OpenAIClient,
+    anthropic: AnthropicClient,
+) -> None:
+    typed: IGenerationClient[Response, ResponseStreamEvent] = openai
+    resource: IGenerationResource[Response, ResponseStreamEvent]
+    resource = typed.generation
+    assert resource.session is openai.session
+    any_generation_client(anthropic)
+    any_generation_client(BaseClient(openai.session))  # type: ignore[arg-type]

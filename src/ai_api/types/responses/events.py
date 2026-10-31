@@ -48,8 +48,14 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
     a stream as in ``create()``; a refusal is not a failure and ends
     with this event too.
 
+    It also carries what identifies the whole response and its whole
+    text, so a stream's caller does not have to collect them.
+
     Attributes:
         type: Always ``GenerationEventType.COMPLETED``.
+        id: The provider's id of the response, if it has one.
+        model: The model that generated the response.
+        text: The whole generated text, or ``None`` without text.
         usage: Token counts, if reported.
         incomplete_reason: Why the provider stopped before the end, in
             terms every provider has; ``None`` if the generation
@@ -63,6 +69,9 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
     type: Literal[GenerationEventType.COMPLETED] = (
         GenerationEventType.COMPLETED
     )
+    id: str | None = None
+    model: str
+    text: str | None = None
     usage: TokenUsage | None = None
     incomplete_reason: IncompleteReason | None = None
     raw_incomplete_reason: str | None = None

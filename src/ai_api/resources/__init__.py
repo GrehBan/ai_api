@@ -11,11 +11,15 @@ from ai_api.resources.generation import (
 )
 from ai_api.resources.protocols import (
     ICompositeUseCase,
+    IGenerationClient,
     IGenerationResource,
     IResource,
     ISessionAccess,
     IStreamUseCase,
     IUseCase,
+)
+from ai_api.resources.stream import (
+    GenerationStream,
 )
 from ai_api.resources.usecases import (
     AdapterCompositeUseCase,
@@ -36,7 +40,9 @@ __all__ = [
     "BaseStreamUseCase",
     "BaseUseCase",
     "GenerationResource",
+    "GenerationStream",
     "ICompositeUseCase",
+    "IGenerationClient",
     "IGenerationResource",
     "IResource",
     "ISessionAccess",

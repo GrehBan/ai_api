@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from typing import Any, Final, Self
+from typing import Any, Final, Self, TypedDict
 
 import certifi
 from aiohttp import (
@@ -133,6 +133,44 @@ def _same_origin(url: URL) -> ClientMiddlewareType:
         return await handler(request)
 
     return middleware
+
+
+class AiohttpSessionOptions(TypedDict, total=False):
+    """The optional arguments of ``AiohttpSession``, for ``**kwargs``.
+
+    A provider client takes them as ``**session_kwargs`` and passes them
+    on, so type checkers check them at the client's call. Each key is a
+    keyword-only argument of ``AiohttpSession.__init__`` with the same
+    type; a test keeps the two in step.
+
+    Attributes:
+        headers: Default headers sent with every request.
+        json_loads: JSON decoder for response bodies.
+        json_dumps: JSON encoder for request bodies.
+        max_connections: Maximum number of simultaneous connections.
+        timeout: Timeout of buffered requests.
+        stream_timeout: Timeout of streamed requests.
+        max_retry_after: Longest ``Retry-After`` to wait for, in seconds.
+        retry_deadline: Seconds since the first attempt after which no
+            retry starts; ``None`` for no limit.
+        max_body_size: Largest buffered body accepted, in bytes.
+        trust_env: Whether to use proxy settings from the environment.
+        follow_redirects: Whether to follow same-origin redirects.
+        loop: The event loop the session is bound to.
+    """
+
+    headers: HeadersType | None
+    json_loads: JsonLoads
+    json_dumps: JsonDumps
+    max_connections: int
+    timeout: ClientTimeout
+    stream_timeout: ClientTimeout
+    max_retry_after: float
+    retry_deadline: float | None
+    max_body_size: int | None
+    trust_env: bool
+    follow_redirects: bool
+    loop: asyncio.AbstractEventLoop | None
 
 
 class AiohttpSession(BaseSession):

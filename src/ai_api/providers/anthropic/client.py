@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Final
+from typing import Final, Unpack
 
 from ai_api.client.base import BaseClient
 from ai_api.client.factory import SessionFactory
@@ -20,7 +20,7 @@ from ai_api.providers.anthropic.resolver import AnthropicErrorResolver
 from ai_api.providers.anthropic.types.events import MessageStreamEvent
 from ai_api.providers.anthropic.types.messages import Message
 from ai_api.resources.generation import GenerationResource
-from ai_api.session.aiohttp import AiohttpSession
+from ai_api.session.aiohttp import AiohttpSession, AiohttpSessionOptions
 from ai_api.session.base import BaseSession
 from ai_api.session.protocols import ISession
 
@@ -95,6 +95,7 @@ class AnthropicClient(BaseClient[ISession]):
         *,
         session: ISession | None = None,
         default_max_tokens: int = DEFAULT_MAX_TOKENS,
+        **session_kwargs: Unpack[AiohttpSessionOptions],
     ) -> None:
         """Create the client from a token or a ready session.
 
@@ -108,10 +109,14 @@ class AnthropicClient(BaseClient[ISession]):
             default_max_tokens: ``max_tokens`` that ``generation`` sends
                 for a request without ``max_output_tokens``, since
                 Anthropic requires it.
+            **session_kwargs: Further arguments of the
+                ``AiohttpSession`` built from the token, such as
+                ``timeout`` or ``max_body_size``.
 
         Raises:
             ValueError: If both ``token`` and ``session`` are given, or
                 neither is and ``ANTHROPIC_API_KEY`` is unset or empty, or
+                ``session_kwargs`` are given with a ``session``, or
                 ``default_max_tokens`` is not positive.
         """
         adapter = AnthropicGenerationAdapter(
@@ -121,8 +126,15 @@ class AnthropicClient(BaseClient[ISession]):
 
         if session is None:
             assert token is not None  # noqa: S101 - checked above
-            session = session_factory(token)
+            session = session_factory(token, **session_kwargs)
         else:
+            if session_kwargs:
+                names = ", ".join(sorted(session_kwargs))
+                message = (
+                    "session_kwargs configure the session built from a "
+                    f"token; pass them to the given session instead: {names}"
+                )
+                raise ValueError(message)
             warn_about_session(session)
 
         super().__init__(session)

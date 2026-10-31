@@ -161,22 +161,32 @@ class StreamState:
     ``message_delta`` the stop reason and the cumulative counts, so the
     counts are replaced, never added up. At the end the state gives a
     real ``Usage`` and ``MessageDelta``, so a stream goes through the
-    same conversions as a message.
+    same conversions as a message, and the message's id, model and
+    whole text.
 
     Attributes:
         delta: The stop reason and details sent so far.
     """
 
     delta: MessageDelta = field(default_factory=MessageDelta)
-    _usage: Usage | None = field(default=None, init=False, repr=False)
+    _message: Message | None = field(default=None, init=False, repr=False)
+    _texts: list[str] = field(default_factory=list, init=False, repr=False)
 
     def start(self, event: MessageStartEvent) -> None:
-        """Take the counts of ``message_start``.
+        """Take the message and the counts of ``message_start``.
 
         Args:
             event: The first event of the stream.
         """
-        self._usage = event.message.usage
+        self._message = event.message
+
+    def add_text(self, text: str) -> None:
+        """Keep a text delta for the whole text.
+
+        Args:
+            text: The new text of a ``text_delta``.
+        """
+        self._texts.append(text)
 
     def update(self, event: MessageDeltaEvent) -> None:
         """Take the stop reason and counts of a ``message_delta``.
@@ -194,12 +204,13 @@ class StreamState:
         usage = event.usage
         if usage is None:
             return
-        if self._usage is None:
+        if self._message is None:
             message = (
                 "Anthropic stream sent message_delta before message_start"
             )
             raise APIResponseError(message)
-        self._usage = self._usage.model_copy(update=_sent(usage))
+        counts = self._message.usage.model_copy(update=_sent(usage))
+        self._message = self._message.model_copy(update={"usage": counts})
 
     def usage(self) -> Usage:
         """Give the counts of the whole message.
@@ -211,10 +222,31 @@ class StreamState:
         Raises:
             APIResponseError: The stream had no ``message_start``.
         """
-        if self._usage is None:
+        return self.message().usage
+
+    def message(self) -> Message:
+        """Give the message of ``message_start``.
+
+        Returns:
+            The message as the stream started it, for its id and model,
+            with the counts of the last ``message_delta``.
+
+        Raises:
+            APIResponseError: The stream had no ``message_start``.
+        """
+        if self._message is None:
             message = "Anthropic stream finished without message_start"
             raise APIResponseError(message)
-        return self._usage
+        return self._message
+
+    def text(self) -> str | None:
+        """Give the whole text streamed so far.
+
+        Returns:
+            The text deltas joined, or ``None`` if none came, as
+            ``Message.text`` gives for a message without text.
+        """
+        return "".join(self._texts) if self._texts else None
 
 
 def _sent(model: BaseModel) -> dict[str, object]:

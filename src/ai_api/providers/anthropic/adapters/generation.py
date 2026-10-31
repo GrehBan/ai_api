@@ -226,6 +226,7 @@ class AnthropicGenerationAdapter(
         async for item in items:
             match item:
                 case ContentBlockDeltaEvent(delta=TextDelta() as delta):
+                    state.add_text(delta.text)
                     yield TextDeltaEvent[MessageStreamEvent](
                         text=delta.text, raw=item
                     )
@@ -236,7 +237,11 @@ class AnthropicGenerationAdapter(
                     state.update(item)
                 case MessageStopEvent():
                     stop = self.stop_conversion(state.delta)
+                    message = state.message()
                     yield CompletedEvent[MessageStreamEvent](
+                        id=message.id,
+                        model=message.model,
+                        text=state.text(),
                         usage=self.usage_conversion(state.usage()),
                         incomplete_reason=stop.incomplete_reason,
                         raw_incomplete_reason=stop.raw_incomplete_reason,

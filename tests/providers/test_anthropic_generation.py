@@ -331,6 +331,10 @@ async def test_stream_events_are_converted() -> None:
     assert completed.raw_incomplete_reason is None
     assert completed.refusal is None
     assert completed.raw.type == "message_stop"
+    # Id and model of message_start, text of the deltas.
+    assert completed.id == STREAM[0]["message"]["id"]
+    assert completed.model == MODEL
+    assert completed.text == "Hello!"
 
 
 async def test_usage_takes_the_last_cumulative_counts() -> None:
