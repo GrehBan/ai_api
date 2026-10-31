@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Final
 
+from ai_api.enums import IncompleteReason
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.providers.openai.types.events import (
     OutputTextDeltaEvent,
     ResponseStateEvent,
     ResponseStreamEvent,
 )
-from ai_api.providers.openai.types.responses import Response, ResponseUsage
+from ai_api.providers.openai.types.responses import (
+    OutputMessage,
+    OutputRefusal,
+    Response,
+    ResponseUsage,
+)
 from ai_api.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
@@ -19,8 +26,14 @@ from ai_api.types.responses.events import (
 )
 from ai_api.types.responses.generation import TokenUsage
 
-_UNKNOWN_REASON: Final = "unknown"
-"""Reason of an incomplete response that does not say why it stopped."""
+INCOMPLETE_REASONS: Final[Mapping[str, IncompleteReason]] = {
+    "max_output_tokens": IncompleteReason.MAX_TOKENS,
+}
+"""Shared reason of each ``incomplete_details.reason`` that has one.
+
+Every other reason (``content_filter``, ``max_messages``, ``steered``,
+none at all, a reason OpenAI adds later) is ``IncompleteReason.OTHER``.
+"""
 
 
 def to_usage(usage: ResponseUsage | None) -> TokenUsage | None:
@@ -34,30 +47,79 @@ def to_usage(usage: ResponseUsage | None) -> TokenUsage | None:
     """
     if usage is None:
         return None
+    inputs = usage.input_tokens_details
+    outputs = usage.output_tokens_details
     return TokenUsage(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
+        cache_read_tokens=None if inputs is None else inputs.cached_tokens,
+        cache_write_tokens=(
+            None if inputs is None else inputs.cache_write_tokens
+        ),
+        reasoning_tokens=(
+            None if outputs is None else outputs.reasoning_tokens
+        ),
     )
 
 
-def incomplete_reason(response: Response) -> str | None:
-    """Tell why a response stopped before the end.
+def refusal(response: Response) -> str | None:
+    """Collect the refusal of a response.
 
     Args:
         response: A finished response.
 
     Returns:
-        OpenAI's reason, such as ``"max_output_tokens"``, if the
-        response is incomplete (``"unknown"`` if OpenAI gives none), and
-        ``None`` otherwise.
+        The text of all ``refusal`` parts of the output messages joined
+        together, or ``None`` if there are none.
+    """
+    parts = [
+        part.refusal
+        for item in response.output
+        if isinstance(item, OutputMessage)
+        for part in item.content
+        if isinstance(part, OutputRefusal)
+    ]
+    return "".join(parts) if parts else None
+
+
+def raw_incomplete_reason(response: Response) -> str | None:
+    """Take OpenAI's own reason of an early stop.
+
+    Args:
+        response: A finished response.
+
+    Returns:
+        ``incomplete_details.reason`` of an incomplete response, such as
+        ``"max_output_tokens"``, or ``None`` if the response is not
+        incomplete or OpenAI gives no reason.
     """
     if response.status != "incomplete":
         return None
     details = response.incomplete_details
-    if details is None or details.reason is None:
-        return _UNKNOWN_REASON
-    return details.reason
+    return None if details is None else details.reason
+
+
+def incomplete_reason(response: Response) -> IncompleteReason | None:
+    """Tell why a response stopped before the end.
+
+    A refusal part makes it a refusal, whatever the status, as OpenAI
+    marks a refusal by a content part, not by a status.
+
+    Args:
+        response: A finished response.
+
+    Returns:
+        ``REFUSAL`` if the output has a refusal part; else, for an
+        incomplete response, ``MAX_TOKENS`` or ``OTHER`` from its
+        details; ``None`` for a response that finished.
+    """
+    if refusal(response) is not None:
+        return IncompleteReason.REFUSAL
+    if response.status != "incomplete":
+        return None
+    reason = raw_incomplete_reason(response)
+    return INCOMPLETE_REASONS.get(reason or "", IncompleteReason.OTHER)
 
 
 def check_status(response: Response) -> None:
@@ -110,6 +172,8 @@ def to_event(
             return CompletedEvent[ResponseStreamEvent](
                 usage=to_usage(event.response.usage),
                 incomplete_reason=incomplete_reason(event.response),
+                raw_incomplete_reason=raw_incomplete_reason(event.response),
+                refusal=refusal(event.response),
                 raw=event,
             )
         case _:

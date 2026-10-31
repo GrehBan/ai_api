@@ -17,11 +17,15 @@ from ai_api.client.base import (
 )
 from ai_api.enums import (
     BodyFormat,
+    GenerationEventType,
+    IncompleteReason,
     Provider,
     ResponseFormat,
+    Role,
 )
 from ai_api.exceptions import (
     AIAPIError,
+    RequestValidationError,
 )
 from ai_api.http.api import (
     BaseAPI,
@@ -117,8 +121,10 @@ __all__ = [
     "BytesFile",
     "ConflictError",
     "GatewayTimeoutError",
+    "GenerationEventType",
     "Headers",
     "IOFile",
+    "IncompleteReason",
     "InputFile",
     "InternalServerError",
     "NotFoundError",
@@ -128,7 +134,9 @@ __all__ = [
     "QuotaExceededError",
     "RateLimitError",
     "RequestTimeoutError",
+    "RequestValidationError",
     "ResponseFormat",
+    "Role",
     "ServerSentEvent",
     "ServiceUnavailableError",
     "Stream",

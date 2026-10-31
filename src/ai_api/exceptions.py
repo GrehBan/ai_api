@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from ai_api.enums import Provider
 
 
 def _rebuild(cls: type[AIAPIError], args: tuple[Any, ...]) -> AIAPIError:
@@ -70,3 +73,40 @@ class AIAPIError(Exception):
             The rebuild function, its arguments and the attributes.
         """
         return (_rebuild, (type(self), self.args), self.__dict__)
+
+
+class RequestValidationError(AIAPIError, ValueError):
+    """A shared request cannot be sent to a provider as it is.
+
+    Raised by an adapter before anything is sent, when a field of a
+    shared request breaks a rule of the provider, such as OpenAI's
+    minimum ``max_output_tokens`` or Anthropic's only metadata key. A
+    ``ValueError``, like the validation error of the request itself.
+
+    Attributes:
+        provider: Provider that cannot take the request.
+        field: Name of the shared request field at fault.
+    """
+
+    default_message: ClassVar[str | None] = (
+        "{provider} cannot take the request field {field!r}."
+    )
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: Provider,
+        field: str,
+    ) -> None:
+        """Store the provider and the field.
+
+        Args:
+            message: What is wrong with the field. A pydantic error
+                behind it goes in ``__cause__``.
+            provider: Provider that cannot take the request.
+            field: Name of the shared request field at fault.
+        """
+        super().__init__(message, provider=provider.value, field=field)
+        self.provider = provider
+        self.field = field

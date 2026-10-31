@@ -25,14 +25,18 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, TypeAdapter
 
+from ai_api.adapters import ICompositeAdapter
 from ai_api.methods import BaseAPIMethod, BaseStreamMethod
+from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
 from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
 from ai_api.providers.anthropic.types import Message, MessageStreamEvent
+from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
 from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.matchers import AnyOf, EventTypes
+from ai_api.types.requests import GenerationRequest, Turn
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
 from tests.providers import test_openai_responses as openai
@@ -56,6 +60,7 @@ class Case:
             schema, with where.
         examples: The hand-written payloads of the other tests:
             responses and stream events.
+        adapter: The shared generation adapter of the endpoint.
     """
 
     name: str
@@ -66,6 +71,7 @@ class Case:
     events: TypeAdapter[Any]
     documented: dict[str, str]
     examples: tuple[list[dict[str, Any]], list[dict[str, Any]]]
+    adapter: ICompositeAdapter[GenerationRequest, Any, Any, Any, Any]
 
 
 OPENAI = Case(
@@ -89,6 +95,7 @@ OPENAI = Case(
     events=TypeAdapter(ResponseStreamEvent),
     documented={},
     examples=([openai.RESPONSE], openai.STREAM),
+    adapter=OpenAIGenerationAdapter(),
 )
 
 ANTHROPIC = Case(
@@ -117,6 +124,7 @@ ANTHROPIC = Case(
         "error": "https://platform.claude.com/docs/en/build-with-claude/streaming",
     },
     examples=([anthropic.MESSAGE], anthropic.STREAM),
+    adapter=AnthropicGenerationAdapter(),
 )
 
 CASES = [pytest.param(case, id=case.name) for case in (OPENAI, ANTHROPIC)]
@@ -263,6 +271,32 @@ async def test_requests_pass_the_request_schema(
     assert errors(schema, buffered) == []
     assert errors(schema, streamed) == []
     assert streamed == buffered | {"stream": True}
+
+
+CONVERSATION = GenerationRequest(
+    model="model-1",
+    input=[
+        Turn.user("Hi"),
+        Turn.assistant("Hello! How can I help?"),
+        Turn.user("Tell me a joke"),
+    ],
+    instructions="Be brief",
+    max_output_tokens=64,
+    metadata={"user_id": "u-1"},
+)
+"""A shared request with every field set and several turns."""
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_shared_conversation_passes_the_request_schema(case: Case) -> None:
+    schema = validator(case, "request.schema.json")
+
+    for method in (
+        case.adapter.to_method(CONVERSATION),
+        case.adapter.to_stream_method(CONVERSATION),
+    ):
+        body = json.loads(method.model_dump_json(exclude_none=True))
+        assert errors(schema, body) == []
 
 
 @pytest.mark.parametrize("case", CASES)

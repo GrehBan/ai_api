@@ -12,7 +12,8 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from ai_api.enums import Provider
+from ai_api.enums import IncompleteReason, Provider
+from ai_api.exceptions import RequestValidationError
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.exceptions.status import (
     APIStatusError,
@@ -24,7 +25,7 @@ from ai_api.providers.openai.client import session_factory
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
 from ai_api.resources import GenerationResource, IGenerationResource
-from ai_api.types.requests import GenerationRequest
+from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
     CompletedEvent,
     OtherEvent,
@@ -98,22 +99,63 @@ def test_unset_fields_are_not_sent() -> None:
 
 
 @pytest.mark.parametrize(
-    "changes",
+    ("changes", "field"),
     [
-        {"max_output_tokens": 15},
-        {"metadata": {f"k{index}": "v" for index in range(17)}},
-        {"metadata": {"k" * 65: "v"}},
+        ({"max_output_tokens": 15}, "max_output_tokens"),
+        ({"metadata": {f"k{index}": "v" for index in range(17)}}, "metadata"),
+        ({"metadata": {"k" * 65: "v"}}, "metadata"),
     ],
 )
 def test_limits_of_openai_are_checked_before_sending(
     changes: dict[str, Any],
+    field: str,
 ) -> None:
     request = REQUEST.model_copy(update=changes)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(RequestValidationError) as caught:
         adapter.to_method(request)
-    with pytest.raises(ValidationError):
+    with pytest.raises(RequestValidationError):
         adapter.to_stream_method(request)
+
+    error = caught.value
+    assert error.provider is Provider.OPENAI
+    assert error.field == field
+    assert isinstance(error, ValueError)
+    assert isinstance(error.__cause__, ValidationError)
+    assert str(error).startswith(
+        f"openai cannot take the request field {field!r}. detail: {field}"
+    )
+
+
+def test_turns_are_sent_as_input_messages() -> None:
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                Turn.assistant("Hello!"),
+                Turn.user("How are you?"),
+            ]
+        }
+    )
+
+    method = adapter.to_stream_method(request)
+
+    assert method.get_body_map()["input"] == [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "user", "content": "How are you?"},
+    ]
+
+
+def test_conversation_must_end_with_a_user_turn() -> None:
+    request = REQUEST.model_copy(update={"input": [Turn.assistant("Hello")]})
+
+    with pytest.raises(RequestValidationError, match="last turn") as caught:
+        adapter.to_method(request)
+
+    assert caught.value.provider is Provider.OPENAI
+    assert caught.value.field == "input"
+    assert caught.value.__cause__ is None
 
 
 def test_completed_response_is_converted() -> None:
@@ -126,10 +168,27 @@ def test_completed_response_is_converted() -> None:
     assert converted.model == "gpt-6-astra"
     assert converted.text == TEXT
     assert converted.usage == TokenUsage(
-        input_tokens=328, output_tokens=52, total_tokens=380
+        input_tokens=328,
+        output_tokens=52,
+        total_tokens=380,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
     )
     assert converted.incomplete_reason is None
+    assert converted.raw_incomplete_reason is None
+    assert converted.refusal is None
     assert converted.raw is raw
+
+
+def test_usage_details_are_optional() -> None:
+    usage = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+
+    converted = adapter.to_response(response(usage=usage), REQUEST)
+
+    assert converted.usage == TokenUsage(
+        input_tokens=1, output_tokens=2, total_tokens=3
+    )
 
 
 def test_response_without_text_or_usage_is_kept_empty() -> None:
@@ -140,23 +199,66 @@ def test_response_without_text_or_usage_is_kept_empty() -> None:
 
 
 @pytest.mark.parametrize(
-    ("details", "reason"),
+    ("details", "reason", "raw_reason"),
     [
-        ({"reason": "max_output_tokens"}, "max_output_tokens"),
-        ({"reason": None}, "unknown"),
-        (None, "unknown"),
+        (
+            {"reason": "max_output_tokens"},
+            IncompleteReason.MAX_TOKENS,
+            "max_output_tokens",
+        ),
+        (
+            {"reason": "content_filter"},
+            IncompleteReason.OTHER,
+            "content_filter",
+        ),
+        ({"reason": "max_messages"}, IncompleteReason.OTHER, "max_messages"),
+        ({"reason": "steered"}, IncompleteReason.OTHER, "steered"),
+        ({"reason": None}, IncompleteReason.OTHER, None),
+        (None, IncompleteReason.OTHER, None),
     ],
 )
 def test_incomplete_response_keeps_its_text_and_reason(
     details: dict[str, Any] | None,
-    reason: str,
+    reason: IncompleteReason,
+    raw_reason: str | None,
 ) -> None:
     raw = response(status="incomplete", incomplete_details=details)
 
     converted = adapter.to_response(raw, REQUEST)
 
     assert converted.text == TEXT
-    assert converted.incomplete_reason == reason
+    assert converted.incomplete_reason is reason
+    assert converted.raw_incomplete_reason == raw_reason
+
+
+REFUSED = MESSAGE | {
+    "content": [
+        {"type": "refusal", "refusal": "I can't "},
+        {"type": "refusal", "refusal": "help with that."},
+    ]
+}
+
+
+@pytest.mark.parametrize(
+    ("status", "details", "raw_reason"),
+    [
+        ("completed", None, None),
+        ("incomplete", {"reason": "max_output_tokens"}, "max_output_tokens"),
+    ],
+)
+def test_refusal_is_a_field_not_an_error(
+    status: str,
+    details: dict[str, Any] | None,
+    raw_reason: str | None,
+) -> None:
+    raw = response(status=status, incomplete_details=details, output=[REFUSED])
+
+    converted = adapter.to_response(raw, REQUEST)
+
+    assert converted.text is None
+    assert converted.refusal == "I can't help with that."
+    assert converted.incomplete_reason is IncompleteReason.REFUSAL
+    assert converted.raw_incomplete_reason == raw_reason
 
 
 @pytest.mark.parametrize(
@@ -187,9 +289,16 @@ async def test_stream_events_are_converted() -> None:
     assert converted[5].raw.model_dump() == STREAM[5]
     completed = converted[-1]
     assert completed.usage == TokenUsage(
-        input_tokens=328, output_tokens=52, total_tokens=380
+        input_tokens=328,
+        output_tokens=52,
+        total_tokens=380,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
     )
     assert completed.incomplete_reason is None
+    assert completed.raw_incomplete_reason is None
+    assert completed.refusal is None
     assert completed.raw.type == "response.completed"
 
 
@@ -204,7 +313,18 @@ async def test_incomplete_stream_completes_with_its_reason() -> None:
     (completed,) = await convert([incomplete])
 
     assert isinstance(completed, CompletedEvent)
-    assert completed.incomplete_reason == "max_output_tokens"
+    assert completed.incomplete_reason is IncompleteReason.MAX_TOKENS
+    assert completed.raw_incomplete_reason == "max_output_tokens"
+
+
+async def test_refused_stream_completes_with_the_refusal() -> None:
+    refused = state("response.completed", 1, output=[REFUSED])
+
+    (completed,) = await convert([refused])
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.incomplete_reason is IncompleteReason.REFUSAL
+    assert completed.refusal == "I can't help with that."
 
 
 async def test_adapter_leaves_the_end_to_the_parser_and_use_case() -> None:

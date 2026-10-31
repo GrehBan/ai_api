@@ -21,6 +21,7 @@ from ai_api.providers.anthropic.types.events import (
 from ai_api.providers.anthropic.types.messages import (
     ContentBlock,
     Message,
+    OutputTokensDetails,
     StopDetails,
     TextBlock,
     UnknownBlock,
@@ -40,6 +41,7 @@ __all__ = [
     "MessageStartEvent",
     "MessageStopEvent",
     "MessageStreamEvent",
+    "OutputTokensDetails",
     "PingEvent",
     "StopDetails",
     "TextBlock",

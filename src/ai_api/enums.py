@@ -1,4 +1,4 @@
-"""Identifiers shared by all layers: providers and request/response formats."""
+"""Identifiers shared by all layers: providers, formats and shared values."""
 
 from __future__ import annotations
 
@@ -56,3 +56,51 @@ class ResponseFormat(StrEnum):
     NONE = "none"
     SSE = "sse"
     NDJSON = "ndjson"
+
+
+@unique
+class Role(StrEnum):
+    """Author of a turn of a conversation.
+
+    Attributes:
+        USER: The end user.
+        ASSISTANT: The model.
+    """
+
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+@unique
+class IncompleteReason(StrEnum):
+    """Why a generation stopped before its end, in terms every provider has.
+
+    The provider's own reason is kept apart, as
+    ``raw_incomplete_reason``.
+
+    Attributes:
+        MAX_TOKENS: The output reached the token limit of the request.
+        REFUSAL: The model refused to answer.
+        OTHER: Any other reason, such as a content filter or a full
+            context window.
+    """
+
+    MAX_TOKENS = "max_tokens"
+    REFUSAL = "refusal"
+    OTHER = "other"
+
+
+@unique
+class GenerationEventType(StrEnum):
+    """``type`` of a shared generation event.
+
+    Attributes:
+        TEXT_DELTA: A piece of generated text, ``TextDeltaEvent``.
+        COMPLETED: The end of the generation, ``CompletedEvent``.
+        OTHER: A provider event without a shared counterpart,
+            ``OtherEvent``.
+    """
+
+    TEXT_DELTA = "text_delta"
+    COMPLETED = "completed"
+    OTHER = "other"
