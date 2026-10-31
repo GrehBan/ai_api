@@ -7,7 +7,6 @@ from typing import Any, Final
 
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.enums import Provider
-from ai_api.http.exceptions.response import APIResponseError
 from ai_api.providers.anthropic.adapters.conversions import (
     StreamState,
     incomplete_reason,
@@ -166,11 +165,11 @@ class AnthropicGenerationAdapter(
             One shared event per Anthropic event.
 
         Raises:
-            APIResponseError: The stream ended before ``message_stop``,
-                or ``message_stop`` came without a stop reason.
+            APIResponseError: ``message_stop`` came without a stop
+                reason. The stream's end is checked by ``StreamMessage``
+                and by the use case.
         """
         state = StreamState()
-        finished = False
         async for item in items:
             match item:
                 case ContentBlockDeltaEvent(delta=TextDelta() as delta):
@@ -183,7 +182,6 @@ class AnthropicGenerationAdapter(
                 case MessageDeltaEvent():
                     state.update(item)
                 case MessageStopEvent():
-                    finished = True
                     yield CompletedEvent[MessageStreamEvent](
                         usage=state.usage(),
                         incomplete_reason=incomplete_reason(state.stop_reason),
@@ -193,9 +191,6 @@ class AnthropicGenerationAdapter(
                 case _:
                     pass
             yield OtherEvent[MessageStreamEvent](raw=item)
-        if not finished:
-            message = "Anthropic stream ended before message_stop"
-            raise APIResponseError(message)
 
     def _fields(self, request: GenerationRequest) -> dict[str, Any]:
         """Take the method fields of a request.

@@ -149,7 +149,8 @@ class BaseSession(ABC):
             The parsed response, typed by the method's generic argument.
 
         Raises:
-            APIStatusError: If the API answered with an error status.
+            APIStatusError: If the API answered with an error status, or
+                the method's parser found a failure in a successful one.
             APITransportError: If the request could not be completed.
             APIResponseError: If the response body could not be parsed.
         """
@@ -192,10 +193,16 @@ class BaseSession(ABC):
 
         Raises:
             APIStatusError: If the API answered with an error status; raised on
-                entering the block.
-            APITransportError: If the connection fails, either on entering
-                the block or while iterating.
-            APIResponseError: If the body ends early or cannot be decoded.
+                entering the block. Also, while iterating, for an error
+                event in the stream.
+            APITransportError: If the connection fails on entering the
+                block.
+            APIStreamInterruptedError: While iterating, if the connection
+                fails or goes silent for too long (the transport error is
+                its ``__cause__``), or the body ends before the method's
+                terminal event. Never retried.
+            APIResponseError: If the body cannot be decoded or validated,
+                or an item comes after the terminal event.
 
         Example:
             >>> async with session.stream(Download()) as stream:
@@ -291,6 +298,7 @@ class BaseSession(ABC):
                 method,
                 response,
                 self.json_loads,
+                self.error_resolver,
             )
         except (ValueError, UnicodeError) as exc:
             raise APIResponseError(

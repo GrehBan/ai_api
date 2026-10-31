@@ -451,8 +451,8 @@ async with session.stream(StreamMessage(prompt="Hi")) as events:
 - **Format.** It must be set for models and unions: the item type alone doesn't tell SSE from NDJSON. Without it the class definition raises `TypeError`. `ServerSentEvent` items imply SSE.
 - **Parsing.** SSE follows the HTML standard: multi-line `data`, comments, `event`, `id` and `retry`, and `\n`, `\r\n` or `\r` line endings. An event split across chunks is held back until it is complete, and an unfinished event at the end of the body is dropped. NDJSON skips blank lines.
 - **Validation.** Each event is validated through a `TypeAdapter` built once, when the class is defined, from the generic argument as written. That is why discriminated unions and `type` aliases work as item types. An event that doesn't match raises `APIResponseError`.
-- **End of stream.** `data: [DONE]` (OpenAI) ends the stream and is not yielded.
-- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, so a provider's `classify` can mark it transient. So does JSON data whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama). An event with another `type` may carry an `error` field as data (a failed tool call, for example). Override `StreamResponseParser.is_error_event` for other rules.
+- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that). Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
+- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, so a provider's `classify` can mark it transient. So does decoded data that the parser's `error_events` matcher accepts. The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
 - **Raw events.** `BaseStreamMethod[ServerSentEvent]` yields events as they are, with their `data`, `event`, `id` and `retry`. `[DONE]` and error events are handled the same way.
 - **Limits.** `StreamResponseParser(max_line_size=...)` limits one SSE or NDJSON line and `max_event_size=...` the data of one SSE event, in characters. Both are off by default; set them for an untrusted server, since a line without an end would otherwise grow in memory.
 
@@ -464,11 +464,14 @@ A connection can break at any point of a long generation. What happens depends o
 |---|---|---|
 | Before the response arrives: connection refused, DNS, TLS, connect timeout | `APIConnectionError`, `APITimeoutError` or `APITLSError` on entering the block | yes, if the method is retryable and the error is transient |
 | The server answers with an error status | the `APIStatusError` for it, on entering the block | yes, if the error is transient |
-| The connection drops after some items | `APIConnectionError` from `async for` | no |
-| No data for 600 s (`sock_read`) | `APITimeoutError` from `async for` | no |
+| The connection drops after some items | `APIStreamInterruptedError` from `async for`, caused by the `APIConnectionError` | no |
+| No data for 600 s (`sock_read`) | `APIStreamInterruptedError` from `async for`, caused by the `APITimeoutError` | no |
+| The body ends before the method's `__stream_terminal__` | `APIStreamInterruptedError` from `async for`, without a cause | no |
 | The server sends an error event | the `APIStatusError` for it, from `async for` | no |
 
-Items you received before the failure stay yours, and the connection is released as the block exits. The error's `transient` flag still says whether trying again makes sense, but the library does not try again on its own.
+Items you received before the failure stay yours (`items_received` counts them), and the connection is released as the block exits, also when the task is cancelled. `APIStreamInterruptedError` is never `transient`: trying again means a new request, and the library does not do that on its own.
+
+A body that simply stops between two events, without an error, is the hard case: HTTP/1.1 ends a body without `Content-Length` or chunked encoding by closing the connection (RFC 9112, section 6.3), so such a cut looks like a normal end. Only the terminal event tells a complete stream from a cut one, which is why the provider methods declare it and `generation` checks its own `CompletedEvent`.
 
 **Why a broken stream is not retried automatically.** Opening the stream again would send the request again. For a generation endpoint that is a new, separately billed generation with different output. The library cannot know what your code has already done with the items it received, such as printing them or forwarding them to a user, so it cannot splice the two streams into one without duplicating or losing text.
 
@@ -481,7 +484,11 @@ Items you received before the failure stay yours, and the connection is released
 **What to do instead.** Decide in your code what a broken stream means. For short answers the simplest choice is to start over and drop the partial text:
 
 ```python
-from ai_api import APIConnectionError, APITimeoutError
+from ai_api import (
+    APIConnectionError,
+    APIStreamInterruptedError,
+    APITimeoutError,
+)
 
 
 async def generate_text(prompt: str, attempts: int = 3) -> str:
@@ -492,7 +499,11 @@ async def generate_text(prompt: str, attempts: int = 3) -> str:
             async with session.stream(Generate(prompt=prompt)) as stream:
                 async for piece in stream:
                     pieces.append(piece)
-        except (APIConnectionError, APITimeoutError):
+        except (
+            APIConnectionError,  # opening failed
+            APITimeoutError,
+            APIStreamInterruptedError,  # broke after it was opened
+        ):
             if attempt == attempts:
                 raise
             continue                        # drop the partial text, ask again
@@ -530,7 +541,8 @@ AIAPIError
 │   ├── APITimeoutError
 │   ├── APITLSError
 │   ├── APIRedirectError        redirect not followed
-│   └── APIRequestError         failed upload source, invalid header or URL
+│   ├── APIRequestError         failed upload source, invalid header or URL
+│   └── APIStreamInterruptedError  an open stream broke or ended early
 └── APIResponseError            invalid HTTP, body too large, not decodable or valid
 ```
 
@@ -544,7 +556,8 @@ An `APIStatusError` carries:
 - `status`, `code`, `error_type` and `request_id`;
 - `provider`, from the error resolver;
 - `retry_after`, from the `Retry-After` header;
-- `transient`.
+- `transient`;
+- `raw`, the parsed object that reported the failure, when there is one: OpenAI's `Response` with `status: "failed"`, or a stream's error event when it fits the item type.
 
 Every error message starts with the class's fixed description and ends with `detail: <the API's message>`, so logs have a stable prefix and the provider's own explanation.
 
@@ -829,7 +842,7 @@ async def ask_streamed(client: OpenAIClient) -> str:
 
 - **`output_text` is computed.** The API sends no such field; like the official SDKs, `Response.output_text` joins the `output_text` parts of the `message` items, and is `None` when there are none.
 - **Nothing unknown is dropped or rejected.** Output items, content parts and stream events that the library does not model yet (reasoning, tool calls, new event types) arrive as `UnknownOutputItem`, `UnknownContent` and `UnknownEvent`, with every field the provider sent kept as an extra field.
-- **Failures.** `response.failed` and `response.incomplete` are regular `ResponseStateEvent`s with `response.error` or `response.incomplete_details`; the separate `error` event is raised as an `APIStatusError` with its code and message.
+- **Failures are raised.** A `failed` response, buffered (`CreateResponse`) or as the stream's `response.failed` event, raises the `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`, with the `Response` or the event in `raw`; so does the separate `error` event. `server_error` is a transient `InternalServerError`, `rate_limit_exceeded` a `RateLimitError`; a code without its own class, such as `invalid_prompt`, gives a plain, non-transient `APIStatusError`. This is stricter than the official SDK, which returns a failed response as a value. `CreateResponse` is not retried by default, because creating a response is not idempotent. `response.incomplete` stays a regular `ResponseStateEvent` with `response.incomplete_details`.
 - **Checked before sending.** `max_output_tokens` of at least 16, `temperature` from 0 to 2, and metadata of up to 16 pairs with keys up to 64 and values up to 512 characters, as OpenAI documents them.
 
 ### Anthropic Messages API
@@ -911,9 +924,10 @@ async def generate_streamed(client: OpenAIClient) -> str:
 
 - **OpenAI mapping.** `OpenAIGenerationAdapter` (`ai_api.providers.openai.adapters`) builds `CreateResponse` or `StreamResponse` from the request, so OpenAI's limits, such as `max_output_tokens` of at least 16, are checked before sending. Parameters the shared request lacks, such as `temperature`, stay on the methods above.
 - **OpenAI stopped early.** An `incomplete` response, cut off by `max_output_tokens` for example, keeps its `text` and gets `incomplete_reason`, OpenAI's reason such as `"max_output_tokens"`; in a stream, `response.incomplete` is a `CompletedEvent` with it.
-- **OpenAI failures are raised.** A buffered response that is not `completed` or `incomplete`, `failed` first of all, raises `APIResponseError` with OpenAI's code and message, and so does a stream that ends without `response.completed`, `response.failed` or `response.incomplete`. In a stream, `response.failed` arrives as a `FailedEvent`.
+- **OpenAI failures are raised.** A `failed` response raises the `APIStatusError` described under the Responses API, before the adapter sees it, in `create` and in `stream` alike. Any other buffered status that is not `completed` or `incomplete` (`cancelled`, `in_progress`, ...) raises `APIResponseError`, since there is no generated text to return.
 - **Anthropic mapping.** `AnthropicGenerationAdapter` (`ai_api.providers.anthropic.adapters`) sends `input` as one `user` turn and `instructions` as `system`. Anthropic requires `max_tokens`, so a request without `max_output_tokens` gets the client's `default_max_tokens` (`AnthropicClient(..., default_max_tokens=1024)`). Metadata other than `user_id` raises `ValueError` instead of being dropped.
-- **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it. A `stop_reason` other than `end_turn` or `stop_sequence` (`max_tokens`, `refusal`, ...) becomes `incomplete_reason`, with the text kept. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a stream that ends before `message_stop`, or a message without a `stop_reason`, raises `APIResponseError`. Anthropic reports failures only as `error` events, so its streams have no `FailedEvent`.
+- **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it. A `stop_reason` other than `end_turn` or `stop_sequence` (`max_tokens`, `refusal`, ...) becomes `incomplete_reason`, with the text kept. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a message without a `stop_reason` raises `APIResponseError`. Anthropic reports failures as `error` events, which are raised as `APIStatusError`.
+- **The end is checked for every provider.** `stream` yields exactly one `CompletedEvent`, as the last event: a stream that ends without it raises `APIStreamInterruptedError` (the provider method's terminal check usually raises it first), and an event after it raises `APIResponseError`. A failure is always an exception, never an event.
 
 ### Adding a provider
 
@@ -932,9 +946,9 @@ Methods are specific to one provider. Resources and use cases are the layer abov
 
 - **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
 - **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage`, `incomplete_reason` (why the provider stopped early, such as a token limit; `None` if it finished) and the provider's own response in `raw`, so nothing the shared type lacks is lost.
-- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent`, `FailedEvent` and `OtherEvent`. `CompletedEvent` carries `usage` and `incomplete_reason` too. `FailedEvent` is for a failure the provider reports as a regular event; protocol errors stay exceptions.
+- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `usage` and `incomplete_reason` too. A failure is an exception at every level, never an event.
 - **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
-- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both.
+- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError`, an event after it `APIResponseError`.
 - **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(request)` and `stream(request)`, typed by the adapter's raw types. `BaseResource` groups the use cases of any other area.
 
 ```python

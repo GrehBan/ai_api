@@ -8,27 +8,39 @@ provider; the shared results and errors must not.
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pytest
+from aiohttp import ClientTimeout
 
 from ai_api.client.factory import SessionFactory
 from ai_api.enums import Provider
-from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.exceptions.status import (
     BadRequestError,
     ServiceUnavailableError,
 )
+from ai_api.http.exceptions.transport import (
+    APIConnectionError,
+    APIStreamInterruptedError,
+    APITimeoutError,
+)
+from ai_api.methods.base import BaseStreamMethod
 from ai_api.providers.anthropic import AnthropicClient
 from ai_api.providers.anthropic.client import (
     session_factory as anthropic_factory,
 )
+from ai_api.providers.anthropic.methods import StreamMessage
 from ai_api.providers.openai import OpenAIClient
 from ai_api.providers.openai.client import session_factory as openai_factory
+from ai_api.providers.openai.methods import StreamResponse
 from ai_api.resources import IGenerationResource
+from ai_api.response.stream import Stream
 from ai_api.types.requests import GenerationRequest
 from ai_api.types.responses import (
     CompletedEvent,
@@ -51,6 +63,10 @@ class Client:
     """What the scenarios need of a provider client."""
 
     generation: IGenerationResource[Any, Any]
+
+    def stream(
+        self, method: BaseStreamMethod[Any]
+    ) -> AbstractAsyncContextManager[Stream[Any]]: ...  # pragma: no cover
 
     async def __aenter__(self) -> Client: ...  # pragma: no cover
 
@@ -75,10 +91,11 @@ class Case:
         stream_usage: Shared token counts of that stream.
         overloaded: An overloaded error, as the stream sends it.
         bad_request: Body of a 400 response.
+        raw_stream: Builds the provider's own stream method.
     """
 
     provider: Provider
-    client: Callable[[str], Any]
+    client: Callable[..., Any]
     factory: SessionFactory[Any, Any, ...]
     path: str
     response: dict[str, Any]
@@ -90,6 +107,17 @@ class Case:
     stream_usage: TokenUsage
     overloaded: dict[str, Any]
     bad_request: dict[str, Any]
+    raw_stream: Callable[[], BaseStreamMethod[Any]]
+
+    @property
+    def delta(self) -> dict[str, Any]:
+        """The first text delta of the stream."""
+        return next(e for e in self.stream if "delta" in e["type"])
+
+    @property
+    def until_delta(self) -> list[dict[str, Any]]:
+        """The stream up to its first text delta, included."""
+        return self.stream[: self.stream.index(self.delta) + 1]
 
 
 OPENAI = Case(
@@ -123,6 +151,7 @@ OPENAI = Case(
             "type": "invalid_request_error",
         }
     },
+    raw_stream=lambda: StreamResponse(model="model-1", input="Hi"),
 )
 
 ANTHROPIC = Case(
@@ -147,6 +176,7 @@ ANTHROPIC = Case(
         "type": "error",
         "error": {"type": "invalid_request_error", "message": "Bad"},
     },
+    raw_stream=lambda: StreamMessage(**anthropic.request()),
 )
 
 
@@ -178,6 +208,23 @@ def client(
     """The provider's client, sent to the local server."""
     monkeypatch.setattr(case.factory, "api", api)
     return case.client(TEST_TOKEN)
+
+
+@pytest.fixture
+def make_client(
+    case: Case,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[..., Client]:
+    """Build the provider's client with the given session settings."""
+    monkeypatch.setattr(case.factory, "api", api)
+
+    def build(**session_kwargs: Any) -> Client:
+        session = case.factory(TEST_TOKEN, **session_kwargs)
+        client: Client = case.client(session=session)
+        return client
+
+    return build
 
 
 async def test_create_returns_the_text_and_usage(
@@ -254,10 +301,17 @@ async def test_stream_cut_before_its_end_raises(
 ) -> None:
     recorder.reply(events(case.stream[:-1]))
 
+    received: list[Any] = []
+
     async with client, client.generation.stream(REQUEST) as stream:
-        with pytest.raises(APIResponseError, match="stream ended before"):
-            async for _ in stream:
-                pass
+        with pytest.raises(APIStreamInterruptedError) as caught:
+            async for event in stream:
+                received.append(event)  # noqa: PERF401 - fails mid-loop
+
+    assert caught.value.__cause__ is None
+    assert caught.value.transient is False
+    assert len(received) == len(case.stream) - 1
+    assert not any(isinstance(event, CompletedEvent) for event in received)
 
 
 async def test_break_closes_the_stream(
@@ -300,3 +354,143 @@ async def test_error_status_raises_before_streaming(
     assert created.value.provider is case.provider
     assert created.value.transient is False
     assert len(recorder.requests) == 2
+
+
+def text_of(events: list[Any]) -> list[str]:
+    """The text deltas among shared events."""
+    return [e.text for e in events if isinstance(e, TextDeltaEvent)]
+
+
+async def test_connection_drop_keeps_the_text_and_raises(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    reply = events(case.until_delta)
+    recorder.reply(replace(reply, abort=True))
+    received: list[Any] = []
+
+    async with client, client.generation.stream(REQUEST) as stream:
+        with pytest.raises(APIStreamInterruptedError) as caught:
+            async for event in stream:
+                received.append(event)  # noqa: PERF401 - fails mid-loop
+
+    assert text_of(received) == case.deltas[:1]
+    assert isinstance(caught.value.__cause__, APIConnectionError)
+    assert caught.value.transient is False
+    assert len(recorder.requests) == 1
+
+
+async def test_silence_keeps_the_text_and_raises(
+    case: Case,
+    make_client: Callable[..., Client],
+    recorder: Recorder,
+) -> None:
+    resume = asyncio.Event()
+    frames = [frame(payload) for payload in case.until_delta]
+    recorder.reply(
+        Reply(
+            chunks=[*frames, resume, frame(case.stream[-1])],
+            content_type="text/event-stream",
+        )
+    )
+    received: list[Any] = []
+    client = make_client(stream_timeout=ClientTimeout(sock_read=0.3))
+
+    async with client, client.generation.stream(REQUEST) as stream:
+        with pytest.raises(APIStreamInterruptedError) as caught:
+            async for event in stream:
+                received.append(event)  # noqa: PERF401 - fails mid-loop
+
+    resume.set()
+
+    assert text_of(received) == case.deltas[:1]
+    assert isinstance(caught.value.__cause__, APITimeoutError)
+
+
+def endless(case: Case) -> Reply:
+    """A stream of text deltas that never ends."""
+    return Reply(
+        chunks=itertools.chain(
+            [frame(case.stream[0])], itertools.repeat(frame(case.delta))
+        ),
+        chunk_delay=0.001,
+        content_type="text/event-stream",
+    )
+
+
+def opener(
+    client: Client, case: Case, mode: str
+) -> AbstractAsyncContextManager[Stream[Any]]:
+    """Open the raw provider stream or the shared generation stream."""
+    if mode == "raw":
+        return client.stream(case.raw_stream())
+    return client.generation.stream(REQUEST)
+
+
+MODES = pytest.mark.parametrize("mode", ["raw", "generation"])
+
+
+@MODES
+async def test_cancelling_the_task_while_iterating_releases_the_connection(
+    case: Case,
+    make_client: Callable[..., Client],
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    recorder.reply(endless(case), Reply(json=case.response))
+    started = asyncio.Event()
+
+    async def consume(client: Client) -> None:
+        async with opener(client, case, mode) as stream:
+            async for _ in stream:
+                started.set()
+
+    # With one connection, a leaked one would block the next request.
+    async with make_client(max_connections=1) as client:
+        task = asyncio.create_task(consume(client))
+        await asyncio.wait_for(started.wait(), 2)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        async with asyncio.timeout(2):
+            response = await client.generation.create(REQUEST)
+
+    assert response.text == case.text
+
+
+@MODES
+async def test_cancelling_the_task_while_opening_releases_the_connection(
+    case: Case,
+    make_client: Callable[..., Client],
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    recorder.reply(
+        replace(events(case.stream), delay=1),
+        Reply(json=case.response),
+    )
+
+    async def consume(client: Client) -> None:
+        async with opener(client, case, mode) as stream:  # pragma: no cover
+            async for _ in stream:
+                pass
+
+    async with make_client(max_connections=1) as client:
+        task = asyncio.create_task(consume(client))
+
+        async with asyncio.timeout(2):
+            while not recorder.requests:
+                await asyncio.sleep(0.01)
+
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        async with asyncio.timeout(2):
+            response = await client.generation.create(REQUEST)
+
+    assert response.text == case.text

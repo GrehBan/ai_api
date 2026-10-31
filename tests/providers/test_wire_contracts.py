@@ -30,7 +30,9 @@ from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
 from ai_api.providers.anthropic.types import Message, MessageStreamEvent
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
+from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.session.aiohttp import AiohttpSession
+from ai_api.types.matchers import AnyOf, EventTypes
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
 from tests.providers import test_openai_responses as openai
@@ -112,6 +114,7 @@ ANTHROPIC = Case(
     events=TypeAdapter(MessageStreamEvent),
     documented={
         "ping": "https://platform.claude.com/docs/en/build-with-claude/streaming",
+        "error": "https://platform.claude.com/docs/en/build-with-claude/streaming",
     },
     examples=([anthropic.MESSAGE], anthropic.STREAM),
 )
@@ -252,8 +255,9 @@ async def test_requests_pass_the_request_schema(
 
     await session.send_request(case.create(**case.request))
     buffered = json.loads(recorder.last.body)
-    async with session.stream(case.stream(**case.request)) as events:
-        [_ async for _ in events]
+    # Only the request matters: the examples are not one stream.
+    async with session.stream(case.stream(**case.request)):
+        pass
     streamed = json.loads(recorder.last.body)
 
     assert errors(schema, buffered) == []
@@ -311,6 +315,40 @@ def test_known_types_exist_upstream(case: Case) -> None:
 
     assert ours - upstream == set()
     assert type_tags(case.response.model_json_schema()) - nested == set()
+
+
+def matched_types(matcher: object) -> set[str]:
+    """Collect the event types a matcher names.
+
+    Args:
+        matcher: A matcher, possibly combined with ``|``.
+
+    Returns:
+        The ``types`` of every ``EventTypes`` in it.
+    """
+    if isinstance(matcher, AnyOf):
+        return set().union(*map(matched_types, matcher.matchers))
+    if isinstance(matcher, EventTypes):
+        return set(matcher.types)
+    return set()
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_declared_event_types_exist_upstream(case: Case) -> None:
+    # A misspelled terminal would never match, and every complete stream
+    # would end in APIStreamInterruptedError.
+    upstream = event_tags(load(case.name, "stream.schema.json"))
+    upstream |= case.documented.keys()
+    method = case.stream(**case.request)
+    parser = method.stream_parser
+    assert isinstance(parser, StreamResponseParser)
+
+    terminal = matched_types(method.stream_terminal)
+    errors = matched_types(parser.error_events)
+
+    assert terminal
+    assert terminal - upstream == set()
+    assert errors - upstream == set()
 
 
 @pytest.mark.parametrize("case", CASES)

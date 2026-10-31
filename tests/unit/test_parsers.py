@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import enum
+import json
 import uuid
 from typing import Annotated, Any
 from unittest.mock import MagicMock
@@ -12,12 +13,15 @@ import pytest
 from pydantic import Strict
 
 from ai_api.enums import ResponseFormat
+from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import APIStatusError
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.response.buffered import BufferedResponse
 from ai_api.response.parse.buffered import BufferedResponseParser
 from ai_api.serialization.json import loads
 from ai_api.types.base import BaseAPIType
+from ai_api.types.matchers import FieldValues
 from tests.conftest import make_method
 
 
@@ -68,6 +72,7 @@ def parse(
         method,
         response(body, status=201, charset=charset),
         json_loads,
+        BaseErrorResolver(),
     )
 
 
@@ -195,3 +200,40 @@ def test_stream_formats_are_unsupported(
             __response_format__=response_format,
             __response_parser__=BufferedResponseParser(),
         )
+
+
+class Run(BaseAPIType):
+    id: str
+    status: str
+
+
+@pytest.mark.parametrize(
+    "json_loads",
+    [loads, json.loads],
+    ids=["default-decoder", "custom-decoder"],
+)
+def test_failed_result_is_raised_with_the_result(json_loads: Any) -> None:
+    parser = BufferedResponseParser(
+        error_responses=FieldValues("status", "failed")
+    )
+    method = make_method(BaseAPIMethod[Run])()
+    body = b'{"id": "r-1", "status": "failed", "error": {"code": "x"}}'
+
+    with pytest.raises(APIStatusError) as info:
+        parser.parse(method, response(body), json_loads, BaseErrorResolver())
+
+    assert info.value.status == 200
+    assert info.value.code == "x"
+    assert info.value.raw == Run(id="r-1", status="failed")
+
+
+def test_other_results_are_returned() -> None:
+    parser = BufferedResponseParser(
+        error_responses=FieldValues("status", "failed")
+    )
+    method = make_method(BaseAPIMethod[Run])()
+    body = b'{"id": "r-1", "status": "completed"}'
+
+    run = parser.parse(method, response(body), loads, BaseErrorResolver())
+
+    assert run == Run(id="r-1", status="completed")

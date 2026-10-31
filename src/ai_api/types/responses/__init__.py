@@ -6,9 +6,9 @@ from ai_api.types.responses.base import (
     BaseResponse,
 )
 from ai_api.types.responses.events import (
+    GENERATION_TERMINAL,
     BaseResponseEvent,
     CompletedEvent,
-    FailedEvent,
     GenerationEvent,
     OtherEvent,
     RawResponseEvent,
@@ -23,7 +23,7 @@ __all__ = [
     "BaseResponse",
     "BaseResponseEvent",
     "CompletedEvent",
-    "FailedEvent",
+    "GENERATION_TERMINAL",
     "GenerationEvent",
     "GenerationResponse",
     "OtherEvent",

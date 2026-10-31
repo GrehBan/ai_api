@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
@@ -12,6 +12,10 @@ from ai_api.providers.anthropic.methods.base import (
 )
 from ai_api.providers.anthropic.types.events import MessageStreamEvent
 from ai_api.providers.anthropic.types.messages import Message
+from ai_api.types.matchers import EventTypes
+
+TERMINAL_EVENTS: Final = EventTypes("message_stop")
+"""The event that ends a complete Messages stream."""
 
 
 class CreateMessage(MessageParams, BaseAPIMethod[Message]):
@@ -40,7 +44,9 @@ class StreamMessage(MessageParams, BaseStreamMethod[MessageStreamEvent]):
     The stream is ``message_start``, content blocks (each a
     ``content_block_start``, deltas and a ``content_block_stop``), one or
     more ``message_delta`` and ``message_stop``, with ``ping`` events in
-    between; an ``error`` event is raised as an ``APIStatusError``.
+    between; an ``error`` event is raised as an ``APIStatusError``. A body
+    that ends before ``message_stop`` raises
+    ``APIStreamInterruptedError``.
 
     Attributes:
         stream: Always ``True``; asks Anthropic for server-sent events.
@@ -62,5 +68,6 @@ class StreamMessage(MessageParams, BaseStreamMethod[MessageStreamEvent]):
     __request_body_format__ = BodyFormat.JSON
     __request_headers__ = VERSION_HEADERS
     __response_format__ = ResponseFormat.SSE
+    __stream_terminal__ = TERMINAL_EVENTS
 
     stream: Literal[True] = True

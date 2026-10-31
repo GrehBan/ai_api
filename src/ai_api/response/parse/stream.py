@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import codecs
-from collections.abc import AsyncIterator, Callable, Mapping
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import AsyncIterator
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import TypeAdapter
 
@@ -12,28 +13,27 @@ from ai_api.enums import ResponseFormat
 from ai_api.http.exceptions.protocols import IErrorResolver
 from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.exceptions.status import APIStatusError
+from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.http.headers import CONTENT_TYPE, EVENT_STREAM_CONTENT_TYPE
 from ai_api.response.parse.lines import LineDecoder, LineTooLongError
 from ai_api.response.parse.sse import SSE_DONE, EventTooLargeError, SSEDecoder
 from ai_api.response.protocols import IStreamResponse
 from ai_api.serialization.json import JsonLoads, loads
+from ai_api.types.matchers import DONE_MARKER, EventTypes, TopLevelError
+from ai_api.types.protocols import IEventMatcher
 
 if TYPE_CHECKING:
     from ai_api.methods.protocols import IStreamMethod
 
 
-def _is_error(value: Any) -> bool:
-    """Check whether the ``error`` key of an event reports an error.
+ERROR_EVENTS: Final = EventTypes("error") | TopLevelError()
+"""Default ``error_events`` of ``StreamResponseParser``.
 
-    Args:
-        value: The value of the top-level ``error`` key.
-
-    Returns:
-        ``True`` for ``true`` and a non-empty object or string. ``null``,
-        ``false`` and empty values mean "no error", as in OpenAI batch
-        output lines.
-    """
-    return value is True or (isinstance(value, (Mapping, str)) and bool(value))
+An event with a ``type`` is an error only if the type is ``"error"``, so
+a regular event may carry an ``error`` field (a failed tool call, for
+example). An object without a ``type`` is an error if its ``error`` is
+``true`` or a non-empty object or string, as in OpenAI and Ollama.
+"""
 
 
 def _check_event_stream(response: IStreamResponse) -> None:
@@ -66,6 +66,7 @@ class StreamResponseParser:
         max_line_size: int | None = None,
         max_event_size: int | None = None,
         require_event_stream: bool = True,
+        error_events: IEventMatcher = ERROR_EVENTS,
     ) -> None:
         """Create the parser.
 
@@ -79,37 +80,21 @@ class StreamResponseParser:
                 portal answering 200 with an HTML page would otherwise
                 give a silently empty stream; turn it off only for a
                 server that sends another type.
+            error_events: Recognizes the decoded JSON of an SSE event or
+                an NDJSON line that reports an error; such an event is
+                raised as the ``APIStatusError`` the session's error
+                resolver builds, instead of being yielded. An SSE event
+                of type ``error`` is always raised.
         """
         self._max_line_size = max_line_size
         self._max_event_size = max_event_size
         self._require_event_stream = require_event_stream
+        self._error_events = error_events
 
-    def is_error_event(self, body: Any) -> bool:
-        """Decide whether decoded event data reports an error.
-
-        An event with a ``type`` is an error only if the type is
-        ``"error"``, so a regular event may carry an ``error`` field (a
-        failed tool call, for example). An event without a ``type`` is an
-        error if its ``error`` key is ``true`` or a non-empty object or
-        string, as in OpenAI and Ollama. Override it for a provider with
-        other rules.
-
-        Args:
-            body: The decoded JSON of an SSE event or an NDJSON line.
-
-        Returns:
-            Whether the event is raised as an ``APIStatusError``.
-        """
-        if not isinstance(body, Mapping):
-            return False
-
-        body = cast(Mapping[str, Any], body)
-
-        if "type" in body:
-            kind: object = body["type"]
-            return kind == "error"
-
-        return _is_error(body.get("error"))
+    @property
+    def error_events(self) -> IEventMatcher:
+        """Recognizes the decoded event data that is raised as an error."""
+        return self._error_events
 
     def parse[T](
         self,
@@ -130,7 +115,9 @@ class StreamResponseParser:
         Returns:
             Raw chunks for BYTES, decoded text pieces for TEXT, and events
             validated into the method's item type for SSE and NDJSON
-            (``ServerSentEvent`` items are returned as they are).
+            (``ServerSentEvent`` items are returned as they are). For SSE
+            and NDJSON, ``method.stream_terminal`` is enforced as
+            ``BaseStreamMethod.__stream_terminal__`` describes.
 
         Raises:
             ValueError: If the format is not supported for streams.
@@ -148,7 +135,8 @@ class StreamResponseParser:
                     method.response_adapter,
                     json_loads,
                     error_resolver,
-                    is_error_event=self.is_error_event,
+                    error_events=self._error_events,
+                    terminal=method.stream_terminal,
                     max_line_size=self._max_line_size,
                     max_event_size=self._max_event_size,
                 )
@@ -221,12 +209,88 @@ class StreamResponseParser:
             ) from exc
 
 
+class _Ending:
+    """Enforces the terminal item of one stream.
+
+    Attributes:
+        ended: Whether the terminal item has been seen.
+        received: Items yielded so far.
+    """
+
+    def __init__(self, terminal: IEventMatcher | None, status: int) -> None:
+        """Start at the beginning of a stream.
+
+        Args:
+            terminal: Recognizes the terminal item; ``None`` checks
+                nothing.
+            status: HTTP status of the stream, for errors.
+        """
+        self._terminal = terminal
+        self._status = status
+        self.ended = False
+        self.received = 0
+
+    def check_open(self) -> None:
+        """Ensure no item comes after the terminal one.
+
+        Raises:
+            APIResponseError: If the terminal item has been seen.
+        """
+        if self.ended:
+            raise APIResponseError(
+                "Stream sent an item after its terminal event",
+                status=self._status,
+            )
+
+    def see(self, item: object) -> None:
+        """Count an item about to be yielded.
+
+        Args:
+            item: The item.
+        """
+        self.received += 1
+
+        if self._terminal is not None and self._terminal.matches(item):
+            self.ended = True
+
+    def see_done(self) -> bool:
+        """Handle ``data: [DONE]``, which is not an item.
+
+        Returns:
+            Whether to stop reading: without a declared terminal
+            ``[DONE]`` ends the stream; with one, it only counts as the
+            terminal if the terminal matches ``DONE_MARKER``, and the
+            body is read to its end.
+        """
+        if self._terminal is None:
+            return True
+
+        if self._terminal.matches(DONE_MARKER):
+            self.ended = True
+
+        return False
+
+    def finish(self) -> None:
+        """Check the end of the body.
+
+        Raises:
+            APIStreamInterruptedError: If a terminal is declared and has
+                not been seen.
+        """
+        if self._terminal is not None and not self.ended:
+            raise APIStreamInterruptedError(
+                "Stream ended before its terminal event",
+                items_received=self.received,
+            )
+
+
 class _EventReader[T]:
     """Reads SSE or NDJSON events of one response.
 
     An event that signals an error is raised as the ``APIStatusError`` the
     error resolver builds: an SSE event of type ``error``, or data that
-    ``is_error_event`` accepts.
+    ``error_events`` matches. A declared terminal is enforced as
+    ``BaseStreamMethod.__stream_terminal__`` describes.
     """
 
     def __init__(
@@ -236,7 +300,8 @@ class _EventReader[T]:
         json_loads: JsonLoads,
         error_resolver: IErrorResolver,
         *,
-        is_error_event: Callable[[Any], bool],
+        error_events: IEventMatcher,
+        terminal: IEventMatcher | None = None,
         max_line_size: int | None = None,
         max_event_size: int | None = None,
     ) -> None:
@@ -250,7 +315,9 @@ class _EventReader[T]:
             json_loads: JSON decoder; with the default one, data is
                 validated by Pydantic directly in JSON mode.
             error_resolver: Builds the error for an error event.
-            is_error_event: Decides whether decoded data is an error.
+            error_events: Recognizes decoded data that is an error.
+            terminal: Recognizes the item that ends the stream; ``None``
+                checks nothing.
             max_line_size: Longest line accepted, in characters; ``None``
                 for no limit.
             max_event_size: Largest SSE event data accepted, in
@@ -260,8 +327,9 @@ class _EventReader[T]:
         self._adapter = adapter
         self._json_loads = json_loads
         self._error_resolver = error_resolver
+        self._error_events = error_events
+        self._terminal = terminal
         self._max_line_size = max_line_size
-        self._is_error_event = is_error_event
         self._max_event_size = max_event_size
 
     async def iter_sse(self) -> AsyncIterator[T]:
@@ -269,14 +337,19 @@ class _EventReader[T]:
 
         Yields:
             Validated events, or ``ServerSentEvent`` without an adapter.
-            ``data: [DONE]`` ends the stream and is not yielded.
+            ``data: [DONE]`` is not yielded; without a declared terminal
+            it ends the stream.
 
         Raises:
             APIStatusError: For an error event.
             APIResponseError: If the body is not valid UTF-8, an event is
-                larger than the limit or does not match the item type.
+                larger than the limit or does not match the item type, or
+                an event comes after the terminal one.
+            APIStreamInterruptedError: If the body ends before the
+                declared terminal event.
         """
         decoder = SSEDecoder(self._max_event_size)
+        ending = _Ending(self._terminal, self._response.status)
 
         async for line in self._iter_lines():
             try:
@@ -291,15 +364,28 @@ class _EventReader[T]:
                 continue
 
             if event.data == SSE_DONE:
-                return
+                if ending.see_done():
+                    return
+
+                continue
 
             if event.event == "error":
                 raise self._resolve(self._loads_or_none(event.data))
 
+            item: T
+
             if self._adapter is None:
-                yield cast(T, event)
+                ending.check_open()
+                item = cast(T, event)
             else:
-                yield self._validate(event.data)
+                body = self._decode(event.data)
+                ending.check_open()
+                item = self._validate(event.data, body)
+
+            ending.see(item)
+            yield item
+
+        ending.finish()
 
     async def iter_ndjson(self) -> AsyncIterator[T]:
         """Parse a newline-delimited JSON body.
@@ -309,12 +395,23 @@ class _EventReader[T]:
 
         Raises:
             APIStatusError: For an error object.
-            APIResponseError: If the body is not valid UTF-8 or a line
-                does not match the item type.
+            APIResponseError: If the body is not valid UTF-8, a line does
+                not match the item type, or a line comes after the
+                terminal one.
+            APIStreamInterruptedError: If the body ends before the
+                declared terminal line.
         """
+        ending = _Ending(self._terminal, self._response.status)
+
         async for line in self._iter_lines():
             if line.strip():
-                yield self._validate(line)
+                body = self._decode(line)
+                ending.check_open()
+                item = self._validate(line, body)
+                ending.see(item)
+                yield item
+
+        ending.finish()
 
     async def _iter_lines(self) -> AsyncIterator[str]:
         """Split the body into lines.
@@ -346,35 +443,58 @@ class _EventReader[T]:
                 status=self._response.status,
             ) from exc
 
-    def _validate(self, data: str) -> T:
-        """Turn the data of one event into an item.
+    def _decode(self, data: str) -> Any:
+        """Decode the data of one event and raise it if it is an error.
+
+        Every event is decoded, so ``error_events`` sees the same JSON
+        the error resolver gets, whatever the item type accepts.
 
         Args:
             data: JSON text of the event.
 
         Returns:
+            The decoded JSON.
+
+        Raises:
+            APIStatusError: If ``error_events`` matches the data.
+            APIResponseError: If the data is not valid JSON.
+        """
+        try:
+            body = self._json_loads(data)
+        except ValueError as exc:
+            raise APIResponseError(
+                "Failed to validate stream event",
+                status=self._response.status,
+            ) from exc
+
+        if self._error_events.matches(body):
+            raise self._resolve(body, data)
+
+        return body
+
+    def _validate(self, data: str, body: Any) -> T:
+        """Turn the data of one event into an item.
+
+        Args:
+            data: JSON text of the event.
+            body: The same data, decoded.
+
+        Returns:
             The validated item, or the decoded JSON without an adapter.
 
         Raises:
-            APIStatusError: If the data is an error object.
-            APIResponseError: If the data is not valid JSON or does not
-                match the item type.
+            APIResponseError: If the data does not match the item type.
         """
-        # Only data that may be an error object is decoded twice.
-        if '"error"' in data:
-            body = self._loads_or_none(data)
-
-            if self._is_error_event(body):
-                raise self._resolve(body)
+        if self._adapter is None:
+            return cast(T, body)
 
         try:
-            if self._adapter is None:
-                return cast(T, self._json_loads(data))
-
+            # The default decoder means JSON mode, as for buffered
+            # responses; a custom decoder's result is validated as it is.
             if self._json_loads is loads:
                 return self._adapter.validate_json(data)
 
-            return self._adapter.validate_python(self._json_loads(data))
+            return self._adapter.validate_python(body)
         except ValueError as exc:  # ValidationError included
             raise APIResponseError(
                 "Failed to validate stream event",
@@ -395,18 +515,28 @@ class _EventReader[T]:
         except ValueError:
             return None
 
-    def _resolve(self, body: Any) -> APIStatusError:
+    def _resolve(self, body: Any, data: str | None = None) -> APIStatusError:
         """Build the error for an error event.
 
         Args:
             body: The decoded event data, or ``None``.
+            data: JSON text of the event, if it may fit the item type;
+                the validated item is then kept as the error's ``raw``.
 
         Returns:
             The error built by the resolver from the stream's status and
             headers.
         """
-        return self._error_resolver.resolve(
+        error = self._error_resolver.resolve(
             status=self._response.status,
             body=body,
             headers=self._response.headers,
         )
+
+        # An error event that does not fit the item type (OpenAI's flat
+        # "error" event, for one) is still raised; only raw stays None.
+        if data is not None and self._adapter is not None:
+            with suppress(APIResponseError):
+                error.raw = self._validate(data, body)
+
+        return error

@@ -24,6 +24,7 @@ from ai_api.http.exceptions.status import (
 )
 from ai_api.http.exceptions.transport import (
     APIConnectionError,
+    APIStreamInterruptedError,
     APITLSError,
 )
 from ai_api.http.headers import Headers
@@ -466,11 +467,12 @@ async def test_failure_mid_stream_is_not_retried() -> None:
     )
     received: list[bytes] = []
 
-    with pytest.raises(APIConnectionError):
+    with pytest.raises(APIStreamInterruptedError) as info:
         async with transport.stream(stream_method(retryable=True)) as stream:
             async for item in stream:
                 received.append(item)  # noqa: PERF401 - fails mid-loop
 
+    assert isinstance(info.value.__cause__, APIConnectionError)
     assert received == [b"a"]
     assert transport.attempts == 1
     assert response.aclose_calls == 1
@@ -486,6 +488,33 @@ async def test_break_closes_parser_and_response() -> None:
     ) as stream:
         async for _ in stream:
             break
+
+    assert parser.closed
+    assert response.aclose_calls == 1
+
+
+async def test_cancellation_closes_parser_and_response() -> None:
+    # T1: a cancelled task releases the stream as break does, and the
+    # CancelledError reaches the caller as it is.
+    parser = TrackingStreamParser()
+    response = FakeStreamResponse([b"a", b"b", b"c"])
+    transport = FakeTransport(stream_responses=[response])
+    started = asyncio.Event()
+
+    async def consume() -> None:
+        async with transport.stream(
+            stream_method(__stream_parser__=parser)
+        ) as stream:
+            async for _ in stream:
+                started.set()
+                await asyncio.sleep(10)
+
+    task = asyncio.create_task(consume())
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     assert parser.closed
     assert response.aclose_calls == 1

@@ -18,6 +18,7 @@ from ai_api.http.exceptions.transport import (
     APIConnectionError,
     APIRedirectError,
     APIRequestError,
+    APIStreamInterruptedError,
     APITimeoutError,
     APITLSError,
     APITransportError,
@@ -166,6 +167,20 @@ def test_transport_error_transience(
     assert error.message.startswith("detail: ")
 
 
+def test_stream_interruption_is_never_transient() -> None:
+    error = APIStreamInterruptedError(items_received=2)
+
+    assert isinstance(error, APITransportError)
+    assert not isinstance(error, APIConnectionError)
+    assert error.transient is False
+    assert error.items_received == 2
+    assert error.message == "detail: The stream was interrupted."
+
+
+def test_status_error_has_no_raw_by_default() -> None:
+    assert APIStatusError(status=500).raw is None
+
+
 def test_transport_error_default_and_override() -> None:
     assert APITransportError("boom").transient is True
     assert APITransportError("boom", transient=False).transient is False
@@ -231,7 +246,9 @@ def pickled(error: AIAPIError) -> AIAPIError:
             transient=True,
         ),
         APIStatusError(status=599),
+        APIStatusError(status=200, raw={"status": "failed"}),
         APITimeoutError(),
+        APIStreamInterruptedError("cut", items_received=3),
         APIRequestError("bad header"),
         APIResponseError("broken", status=200),
         TemplatedError("late", what="upload", n=3),

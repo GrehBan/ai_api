@@ -10,7 +10,10 @@ from ai_api.resources.usecases import AdapterCompositeUseCase
 from ai_api.response.stream import Stream
 from ai_api.session.protocols import ISession
 from ai_api.types.requests.generation import GenerationRequest
-from ai_api.types.responses.events import GenerationEvent
+from ai_api.types.responses.events import (
+    GENERATION_TERMINAL,
+    GenerationEvent,
+)
 from ai_api.types.responses.generation import GenerationResponse
 
 
@@ -52,7 +55,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
                 and its stream items.
         """
         super().__init__(session)
-        self._generate = AdapterCompositeUseCase(session, adapter)
+        self._generate = AdapterCompositeUseCase(
+            session, adapter, terminal=GENERATION_TERMINAL
+        )
 
     async def create(
         self,
@@ -79,6 +84,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
 
         Returns:
             A context manager that yields the events and closes the
-            converted and the provider's stream on exit.
+            converted and the provider's stream on exit. A complete
+            stream ends with exactly one ``CompletedEvent``; a stream
+            cut before it raises ``APIStreamInterruptedError``, and a
+            failed generation an ``APIStatusError``.
         """
         return self._generate.stream(request)

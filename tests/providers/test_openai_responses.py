@@ -14,7 +14,13 @@ import pytest
 from pydantic import ValidationError
 
 from ai_api.enums import Provider
-from ai_api.http.exceptions.status import APIStatusError, RateLimitError
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import (
+    APIStatusError,
+    InternalServerError,
+    RateLimitError,
+)
+from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.resolver import OpenAIErrorResolver
 from ai_api.providers.openai.types import (
@@ -33,6 +39,7 @@ from ai_api.providers.openai.types import (
     UnknownEvent,
     UnknownOutputItem,
 )
+from ai_api.response.buffered import BufferedResponse
 from ai_api.session.aiohttp import AiohttpSession
 from tests.conftest import (
     FakeStreamResponse,
@@ -324,7 +331,7 @@ async def test_stream_response_yields_typed_events(
     assert completed.response.usage.total_tokens == 380
 
 
-async def test_refusal_and_failed_events_are_regular_events() -> None:
+async def test_refusal_events_are_regular_events() -> None:
     part = {"item_id": ITEM_ID, "output_index": 0, "content_index": 0}
     chunks = [
         frame(
@@ -343,14 +350,7 @@ async def test_refusal_and_failed_events_are_regular_events() -> None:
                 "sequence_number": 2,
             }
         ),
-        frame(
-            state(
-                "response.failed",
-                3,
-                status="failed",
-                error={"code": "server_error", "message": "Failed"},
-            )
-        ),
+        frame(state("response.completed", 3)),
     ]
     transport = FakeTransport(
         stream_responses=[FakeStreamResponse(chunks, headers=SSE)],
@@ -362,14 +362,131 @@ async def test_refusal_and_failed_events_are_regular_events() -> None:
     ) as events:
         received = [event async for event in events]
 
-    delta, done, failed = received
+    delta, done, completed = received
     assert isinstance(delta, RefusalDeltaEvent)
     assert isinstance(done, RefusalDoneEvent)
     assert done.refusal == "No"
-    assert isinstance(failed, ResponseStateEvent)
-    assert failed.type == "response.failed"
-    assert failed.response.error is not None
-    assert failed.response.error.message == "Failed"
+    assert isinstance(completed, ResponseStateEvent)
+
+
+async def test_failed_event_raises_by_its_code() -> None:
+    failed = state(
+        "response.failed",
+        2,
+        status="failed",
+        usage=None,
+        error={"code": "server_error", "message": "Failed"},
+    )
+    chunks = [frame(state("response.created", 1)), frame(failed)]
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(chunks, headers=SSE)],
+        error_resolver=OpenAIErrorResolver(),
+    )
+    received: list[Any] = []
+
+    async with transport.stream(
+        StreamResponse(model="m", input="Hi")
+    ) as events:
+        with pytest.raises(InternalServerError) as caught:
+            async for event in events:
+                received.append(event)  # noqa: PERF401 - fails mid-loop
+
+    assert len(received) == 1
+    assert caught.value.code == "server_error"
+    assert caught.value.transient is True
+    assert caught.value.provider is Provider.OPENAI
+    assert "Failed" in str(caught.value)
+    raw = caught.value.raw
+    assert isinstance(raw, ResponseStateEvent)
+    assert raw.type == "response.failed"
+    assert raw.response.status == "failed"
+
+
+async def test_stream_cut_before_its_terminal_event_raises() -> None:
+    chunks = [frame(state("response.created", 1))]
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(chunks, headers=SSE)],
+        error_resolver=OpenAIErrorResolver(),
+    )
+
+    async with transport.stream(
+        StreamResponse(model="m", input="Hi")
+    ) as events:
+        with pytest.raises(APIStreamInterruptedError) as caught:
+            async for _ in events:
+                pass
+
+    assert caught.value.items_received == 1
+
+
+async def test_event_after_the_terminal_event_raises() -> None:
+    chunks = [
+        frame(state("response.completed", 1)),
+        frame(state("response.completed", 2)),
+    ]
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(chunks, headers=SSE)],
+        error_resolver=OpenAIErrorResolver(),
+    )
+
+    async with transport.stream(
+        StreamResponse(model="m", input="Hi")
+    ) as events:
+        first = await anext(events)
+        with pytest.raises(APIResponseError, match="after its terminal"):
+            await anext(events)
+
+    assert isinstance(first, ResponseStateEvent)
+
+
+FAILED = RESPONSE | {
+    "status": "failed",
+    "output": [],
+    "usage": None,
+    "error": {"code": "server_error", "message": "The model failed."},
+}
+
+
+@pytest.mark.parametrize(
+    ("error", "error_class", "transient", "message"),
+    [
+        (
+            {"code": "server_error", "message": "The model failed."},
+            InternalServerError,
+            True,
+            "The model failed.",
+        ),
+        (
+            {"code": "invalid_prompt", "message": "Flagged."},
+            APIStatusError,
+            False,
+            "Flagged.",
+        ),
+        (None, APIStatusError, False, "failed without an error"),
+    ],
+    ids=["server-error", "unmapped-code", "no-error"],
+)
+async def test_failed_response_raises_with_the_response(
+    error: dict[str, Any] | None,
+    error_class: type[APIStatusError],
+    transient: bool,
+    message: str,
+) -> None:
+    body = json.dumps(FAILED | {"error": error}).encode()
+    transport = FakeTransport(
+        [BufferedResponse(status=200, headers={}, body=body)],
+        error_resolver=OpenAIErrorResolver(),
+    )
+
+    with pytest.raises(APIStatusError) as caught:
+        await transport.send_request(CreateResponse(model="m", input="Hi"))
+
+    assert type(caught.value) is error_class
+    assert caught.value.status == 200
+    assert caught.value.transient is transient
+    assert message in str(caught.value)
+    assert isinstance(caught.value.raw, Response)
+    assert caught.value.raw.status == "failed"
 
 
 async def test_error_event_raises_with_its_message() -> None:

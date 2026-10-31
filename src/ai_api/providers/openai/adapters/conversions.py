@@ -13,17 +13,11 @@ from ai_api.providers.openai.types.events import (
 from ai_api.providers.openai.types.responses import Response, ResponseUsage
 from ai_api.types.responses.events import (
     CompletedEvent,
-    FailedEvent,
     GenerationEvent,
     OtherEvent,
     TextDeltaEvent,
 )
 from ai_api.types.responses.generation import TokenUsage
-
-TERMINAL_EVENTS: Final = frozenset(
-    {"response.completed", "response.failed", "response.incomplete"}
-)
-"""Types of the events that end a Responses stream."""
 
 _UNKNOWN_REASON: Final = "unknown"
 """Reason of an incomplete response that does not say why it stopped."""
@@ -66,27 +60,14 @@ def incomplete_reason(response: Response) -> str | None:
     return details.reason
 
 
-def failure_message(response: Response) -> str:
-    """Describe why a response failed.
-
-    Args:
-        response: A response with status ``failed``.
-
-    Returns:
-        OpenAI's error message, or a note that it sent none.
-    """
-    if response.error is None:
-        return f"response {response.id} failed without an error"
-    return response.error.message
-
-
 def check_status(response: Response) -> None:
     """Reject a response that did not finish.
 
     A response is created without ``background``, so OpenAI answers
     only when it has finished: ``completed`` or ``incomplete`` (stopped
-    early, with the text generated so far). Any other status, ``failed``
-    first of all, leaves no generated text to return.
+    early, with the text generated so far). A ``failed`` one never gets
+    here: ``CreateResponse`` raises it as an ``APIStatusError``. Any
+    other status leaves no generated text to return.
 
     Args:
         response: The parsed response.
@@ -97,10 +78,6 @@ def check_status(response: Response) -> None:
     """
     if response.status in {"completed", "incomplete"}:
         return
-    if response.status == "failed":
-        code = "" if response.error is None else f" ({response.error.code})"
-        message = f"OpenAI response failed{code}: {failure_message(response)}"
-        raise APIResponseError(message)
     message = (
         f"OpenAI response {response.id} has status {response.status!r}, "
         "expected 'completed' or 'incomplete'"
@@ -118,7 +95,9 @@ def to_event(
 
     Returns:
         A text delta, the completion (also of an incomplete response),
-        the failure, or ``OtherEvent`` for every other event.
+        or ``OtherEvent`` for every other event. ``response.failed``
+        never gets here: ``StreamResponse`` raises it as an
+        ``APIStatusError``.
     """
     match event:
         case OutputTextDeltaEvent():
@@ -132,10 +111,6 @@ def to_event(
                 usage=to_usage(event.response.usage),
                 incomplete_reason=incomplete_reason(event.response),
                 raw=event,
-            )
-        case ResponseStateEvent(type="response.failed"):
-            return FailedEvent[ResponseStreamEvent](
-                message=failure_message(event.response), raw=event
             )
         case _:
             return OtherEvent[ResponseStreamEvent](raw=event)

@@ -16,6 +16,8 @@ from ai_api.adapters.base import (
 )
 from ai_api.adapters.protocols import ICompositeAdapter
 from ai_api.enums import BodyFormat, Provider, ResponseFormat
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.resources.base import BaseResource, BaseSessionAccess
 from ai_api.resources.generation import GenerationResource
@@ -37,8 +39,8 @@ from ai_api.response.stream import Stream, map_stream
 from ai_api.types.base import BaseAPIType
 from ai_api.types.requests.generation import GenerationRequest
 from ai_api.types.responses.events import (
+    GENERATION_TERMINAL,
     CompletedEvent,
-    FailedEvent,
     GenerationEvent,
     OtherEvent,
     TextDeltaEvent,
@@ -482,10 +484,9 @@ def test_parametrized_response_validates_raw() -> None:
     [
         ({"type": "text_delta", "text": "x"}, TextDeltaEvent[RawEvent]),
         ({"type": "completed"}, CompletedEvent[RawEvent]),
-        ({"type": "failed", "message": "boom"}, FailedEvent[RawEvent]),
         ({"type": "other"}, OtherEvent[RawEvent]),
     ],
-    ids=["text-delta", "completed", "failed", "other"],
+    ids=["text-delta", "completed", "other"],
 )
 def test_response_events_are_told_apart_by_type(
     data: dict[str, Any],
@@ -499,3 +500,151 @@ def test_response_events_are_told_apart_by_type(
 
     assert type(event) is event_type
     assert event.raw == RawEvent(type="x")
+
+
+class ScriptedAdapter(
+    BaseStreamAdapter[GenerationRequest, RawEvent, GenerationEvent[RawEvent]]
+):
+    """Ignores the provider's items and yields the given event types."""
+
+    def __init__(self, *types: str) -> None:
+        self.types = types
+        self.closed = False
+
+    def to_stream_method(self, request: GenerationRequest) -> CreateStream:
+        return CreateStream(model=request.model, input=request.input)
+
+    async def to_events(
+        self,
+        items: AsyncIterator[RawEvent],
+        request: GenerationRequest,
+    ) -> AsyncGenerator[GenerationEvent[RawEvent]]:
+        try:
+            async for _ in items:
+                pass
+            for kind in self.types:
+                raw = RawEvent(type=kind)
+                if kind == "completed":
+                    yield CompletedEvent[RawEvent](raw=raw)
+                else:
+                    yield OtherEvent[RawEvent](raw=raw)
+        finally:
+            self.closed = True
+
+
+def scripted_use_case(*types: str) -> tuple[Any, ScriptedAdapter]:
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(STREAM_CHUNKS, headers=SSE)]
+    )
+    adapter = ScriptedAdapter(*types)
+    use_case = AdapterStreamUseCase(
+        transport, adapter, terminal=GENERATION_TERMINAL
+    )
+    return use_case, adapter
+
+
+async def test_use_case_accepts_one_final_event_last() -> None:
+    use_case, adapter = scripted_use_case("other", "completed")
+
+    async with use_case.stream(REQUEST) as events:
+        received = [event.type async for event in events]
+
+    assert received == ["other", "completed"]
+    assert adapter.closed
+
+
+async def test_use_case_rejects_an_event_after_the_final_one() -> None:
+    use_case, adapter = scripted_use_case("completed", "other")
+    received: list[str] = []
+
+    async with use_case.stream(REQUEST) as events:
+        with pytest.raises(APIResponseError, match="after its final"):
+            async for event in events:
+                received.append(event.type)  # noqa: PERF401 - fails mid-loop
+
+    assert received == ["completed"]
+    assert adapter.closed
+
+
+async def test_use_case_rejects_a_second_final_event() -> None:
+    use_case, _ = scripted_use_case("completed", "completed")
+
+    async with use_case.stream(REQUEST) as events:
+        with pytest.raises(APIResponseError, match="after its final"):
+            async for _ in events:
+                pass
+
+
+async def test_use_case_rejects_a_stream_without_its_final_event() -> None:
+    use_case, adapter = scripted_use_case("other", "other")
+
+    async with use_case.stream(REQUEST) as events:
+        with pytest.raises(APIStreamInterruptedError) as info:
+            async for _ in events:
+                pass
+
+    assert info.value.items_received == 2
+    assert info.value.__cause__ is None
+    assert adapter.closed
+
+
+async def test_use_case_closes_the_adapter_on_break() -> None:
+    use_case, adapter = scripted_use_case("other", "other", "completed")
+
+    async with use_case.stream(REQUEST) as events:
+        async for _ in events:
+            break
+
+    assert adapter.closed
+
+
+async def test_use_case_without_a_terminal_checks_nothing() -> None:
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(STREAM_CHUNKS, headers=SSE)]
+    )
+    use_case = AdapterStreamUseCase(transport, ScriptedAdapter("other"))
+
+    async with use_case.stream(REQUEST) as events:
+        received = [event.type async for event in events]
+
+    assert use_case.terminal is None
+    assert received == ["other"]
+
+
+class PlainEvents:
+    """Converted events from an iterator that is not a generator."""
+
+    def __init__(self, events: list[GenerationEvent[RawEvent]]) -> None:
+        self.events = iter(events)
+
+    def __aiter__(self) -> PlainEvents:
+        return self
+
+    async def __anext__(self) -> GenerationEvent[RawEvent]:
+        try:
+            return next(self.events)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+class PlainAdapter(ScriptedAdapter):
+    def to_events(  # type: ignore[override]
+        self,
+        items: AsyncIterator[RawEvent],
+        request: GenerationRequest,
+    ) -> AsyncIterator[GenerationEvent[RawEvent]]:
+        return PlainEvents([CompletedEvent[RawEvent](raw=RawEvent(type="x"))])
+
+
+async def test_use_case_checks_events_of_any_iterator() -> None:
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(STREAM_CHUNKS, headers=SSE)]
+    )
+    use_case = AdapterStreamUseCase(
+        transport, PlainAdapter(), terminal=GENERATION_TERMINAL
+    )
+
+    async with use_case.stream(REQUEST) as events:
+        received = [event.type async for event in events]
+
+    assert received == ["completed"]

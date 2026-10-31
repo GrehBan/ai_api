@@ -32,6 +32,7 @@ from ai_api.response.parse.protocols import (
 )
 from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.types.protocols import IEventMatcher
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
     str: ResponseFormat.TEXT,
@@ -530,6 +531,13 @@ class BaseStreamMethod[ItemT](BaseMethod[ItemT]):
 
     Attributes:
         __stream_parser__: Parser of the stream.
+        __stream_terminal__: Recognizes the item that ends a complete
+            SSE or NDJSON stream, e.g. ``EventTypes("message_stop")`` or
+            ``DONE``. When it is set, a body that ends without it raises
+            ``APIStreamInterruptedError`` and an item after it raises
+            ``APIResponseError`` (the body is read to its end). ``None``,
+            the default, checks nothing: by the HTTP and SSE standards
+            the end of the body is a normal end.
         __stream_item__: The generic argument as written, including
             unions and type aliases.
         __response_adapter__: Validator of the item type for SSE and
@@ -546,6 +554,7 @@ class BaseStreamMethod[ItemT](BaseMethod[ItemT]):
 
     __response_format__ = ResponseFormat.BYTES
     __stream_parser__: ClassVar[IStreamParser] = StreamResponseParser()
+    __stream_terminal__: ClassVar[IEventMatcher | None] = None
     __stream_item__: ClassVar[Any] = None
     __response_adapter__: ClassVar[TypeAdapter[Any] | None] = None
 
@@ -678,6 +687,11 @@ class BaseStreamMethod[ItemT](BaseMethod[ItemT]):
     def stream_parser(self) -> IStreamParser:
         """Parser of the stream."""
         return self.__stream_parser__
+
+    @property
+    def stream_terminal(self) -> IEventMatcher | None:
+        """Recognizes the item that ends a complete stream, if declared."""
+        return self.__stream_terminal__
 
     @property
     def response_adapter(self) -> TypeAdapter[ItemT] | None:

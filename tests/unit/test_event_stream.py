@@ -19,6 +19,7 @@ from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.serialization.json import JsonLoads, loads
 from ai_api.types.base import BaseAPIType
+from ai_api.types.matchers import FieldValues
 from tests.conftest import FakeStreamResponse, make_method
 
 
@@ -337,17 +338,14 @@ async def test_error_events_are_raised(item: Any) -> None:
         await collect(parse(Any, ResponseFormat.NDJSON, [ndjson(item)]))
 
 
-async def test_is_error_event_can_be_overridden() -> None:
-    class StatusParser(StreamResponseParser):
-        def is_error_event(self, body: Any) -> bool:
-            return isinstance(body, dict) and body.get("status") == "error"
-
+async def test_error_events_can_be_configured() -> None:
+    parser = StreamResponseParser(error_events=FieldValues("status", "error"))
     method = make_method(
         BaseStreamMethod[dict[str, Any]],
         __response_format__=ResponseFormat.NDJSON,
     )()
     body = ndjson({"error": "kept"}) + ndjson({"status": "error"})
-    items = StatusParser().parse(
+    items = parser.parse(
         method, FakeStreamResponse([body]), loads, BaseErrorResolver()
     )
 

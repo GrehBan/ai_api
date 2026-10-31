@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import AbstractAsyncContextManager
 
 from ai_api.adapters.protocols import (
@@ -11,9 +11,12 @@ from ai_api.adapters.protocols import (
     ICompositeAdapter,
     IStreamAdapter,
 )
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.resources.base import BaseSessionAccess
 from ai_api.response.stream import Stream, transform_stream
 from ai_api.session.protocols import ISession
+from ai_api.types.protocols import IEventMatcher
 from ai_api.types.requests.base import BaseRequest
 from ai_api.types.responses.base import BaseResponse
 from ai_api.types.responses.events import BaseResponseEvent
@@ -103,10 +106,57 @@ async def _respond[ReqT: BaseRequest, RawT, RespT: BaseResponse](
     return adapter.to_response(raw, request)
 
 
+async def _terminated[EventT](
+    events: AsyncIterator[EventT],
+    terminal: IEventMatcher,
+) -> AsyncGenerator[EventT]:
+    """Enforce the shared contract of a converted stream.
+
+    Exactly one event matches ``terminal``, and it is the last one. The
+    provider's own protocol is checked by its parser; this catches an
+    adapter that drops, repeats or misplaces the final event.
+
+    Args:
+        events: The converted events.
+        terminal: Recognizes the final event.
+
+    Yields:
+        The events, unchanged.
+
+    Raises:
+        APIResponseError: If an event comes after the final one.
+        APIStreamInterruptedError: If the events end without it.
+    """
+    ended = False
+    received = 0
+
+    try:
+        async for event in events:
+            if ended:
+                raise APIResponseError(
+                    "Stream produced an event after its final event"
+                )
+
+            ended = terminal.matches(event)
+            received += 1
+            yield event
+
+        if not ended:
+            raise APIStreamInterruptedError(
+                "Stream ended before its final event",
+                items_received=received,
+            )
+    finally:
+        # Closed here, or it would stay suspended until the loop ends.
+        if isinstance(events, AsyncGenerator):
+            await events.aclose()
+
+
 def _open[ReqT: BaseRequest, RawItemT, EventT: BaseResponseEvent](
     session: ISession,
     adapter: IStreamAdapter[ReqT, RawItemT, EventT],
     request: ReqT,
+    terminal: IEventMatcher | None,
 ) -> AbstractAsyncContextManager[Stream[EventT]]:
     """Open the adapted stream method and convert its items.
 
@@ -114,6 +164,8 @@ def _open[ReqT: BaseRequest, RawItemT, EventT: BaseResponseEvent](
         session: The session that sends the method.
         adapter: Converts the request and the stream items.
         request: The request in shared types.
+        terminal: Recognizes the final event of the converted stream;
+            ``None`` checks nothing.
 
     Returns:
         A context manager that yields the events and closes both streams
@@ -127,9 +179,14 @@ def _open[ReqT: BaseRequest, RawItemT, EventT: BaseResponseEvent](
             items: The items of the provider's stream.
 
         Returns:
-            The events in shared types.
+            The events in shared types, checked against ``terminal``.
         """
-        return adapter.to_events(items, request)
+        converted = adapter.to_events(items, request)
+
+        if terminal is None:
+            return converted
+
+        return _terminated(converted, terminal)
 
     return transform_stream(
         session.stream(adapter.to_stream_method(request)),
@@ -193,21 +250,30 @@ class AdapterStreamUseCase[
 
     Attributes:
         adapter: Converts the request and the stream items.
+        terminal: Recognizes the final event of the shared stream, such
+            as ``GENERATION_TERMINAL``; ``None`` checks nothing.
     """
 
     def __init__(
         self,
         session: SessionT,
         adapter: IStreamAdapter[ReqT, RawItemT, EventT],
+        *,
+        terminal: IEventMatcher | None = None,
     ) -> None:
         """Keep the session and the adapter.
 
         Args:
             session: The session that sends the requests.
             adapter: Converts the request and the stream items.
+            terminal: Recognizes the final event of the shared stream.
+                When set, exactly one event must match it and be the
+                last: an event after it raises ``APIResponseError``, and
+                a stream without it ``APIStreamInterruptedError``.
         """
         super().__init__(session)
         self.adapter = adapter
+        self.terminal = terminal
 
     def stream(
         self,
@@ -222,7 +288,7 @@ class AdapterStreamUseCase[
             A context manager that yields the events and closes the
             converted and the provider's stream on exit.
         """
-        return _open(self.session, self.adapter, request)
+        return _open(self.session, self.adapter, request, self.terminal)
 
 
 class AdapterCompositeUseCase[
@@ -237,12 +303,16 @@ class AdapterCompositeUseCase[
 
     Attributes:
         adapter: Converts the request, the response and the stream items.
+        terminal: Recognizes the final event of the shared stream;
+            ``None`` checks nothing.
     """
 
     def __init__(
         self,
         session: SessionT,
         adapter: ICompositeAdapter[ReqT, RawT, RespT, RawItemT, EventT],
+        *,
+        terminal: IEventMatcher | None = None,
     ) -> None:
         """Keep the session and the adapter.
 
@@ -250,9 +320,12 @@ class AdapterCompositeUseCase[
             session: The session that sends the requests.
             adapter: Converts the request, the response and the stream
                 items.
+            terminal: Recognizes the final event of the shared stream,
+                checked as in ``AdapterStreamUseCase``.
         """
         super().__init__(session)
         self.adapter = adapter
+        self.terminal = terminal
 
     async def __call__(self, request: ReqT) -> RespT:
         """Send the request and convert the provider's response.
@@ -278,4 +351,4 @@ class AdapterCompositeUseCase[
             A context manager that yields the events and closes the
             converted and the provider's stream on exit.
         """
-        return _open(self.session, self.adapter, request)
+        return _open(self.session, self.adapter, request, self.terminal)

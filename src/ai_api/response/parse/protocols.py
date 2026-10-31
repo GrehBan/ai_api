@@ -22,6 +22,7 @@ class IResponseParser(Protocol):
         method: IAPIMethod[T],
         response: BufferedResponse,
         json_loads: JsonLoads,
+        error_resolver: IErrorResolver,
     ) -> T:
         """Parse a successful response.
 
@@ -30,6 +31,8 @@ class IResponseParser(Protocol):
                 type decide how the body is parsed.
             response: The response, with a status below 400.
             json_loads: JSON decoder of the session.
+            error_resolver: Error resolver of the session, for a result
+                that reports a failure although its status is below 400.
 
         Returns:
             The parsed result.

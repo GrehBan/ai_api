@@ -306,7 +306,12 @@ async def test_unknown_deltas_and_events_are_kept_whole() -> None:
     transport = FakeTransport(
         stream_responses=[
             FakeStreamResponse(
-                [frame(tool_delta), frame(new_event), frame(no_usage)],
+                [
+                    frame(tool_delta),
+                    frame(new_event),
+                    frame(no_usage),
+                    frame({"type": "message_stop"}),
+                ],
                 headers=SSE,
             )
         ],
@@ -314,7 +319,7 @@ async def test_unknown_deltas_and_events_are_kept_whole() -> None:
     )
 
     async with transport.stream(StreamMessage(**request())) as events:
-        delta, unknown, end = [event async for event in events]
+        delta, unknown, end, _ = [event async for event in events]
 
     assert isinstance(delta, ContentBlockDeltaEvent)
     assert isinstance(delta.delta, UnknownDelta)

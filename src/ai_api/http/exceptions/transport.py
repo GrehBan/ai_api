@@ -109,3 +109,34 @@ class APIRequestError(APITransportError):
             message: Description of the failure.
         """
         super().__init__(message, transient=False)
+
+
+class APIStreamInterruptedError(APITransportError):
+    """An open stream broke or ended before it was complete.
+
+    Never retried: the request has already started a generation, and
+    sending it again would start (and bill) a new one. Raised while
+    iterating a stream when the transport fails mid-way (the original
+    error, such as an ``APIConnectionError`` or the ``APITimeoutError``
+    of a silent stream, is the ``__cause__``), and when the body ends
+    before the method's terminal event (no ``__cause__``).
+
+    Attributes:
+        items_received: Items the stream had delivered before it broke.
+    """
+
+    def __init__(
+        self,
+        message: str = "The stream was interrupted.",
+        *,
+        items_received: int,
+    ) -> None:
+        """Create a non-retryable stream error.
+
+        Args:
+            message: Description of the failure.
+            items_received: Items the stream had delivered before it
+                broke.
+        """
+        super().__init__(message, transient=False)
+        self.items_received = items_received

@@ -27,7 +27,6 @@ from ai_api.resources import GenerationResource, IGenerationResource
 from ai_api.types.requests import GenerationRequest
 from ai_api.types.responses import (
     CompletedEvent,
-    FailedEvent,
     OtherEvent,
     TextDeltaEvent,
     TokenUsage,
@@ -160,24 +159,9 @@ def test_incomplete_response_keeps_its_text_and_reason(
     assert converted.incomplete_reason == reason
 
 
-def test_failed_response_raises_with_its_error() -> None:
-    error = {"code": "server_error", "message": "The model failed."}
-
-    with pytest.raises(APIResponseError) as caught:
-        adapter.to_response(response(status="failed", error=error), REQUEST)
-
-    assert str(caught.value).endswith(
-        "OpenAI response failed (server_error): The model failed."
-    )
-    assert caught.value.status is None
-
-
-def test_failed_response_without_an_error_still_raises() -> None:
-    with pytest.raises(APIResponseError, match="failed without an error"):
-        adapter.to_response(response(status="failed"), REQUEST)
-
-
-@pytest.mark.parametrize("status", ["in_progress", "queued", None])
+@pytest.mark.parametrize(
+    "status", ["in_progress", "queued", "failed", "cancelled", None]
+)
 def test_unfinished_response_raises(status: str | None) -> None:
     with pytest.raises(APIResponseError, match="expected 'completed'"):
         adapter.to_response(response(status=status), REQUEST)
@@ -223,29 +207,11 @@ async def test_incomplete_stream_completes_with_its_reason() -> None:
     assert completed.incomplete_reason == "max_output_tokens"
 
 
-async def test_failed_stream_yields_the_failure() -> None:
-    failed = state(
-        "response.failed",
-        1,
-        status="failed",
-        usage=None,
-        error={"code": "server_error", "message": "Failed"},
-    )
+async def test_adapter_leaves_the_end_to_the_parser_and_use_case() -> None:
+    # StreamResponse and GenerationResource check the terminal event.
+    converted = await convert(STREAM[:-1])
 
-    (event,) = await convert([failed])
-
-    assert isinstance(event, FailedEvent)
-    assert event.message == "Failed"
-
-
-async def test_stream_cut_before_its_end_raises() -> None:
-    received: list[Any] = []
-
-    with pytest.raises(APIResponseError, match="stream ended before"):
-        async for event in adapter.to_events(events(STREAM[:-1]), REQUEST):
-            received.append(event)  # noqa: PERF401 - kept before the error
-
-    assert len(received) == len(STREAM) - 1
+    assert len(converted) == len(STREAM) - 1
 
 
 @pytest.fixture

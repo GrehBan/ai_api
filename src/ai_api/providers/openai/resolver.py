@@ -42,6 +42,28 @@ code, or else its type, tells which error it is.
 """
 
 
+def _failed_response(response: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the ``error`` of a ``Response`` with status ``failed``.
+
+    Args:
+        response: The decoded ``Response``.
+
+    Returns:
+        A body with its ``error`` object, or with a message saying that
+        OpenAI sent none.
+    """
+    error = response.get("error")
+
+    if isinstance(error, Mapping):
+        return {"error": error}
+
+    return {
+        "error": {
+            "message": f"Response {response.get('id')} failed without an error"
+        }
+    }
+
+
 class OpenAIErrorResolver(BaseErrorResolver):
     """Error resolver with OpenAI's specifics.
 
@@ -49,8 +71,11 @@ class OpenAIErrorResolver(BaseErrorResolver):
     spend or usage limit reached) is a ``QuotaExceededError`` and is not
     retried. The ``error`` event of a response stream is flat
     (``{"type": "error", "code", "message", "param"}``) and is read like
-    an ``error`` object; it comes with the stream's 200 status, so its
-    class is picked by its code or type through ``ERROR_STATUSES``.
+    an ``error`` object; a ``response.failed`` event and a ``Response``
+    with status ``failed`` are read by their ``response.error``. They
+    come with a 200 status, so their class is picked by their code or
+    type through ``ERROR_STATUSES``; a code it does not list, such as
+    ``invalid_prompt``, gives ``APIStatusError`` itself, not transient.
     """
 
     provider = Provider.OPENAI
@@ -62,7 +87,7 @@ class OpenAIErrorResolver(BaseErrorResolver):
         body: Any,
         headers: Mapping[str, str],
     ) -> APIStatusError:
-        """Build the error, reading a flat stream ``error`` event too.
+        """Build the error, reading OpenAI's in-band failures too.
 
         Args:
             status: HTTP status code of the response.
@@ -74,10 +99,19 @@ class OpenAIErrorResolver(BaseErrorResolver):
         """
         if isinstance(body, Mapping):
             event = cast(Mapping[str, Any], body)
+            kind = event.get("type")
+            response = event.get("response")
 
-            if event.get("type") == "error" and "error" not in event:
+            if kind == "error" and "error" not in event:
                 fields = {k: v for k, v in event.items() if k != "type"}
                 body = {"error": fields}
+            elif kind == "response.failed" and isinstance(response, Mapping):
+                body = _failed_response(cast(Mapping[str, Any], response))
+            elif (
+                event.get("object") == "response"
+                and event.get("status") == "failed"
+            ):
+                body = _failed_response(event)
 
         return super().resolve(status=status, body=body, headers=headers)
 

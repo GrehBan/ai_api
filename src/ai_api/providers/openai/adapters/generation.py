@@ -7,9 +7,7 @@ from typing import Any
 
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.enums import Provider
-from ai_api.http.exceptions.response import APIResponseError
 from ai_api.providers.openai.adapters.conversions import (
-    TERMINAL_EVENTS,
     check_status,
     incomplete_reason,
     to_event,
@@ -76,7 +74,8 @@ class OpenAIGenerationAdapter(
             response keeps its text and gets ``incomplete_reason``.
 
         Raises:
-            APIResponseError: The response failed or did not finish.
+            APIResponseError: The response did not finish. A failed one
+                is raised by ``CreateResponse`` before it gets here.
         """
         check_status(raw)
         return GenerationResponse[Response](
@@ -112,24 +111,11 @@ class OpenAIGenerationAdapter(
             request: The request the stream answers.
 
         Yields:
-            One shared event per OpenAI event.
-
-        Raises:
-            APIResponseError: The stream ended before a
-                ``response.completed``, ``response.failed`` or
-                ``response.incomplete`` event, so the generation was cut
-                off.
+            One shared event per OpenAI event. The stream's end is
+            checked by ``StreamResponse`` and by the use case.
         """
-        finished = False
         async for item in items:
-            finished = finished or item.type in TERMINAL_EVENTS
             yield to_event(item)
-        if not finished:
-            message = (
-                "OpenAI stream ended before response.completed, "
-                "response.failed or response.incomplete"
-            )
-            raise APIResponseError(message)
 
     @staticmethod
     def _fields(request: GenerationRequest) -> dict[str, Any]:
