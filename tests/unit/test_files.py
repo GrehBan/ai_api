@@ -141,7 +141,31 @@ def test_typed_file_field_rejects_other_kinds() -> None:
 
 def test_file_field_rejects_non_files() -> None:
     with pytest.raises(ValidationError, match="Expected InputFile"):
-        AnyFileModel.model_validate({"file": "a.txt"})
+        AnyFileModel.model_validate({"file": 1})
+
+
+def test_a_str_is_not_taken_and_the_message_says_why() -> None:
+    # A str may be a path or the content itself.
+    with pytest.raises(
+        ValidationError, match=r"a pathlib\.Path \(a str is not taken"
+    ):
+        AnyFileModel.model_validate({"file": "voice.mp3"})
+
+
+class BytesPath:
+    """A path-like object whose path is bytes, which Path() refuses."""
+
+    def __fspath__(self) -> bytes:
+        return b"voice.mp3"
+
+
+def test_a_path_like_that_path_refuses_is_a_validation_error() -> None:
+    with pytest.raises(ValidationError, match="Expected InputFile") as info:
+        AnyFileModel.model_validate({"file": BytesPath()})
+
+    assert isinstance(
+        info.value.errors()[0].get("ctx", {})["error"], ValueError
+    )
 
 
 def test_model_dump_keeps_the_file_object() -> None:

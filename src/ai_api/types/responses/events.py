@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Final, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from ai_api.enums import GenerationEventType, IncompleteReason, Provider
 from ai_api.types.base import BaseAPIType
@@ -13,7 +13,13 @@ from ai_api.types.responses.generation import TokenUsage
 
 
 class BaseResponseEvent(BaseAPIType):
-    """Base class of streamed events in shared types."""
+    """Base class of streamed events in shared types.
+
+    As for ``BaseResponse``, the provider's event in ``raw`` may be of
+    any type, so any type is allowed here.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class RawResponseEvent[RawT](BaseResponseEvent):

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from ai_api.types.base import BaseAPIType
 from ai_api.types.matchers import (
@@ -83,7 +84,9 @@ def test_matchers_combine_with_or() -> None:
 def test_matchers_compare_by_value() -> None:
     assert EventTypes("a", "b") == EventTypes("b", "a")
     assert hash(EventTypes("a")) == hash(EventTypes("a"))
-    assert EventTypes("a") != FieldValues("type", "a")
+    # Equal when they match the same items, whatever the class.
+    assert EventTypes("a") == FieldValues("type", "a")
+    assert hash(EventTypes("a")) == hash(FieldValues("type", "a"))
     assert FieldValues("s", "a") == FieldValues("s", "a")
     assert FieldValues("s", "a") != FieldValues("t", "a")
     assert TopLevelError() == TopLevelError()
@@ -95,6 +98,71 @@ def test_matchers_compare_by_value() -> None:
     assert AnyOf(DONE) != DONE
 
 
+@pytest.mark.parametrize(
+    ("matcher", "item", "expected"),
+    [
+        (FieldValues("done", True), {"done": True}, True),
+        (FieldValues("done", True), {"done": 1}, False),
+        (FieldValues("n", 1), {"n": True}, False),
+        (FieldValues("n", 1), {"n": 1.0}, True),
+        (FieldValues("done", False), {"done": 0}, False),
+    ],
+    ids=["true", "one-is-not-true", "true-is-not-one", "int-float", "zero"],
+)
+def test_values_are_compared_as_json_tells_them_apart(
+    matcher: FieldValues,
+    item: dict[str, object],
+    expected: bool,
+) -> None:
+    assert matcher.matches(item) is expected
+
+
+class Flagged(BaseModel):
+    """A model with a property that fails, as a model's property may."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = "x"
+
+    @property
+    def status(self) -> str:
+        raise RuntimeError("must not be read")
+
+
+def test_a_models_properties_are_not_read() -> None:
+    # A matcher must not fail on an item: only fields are read.
+    item = Flagged()
+
+    assert not FieldValues("status", "failed").matches(item)
+    assert EventTypes("x").matches(item)
+
+
+def test_a_models_extra_fields_are_read() -> None:
+    item = Flagged.model_validate({"type": "x", "phase": "late"})
+
+    assert FieldValues("phase", "late").matches(item)
+    assert not FieldValues("phase", "early").matches(item)
+
+
+class Plain:
+    """A matcher by the protocol alone, without ``BaseMatcher``."""
+
+    def matches(self, item: object) -> bool:
+        return item == "plain"
+
+
+def test_a_protocol_matcher_combines_on_the_left() -> None:
+    combined = Plain() | EventTypes("a")
+
+    assert isinstance(combined, AnyOf)
+    assert combined.matches("plain")
+    assert combined.matches({"type": "a"})
+
+
+def test_types_is_a_view_of_the_values() -> None:
+    assert EventTypes("b", "a").types == frozenset({"a", "b"})
+
+
 def test_matchers_show_what_they_match() -> None:
     matcher = EventTypes("b", "a") | FieldValues("status", "failed")
 
@@ -103,6 +171,8 @@ def test_matchers_show_what_they_match() -> None:
     )
     assert repr(TopLevelError() | DONE) == "TopLevelError() | DONE"
     assert repr(DONE_MARKER) == "DONE_MARKER"
+    # One matcher in an AnyOf is not that matcher, and does not look so.
+    assert repr(AnyOf(DONE)) == "AnyOf(DONE)"
 
 
 def test_done_matches_only_the_marker() -> None:

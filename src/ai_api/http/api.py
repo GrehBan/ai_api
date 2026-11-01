@@ -45,13 +45,20 @@ def _validate_base_url(value: str | URL) -> URL:
         The parsed URL.
 
     Raises:
-        ValueError: If the URL is not an absolute HTTP(S) URL or has a
-            query or fragment.
+        ValueError: If the URL is not an absolute HTTP(S) URL, or has
+            credentials (``https://user:pw@host``, which aiohttp would
+            send as Basic auth next to the session's own), a query or a
+            fragment.
     """
     url = URL(value)
 
     if url.scheme not in {"http", "https"} or not url.host:
         raise ValueError("base_url must be an absolute HTTP(S) URL")
+
+    if url.user is not None or url.password is not None:
+        raise ValueError(
+            "base_url cannot contain credentials; give them as the auth"
+        )
 
     if url.query_string or url.fragment:
         raise ValueError("base_url cannot contain query or fragment")

@@ -60,9 +60,10 @@ class GenerationRequest(BaseRequest):
     """Generate text from an input.
 
     Attributes:
-        model: Model identifier of the provider.
+        model: Model identifier of the provider; not empty.
         input: Text to respond to, taken as one ``user`` turn, or the
-            conversation so far, a list of at least one turn. Every
+            conversation so far, a list of at least one turn; an empty
+            text or list is refused before anything is sent. Every
             provider requires the last turn to be a ``user`` one; the
             adapter checks it and raises ``RequestValidationError``
             otherwise.
@@ -79,8 +80,11 @@ class GenerationRequest(BaseRequest):
         ... )
     """
 
-    model: str
-    input: str | Annotated[list[Turn], Field(min_length=1)]
+    model: str = Field(min_length=1)
+    input: (
+        Annotated[str, Field(min_length=1)]
+        | Annotated[list[Turn], Field(min_length=1)]
+    )
     instructions: str | None = None
 
     max_output_tokens: int | None = Field(

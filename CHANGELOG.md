@@ -33,6 +33,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `ai_api.client.factory` to `ai_api.session.factory`.
 - `RETRY_ATTEMPT_LIMIT` (`ai_api.session.retry`): the 4 attempts of a
   retried request, as a constant.
+- **Breaking:** matchers compare values as JSON tells them apart
+  (`FieldValues("done", True)` no longer matches `1`), read a model's
+  fields but not its properties (a property that raised broke the
+  stream), and `EventTypes("x")` equals `FieldValues("type", "x")`;
+  `EventTypes.types` is a view of `values`. A single matcher in `AnyOf`
+  shows as `AnyOf(x)`, and a protocol-only matcher may stand on the left
+  of `|`.
+- **Breaking:** a `ServerSentEvent` item whose data is JSON goes through
+  `error_events`, so an error in it raises instead of being yielded, and
+  `ServerSentEvent.retry` keeps the last value the stream set, as `id`
+  does (the HTML standard applies both at once).
+- **Breaking:** `GenerationRequest` refuses an empty `model` or text
+  `input` before anything is sent; `BaseAPI` refuses credentials in
+  `base_url`; a payload model (`BaseAPIType`) with a field of a type
+  Pydantic cannot validate fails at class definition (only the `raw` of
+  shared results takes any type).
+- Raw binary streams nested in a model inside a method field are wrapped
+  as well (the model is copied); a stream in a container that cannot be
+  rebuilt, such as a `dict` subclass, raises `TypeError` instead of being
+  dumped lazily. `Annotated` members of a union are unwrapped by the
+  path and query checks, so `Annotated[dict, ...] | None` is refused as a
+  query field.
+- A path without placeholders unescapes `{{`/`}}` as one with them does;
+  `APIKeyAuth` defaults to the `X_API_KEY` constant; an `InputFile`
+  field explains that a `str` is not taken, and a path-like that `Path()`
+  rejects is a validation error.
+- `typing-extensions`, `aresponses` and `isort` are no longer
+  dependencies.
 - Tests: the local `Recorder` fails a test on any request it was not
   scripted for, mirrored provider client tests run once per provider
   (`tests/providers/test_provider_clients.py`), the backoff is checked by

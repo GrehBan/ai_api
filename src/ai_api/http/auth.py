@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ai_api.http.headers import AUTHORIZATION
+from ai_api.http.headers import AUTHORIZATION, X_API_KEY
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +51,7 @@ class APIKeyAuth:
     Example:
         >>> auth = APIKeyAuth("sk-ant-...")  # Anthropic: x-api-key
         >>> auth.header_name, auth.encode()
-        ('x-api-key', 'sk-ant-...')
+        ('X-Api-Key', 'sk-ant-...')
 
     Attributes:
         key: The API key. Excluded from ``repr`` so it does not leak into
@@ -60,7 +60,7 @@ class APIKeyAuth:
     """
 
     key: str = field(repr=False)
-    header_name: str = "x-api-key"
+    header_name: str = X_API_KEY
 
     def __post_init__(self) -> None:
         """Validate the key and the header name.

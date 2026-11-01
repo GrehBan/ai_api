@@ -7,7 +7,7 @@ import enum
 import io
 import math
 from collections.abc import AsyncIterator
-from typing import Annotated, Any
+from typing import Annotated, Any, Union
 
 import pytest
 from pydantic import Field, PlainSerializer, ValidationError
@@ -370,6 +370,49 @@ def test_retryable_when_enabled() -> None:
 )
 def test_one_shot_file_disables_retries(payload: Any) -> None:
     assert RetryableUpload(payload=payload).retryable is False
+
+
+def test_annotated_mapping_query_field_is_rejected() -> None:
+    # Pydantic strips a top-level Annotated, not one inside a union.
+    with pytest.raises(TypeError, match="'q' cannot be a mapping"):
+        make_method(
+            BaseAPIMethod[bytes],
+            fields={
+                # Union[...]: type checkers do not take "|" on Annotated.
+                "q": Union[Annotated[dict[str, int], "m"], None]  # noqa: UP007
+            },
+            __request_query__={"q"},
+        )
+
+
+class Holder(BaseAPIType):
+    payload: Any = None
+
+
+def test_a_stream_in_a_nested_model_is_wrapped_in_a_copy() -> None:
+    # The same traversal as for one-shot files: nested models included.
+    holder = Holder(payload=[io.BytesIO(b"raw")])
+
+    method = Upload(payload=holder)
+
+    assert isinstance(method.payload, Holder)
+    assert isinstance(method.payload.payload[0], IOFile)
+    assert isinstance(holder.payload[0], io.BytesIO)
+
+
+class Box(dict[str, Any]):
+    """A dict subclass, which the wrapper cannot rebuild as itself."""
+
+
+def test_a_stream_in_a_container_that_cannot_be_rebuilt_fails() -> None:
+    with pytest.raises(TypeError, match="cannot be wrapped"):
+        Upload(payload=Box(file=io.BytesIO(b"raw")))
+
+
+def test_a_container_without_streams_is_kept_as_it_is() -> None:
+    box = Box(name="x")
+
+    assert Upload(payload=box).payload is box
 
 
 def test_non_seekable_stream_disables_retries() -> None:

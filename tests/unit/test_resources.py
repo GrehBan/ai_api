@@ -7,7 +7,11 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import (
+    PydanticSchemaGenerationError,
+    TypeAdapter,
+    ValidationError,
+)
 
 from ai_api.adapters.base import (
     BaseAdapter,
@@ -483,9 +487,14 @@ def test_input_is_text_or_a_non_empty_list_of_turns() -> None:
         Turn.assistant("Hello"),
         Turn.user("More"),
     ]
-    assert GenerationRequest(model="m", input="").input == ""
-    with pytest.raises(ValidationError, match="too_short"):
-        GenerationRequest(model="m", input=[])
+    # Empty would fail at the provider after sending; refused here.
+    for fields in (
+        {"model": "m", "input": ""},
+        {"model": "m", "input": []},
+        {"model": "", "input": "Hi"},
+    ):
+        with pytest.raises(ValidationError, match="too_short"):
+            GenerationRequest.model_validate(fields)
 
 
 def test_turn_is_frozen_and_strict() -> None:
@@ -520,6 +529,40 @@ def test_response_without_text_is_no_turn() -> None:
 
     with pytest.raises(ValueError, match="response r has no text"):
         response.to_turn()
+
+
+def test_a_response_without_an_id_is_not_named_none() -> None:
+    response: GenerationResponse[Any] = GenerationResponse(
+        provider=Provider.GENERIC, model="m", raw={}
+    )
+
+    with pytest.raises(ValueError, match="^the response has no text"):
+        response.to_turn()
+
+
+class Opaque:
+    """A class Pydantic has no schema for."""
+
+
+def test_only_shared_results_take_any_type() -> None:
+    # A payload model with such a field is a mistake, caught at once;
+    # the raw of a shared result may be any class a method returns.
+    with pytest.raises(PydanticSchemaGenerationError):
+
+        class Payload(BaseAPIType):
+            value: Opaque
+
+        _ = Payload
+
+    response = GenerationResponse[Opaque](
+        provider=Provider.GENERIC, model="m", raw=Opaque()
+    )
+    event = CompletedEvent[Opaque](
+        provider=Provider.GENERIC, model="m", raw=Opaque()
+    )
+
+    assert isinstance(response.raw, Opaque)
+    assert isinstance(event.raw, Opaque)
 
 
 def test_event_types_are_enum_members() -> None:
