@@ -64,9 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CreateMessage` and `StreamMessage` set `__retryable__ = True`: transient
   failures are retried (a stream only while it opens), as in the official
   SDKs. Before, `client.generation` never retried.
-- `OpenAIErrorResolver`: a failure reported after a 200 (a `failed`
-  response, a `response.failed` or `error` stream event) is never
-  transient; its class is still picked by its code or type.
+- `OpenAIErrorResolver` and `AnthropicErrorResolver`: a failure reported
+  after a 200 (OpenAI's `failed` response, `response.failed` or `error`
+  stream event, Anthropic's `error` stream event) is never transient; its
+  class is still picked by its code or type.
 - `generation.stream(...)` yields a `GenerationStream`, a `Stream` subclass,
   instead of a plain `Stream`.
 - `CompletedEvent.model` is required: an adapter that builds the event

@@ -53,7 +53,9 @@ class AnthropicErrorResolver(BaseErrorResolver):
     says so) is a ``QuotaExceededError`` and is not retried. The 529
     ``overloaded_error`` is a transient ``ServiceUnavailableError``, as
     OpenAI's 503. An ``error`` event of a stream arrives with the
-    stream's 200 status, so its class is picked by its type.
+    stream's 200 status, so its class is picked by its type; it is never
+    transient, whatever its class: the generation ran and failed, and
+    running it again is the caller's choice, as for OpenAI.
     """
 
     provider = Provider.ANTHROPIC
@@ -95,21 +97,25 @@ class AnthropicErrorResolver(BaseErrorResolver):
             retry_after: Seconds from ``Retry-After``, if any.
 
         Returns:
-            The error class and the ``transient`` flag.
+            The error class and the ``transient`` flag, always ``False``
+            for a failure reported after a status below 400.
         """
-        if status < HTTPStatus.BAD_REQUEST and error_type is not None:
+        in_band = status < HTTPStatus.BAD_REQUEST
+
+        if in_band and error_type is not None:
             status = ERROR_STATUSES.get(error_type, status)
         if self._is_spend_limit(status, code, message):
             return QuotaExceededError, False
         if status == OVERLOADED:
-            return ServiceUnavailableError, True
-        return super().classify(
+            return ServiceUnavailableError, not in_band
+        error_class, transient = super().classify(
             status=status,
             code=code,
             error_type=error_type,
             message=message,
             retry_after=retry_after,
         )
+        return error_class, transient and not in_band
 
     @staticmethod
     def _is_spend_limit(

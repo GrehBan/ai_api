@@ -234,24 +234,25 @@ def test_non_string_error_code_is_ignored_as_a_code() -> None:
 
 
 @pytest.mark.parametrize(
-    ("error_type", "error_class", "transient"),
+    ("error_type", "error_class"),
     [
-        ("overloaded_error", ServiceUnavailableError, True),
-        ("api_error", InternalServerError, True),
-        ("invalid_request_error", BadRequestError, False),
-        ("brand_new_error", APIStatusError, False),
+        ("overloaded_error", ServiceUnavailableError),
+        ("api_error", InternalServerError),
+        ("invalid_request_error", BadRequestError),
+        ("brand_new_error", APIStatusError),
     ],
 )
 def test_stream_error_event_is_classified_by_its_type(
     error_type: str,
     error_class: type[APIStatusError],
-    transient: bool,
 ) -> None:
     error = resolve(200, body(error_type))
 
     assert type(error) is error_class
     assert error.status == 200
-    assert error.transient is transient
+    # The generation ran and failed: running it again is the caller's
+    # choice, so an in-band failure is never transient.
+    assert error.transient is False
 
 
 async def test_client_sends_bearer_auth_and_maps_errors(
