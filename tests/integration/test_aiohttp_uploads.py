@@ -100,6 +100,7 @@ async def test_file_arrives_whole_with_metadata(
     tmp_path: Path,
     kind: str,
 ) -> None:
+    recorder.reply(Reply())
     await session.send_request(Upload(file=FILE_FACTORIES[kind](tmp_path)))
 
     part = file_part(recorder)
@@ -119,6 +120,7 @@ async def test_raw_values_arrive_whole(
     recorder: Recorder,
     value: Any,
 ) -> None:
+    recorder.reply(Reply())
     await session.send_request(Upload(file=value))
 
     part = file_part(recorder)
@@ -132,6 +134,7 @@ async def test_raw_path_in_input_file_field(
     recorder: Recorder,
     tmp_path: Path,
 ) -> None:
+    recorder.reply(Reply())
     path = tmp_path / "notes.txt"
     path.write_bytes(b"hello")
 
@@ -147,6 +150,7 @@ async def test_list_of_files_in_one_field(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     files = [
         BytesFile(b"first", filename="a.txt"),
         BytesFile(b"second", filename="b.json"),

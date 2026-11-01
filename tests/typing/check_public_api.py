@@ -57,11 +57,14 @@ from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
 from ai_api.providers.openai.types.responses import ResponseUsage
 from ai_api.resources import (
+    AdapterStreamUseCase,
     AdapterUseCase,
     BaseResource,
     BaseUseCase,
     GenerationResource,
     IGenerationResource,
+    ISessionAccess,
+    IStreamUseCase,
     IUseCase,
 )
 from ai_api.response import map_stream
@@ -274,6 +277,33 @@ def use_case_implements_protocol(
     session: AiohttpSession,
 ) -> IUseCase[GenerationRequest, GenerationResponse[str]]:
     return Echo(session)
+
+
+def stream_use_case_implements_protocol(
+    session: AiohttpSession,
+) -> IStreamUseCase[GenerationRequest, GenerationEvent[ResponseStreamEvent]]:
+    return AdapterStreamUseCase(session, OpenAIGenerationAdapter())
+
+
+def stream_use_case_checks_its_event_type(session: AiohttpSession) -> None:
+    wrong: IStreamUseCase[GenerationRequest, GenerationEvent[str]]
+    wrong = AdapterStreamUseCase(session, OpenAIGenerationAdapter())  # type: ignore[arg-type]
+    assert wrong
+
+
+def everything_with_a_session_is_a_session_access(
+    session: AiohttpSession,
+) -> list[ISessionAccess]:
+    return [
+        BaseResource(session),
+        Echo(session),
+        AdapterStreamUseCase(session, OpenAIGenerationAdapter()),
+        GenerationResource(session, OpenAIGenerationAdapter()),
+    ]
+
+
+def a_session_access_needs_a_session() -> ISessionAccess:
+    return object()  # type: ignore[return-value]
 
 
 def resource_keeps_the_session_type(session: AiohttpSession) -> None:

@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `ai_api.client.factory` to `ai_api.session.factory`.
 - `RETRY_ATTEMPT_LIMIT` (`ai_api.session.retry`): the 4 attempts of a
   retried request, as a constant.
+- Tests: the local `Recorder` fails a test on any request it was not
+  scripted for, mirrored provider client tests run once per provider
+  (`tests/providers/test_provider_clients.py`), the backoff is checked by
+  properties of the real jitter, and documented responses are compared
+  field by field with their JSON. The retry loop awaits tenacity's call
+  directly, without an unreachable guard.
 - `BaseErrorResolver.error_statuses` and `classify_status`: a provider
   sets its table of in-band codes and types and overrides the
   classification of a status; `classify` keeps an in-band failure

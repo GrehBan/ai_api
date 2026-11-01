@@ -60,6 +60,17 @@ def get_header(
     return None
 
 
+def _now() -> datetime:
+    """Read the clock, for the date form of ``Retry-After``.
+
+    The one place the library reads the time, so tests fix it here alone.
+
+    Returns:
+        The current time in UTC.
+    """
+    return datetime.now(UTC)
+
+
 def parse_retry_after(
     headers: Mapping[str, str],
 ) -> float | None:
@@ -95,7 +106,7 @@ def parse_retry_after(
     if date.tzinfo is None:
         date = date.replace(tzinfo=UTC)
 
-    return max(0.0, (date - datetime.now(UTC)).total_seconds())
+    return max(0.0, (date - _now()).total_seconds())
 
 
 def _as_mapping(headers: HeadersType) -> HeadersMapping:

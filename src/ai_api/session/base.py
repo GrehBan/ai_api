@@ -256,16 +256,26 @@ class BaseSession(ABC):
         if self.retry_deadline is not None:
             stop |= stop_before_delay(self.retry_deadline)
 
-        async for attempt in AsyncRetrying(
+        async def attempt() -> R:
+            """Perform one attempt.
+
+            Tenacity awaits only a coroutine function; ``call`` is any
+            callable that returns an awaitable.
+
+            Returns:
+                The result of the attempt.
+            """
+            return await call()
+
+        # With reraise=True tenacity returns the first result or raises
+        # the last error, so no state is left to guard against.
+        retrying = AsyncRetrying(
             retry=retry_condition(self.max_retry_after),
             wait=calculate_wait,
             stop=stop,
             reraise=True,
-        ):
-            with attempt:
-                return await call()
-
-        raise RuntimeError("Unexpected retry state")
+        )
+        return await retrying(attempt)
 
     async def _send_once[T](
         self,

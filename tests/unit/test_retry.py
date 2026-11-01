@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pytest_mock import MockerFixture
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from tenacity import AsyncRetrying, RetryCallState
 
 from ai_api.http.exceptions.response import APIResponseError
@@ -75,52 +76,52 @@ def test_retry_condition_uses_should_retry() -> None:
     assert condition(make_state(error=APITLSError())) is False
 
 
-@pytest.mark.parametrize("attempt", [1, 2, 5, 10, 50])
-def test_jitter_stays_within_bounds(attempt: int) -> None:
-    for _ in range(50):
-        assert 0 <= calculate_wait(make_state(attempt)) <= 30
+def jitter_cap(attempt: int) -> float:
+    """The upper end of the random exponential backoff of an attempt."""
+    return min(30.0, 0.5 * 2 ** (attempt - 1))
 
 
-@pytest.mark.parametrize(
-    "state",
-    [
-        make_state(),
-        make_state(error=APIConnectionError()),
-        make_state(error=APIStatusError(status=503)),
-        make_state(result="ok"),
-    ],
-    ids=["no-outcome", "transport-error", "no-retry-after", "result"],
+OUTCOMES = st.sampled_from(
+    [None, APIConnectionError(), APIStatusError(status=503), "ok"]
 )
-def test_wait_is_jitter_without_retry_after(
-    mocker: MockerFixture,
-    state: RetryCallState,
+"""What an attempt ended with, besides a Retry-After."""
+
+
+@settings(max_examples=300, deadline=None)
+@given(attempt=st.integers(min_value=1, max_value=60), outcome=OUTCOMES)
+def test_wait_without_retry_after_is_the_backoff(
+    attempt: int,
+    outcome: object,
 ) -> None:
-    jitter = mocker.patch(
-        "ai_api.session.retry._jitter",
-        return_value=4.0,
-    )
+    # The real jitter: random, but within the exponential cap, never more
+    # than 30 s.
+    if isinstance(outcome, BaseException):
+        state = make_state(attempt, outcome)
+    else:
+        state = make_state(attempt, result=outcome)
 
-    assert calculate_wait(state) == 4.0
-    jitter.assert_called_once_with(state)
+    assert 0 <= calculate_wait(state) <= jitter_cap(attempt)
 
 
-@pytest.mark.parametrize(
-    ("retry_after", "expected"),
-    [(10.0, 10.0), (100.0, 100.0), (1.0, 4.0), (0.0, 4.0)],
-    ids=["above-jitter", "above-cap", "below-jitter", "zero"],
+@settings(max_examples=300, deadline=None)
+@given(
+    attempt=st.integers(min_value=1, max_value=60),
+    retry_after=st.floats(min_value=0, max_value=3600, allow_nan=False),
 )
-def test_wait_honors_retry_after(
-    mocker: MockerFixture,
+def test_wait_is_never_below_retry_after(
+    attempt: int,
     retry_after: float,
-    expected: float,
 ) -> None:
-    mocker.patch("ai_api.session.retry._jitter", return_value=4.0)
+    # The API's own wait is honored, and the backoff never adds more than
+    # its cap on top: Retry-After <= wait <= max(cap, Retry-After).
     error = APIStatusError(status=503, retry_after=retry_after, transient=True)
 
-    assert calculate_wait(make_state(error=error)) == expected
+    wait = calculate_wait(make_state(attempt, error))
+
+    assert retry_after <= wait <= max(jitter_cap(attempt), retry_after)
 
 
-def test_retry_after_above_jitter_with_real_jitter() -> None:
+def test_retry_after_above_the_cap_is_waited_exactly() -> None:
     error = APIStatusError(status=503, retry_after=45.0, transient=True)
 
-    assert calculate_wait(make_state(error=error)) == 45.0
+    assert calculate_wait(make_state(50, error)) == 45.0

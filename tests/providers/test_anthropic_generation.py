@@ -21,7 +21,6 @@ from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
 from ai_api.providers.anthropic.client import session_factory
 from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
 from ai_api.providers.anthropic.types import Message, MessageStreamEvent
-from ai_api.resources import GenerationResource, IGenerationResource
 from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
     CompletedEvent,
@@ -187,20 +186,6 @@ def test_turns_are_sent_as_messages() -> None:
         {"role": "assistant", "content": "Hello!"},
         {"role": "user", "content": "How are you?"},
     ]
-
-
-def test_conversation_must_end_with_a_user_turn() -> None:
-    request = REQUEST.model_copy(
-        update={"input": [Turn.user("Hi"), Turn.assistant("Hello")]}
-    )
-
-    with pytest.raises(RequestValidationError, match="last turn") as caught:
-        adapter.to_method(request)
-    with pytest.raises(RequestValidationError, match="last turn"):
-        adapter.to_stream_method(request)
-
-    assert caught.value.provider is Provider.ANTHROPIC
-    assert caught.value.field == "input"
 
 
 def test_finished_message_is_converted() -> None:
@@ -455,17 +440,6 @@ def client(
     """``AnthropicClient`` built from a token, sent to the local server."""
     monkeypatch.setattr(session_factory, "api", api)
     return AnthropicClient(TEST_TOKEN)
-
-
-def test_client_generation_shares_the_client_session(
-    client: AnthropicClient,
-) -> None:
-    resource: IGenerationResource[Message, MessageStreamEvent] = (
-        client.generation
-    )
-
-    assert isinstance(client.generation, GenerationResource)
-    assert resource.session is client.session
 
 
 def test_client_checks_default_max_tokens_first() -> None:

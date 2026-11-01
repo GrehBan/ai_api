@@ -126,6 +126,7 @@ async def test_query_lists_are_repeated_keys(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     await session.send_request(Search(ids=["a", "b c"], limit=2))
 
     assert recorder.last.query.getall("ids") == ["a", "b c"]
@@ -136,6 +137,7 @@ async def test_json_body_is_sent_as_json(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     await session.send_request(Create(payload={"a": [1, None]}))
 
     assert recorder.last.headers["Content-Type"] == "application/json"
@@ -291,6 +293,7 @@ async def test_authorization_is_built_for_every_request(
     api: LocalAPI,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(*[Reply()] * 2)
     async with make_session(api, auth=RotatingAuth()) as session:
         await session.send_request(Ping())
         await session.send_request(Ping())
@@ -334,6 +337,7 @@ async def test_api_key_is_sent_in_its_header(
     api: LocalAPI,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     async with make_session(api, auth=APIKeyAuth("SECRET")) as session:
         await session.send_request(Ping())
 
