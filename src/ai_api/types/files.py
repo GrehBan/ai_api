@@ -155,16 +155,24 @@ class InputFile(ABC):
             The file instance.
 
         Raises:
-            ValueError: If the value cannot be converted to ``cls``.
+            ValueError: If the value cannot be converted to ``cls``. A
+                ``str`` is never taken: it could be a path or the content
+                itself, so a path must be a ``pathlib.Path``.
         """
-        file = InputFile.from_value(value)
+        message = (
+            f"Expected {cls.__name__}, bytes, a pathlib.Path (a str is not "
+            "taken: it may be a path or the content) or a binary stream"
+        )
+
+        try:
+            file = InputFile.from_value(value)
+        except TypeError as exc:  # a path-like Path() rejects, bytes paths
+            raise ValueError(message) from exc
 
         if isinstance(file, cls):
             return file
 
-        raise ValueError(
-            f"Expected {cls.__name__}, bytes, a path or a binary stream"
-        )
+        raise ValueError(message)
 
     def __repr__(self) -> str:
         """Return the class name with the file metadata.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import enum
 import math
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Union
 
 import pytest
 
@@ -108,6 +108,31 @@ def test_container_in_an_any_path_field_is_rejected(value: Any) -> None:
 
 def test_literal_braces() -> None:
     assert build_path("/{{literal}}/{x}", {"x": "a"}) == "/{literal}/a"
+
+
+def test_literal_braces_without_placeholders() -> None:
+    # The same template rule with or without parameters.
+    method_cls = make_method(BaseAPIMethod[bytes], path="/a/{{literal}}")
+
+    assert method_cls().request_path == "/a/{literal}"
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        # Union[...]: type checkers do not take "|" on Annotated.
+        Union[Annotated[list[str], "meta"], None],  # noqa: UP007
+        Union[Annotated[dict[str, int], "m"], int],  # noqa: UP007
+    ],
+    ids=["optional-list", "dict-or-int"],
+)
+def test_annotated_container_path_field_is_rejected(annotation: Any) -> None:
+    with pytest.raises(TypeError, match="'ids' must be a scalar"):
+        make_method(
+            BaseAPIMethod[bytes],
+            path="/items/{ids}",
+            fields={"ids": annotation},
+        )
 
 
 def test_params_are_parsed_once_per_class() -> None:

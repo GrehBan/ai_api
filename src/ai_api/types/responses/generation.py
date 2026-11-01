@@ -89,9 +89,7 @@ class GenerationResponse[RawT](BaseResponse):
             ... )
         """
         if self.text is None:
-            message = (
-                f"response {self.id} has no text to continue the "
-                "conversation with"
-            )
+            name = "the response" if self.id is None else f"response {self.id}"
+            message = f"{name} has no text to continue the conversation with"
             raise ValueError(message)
         return Turn.assistant(self.text)

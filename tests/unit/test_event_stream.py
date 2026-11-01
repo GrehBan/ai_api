@@ -390,6 +390,40 @@ async def test_event_stream_check_can_be_turned_off() -> None:
     ) == [Delta.model_validate(DELTA)]
 
 
+async def test_raw_event_with_error_json_is_raised() -> None:
+    # Raw items are not validated, but an error in JSON data must not
+    # pass as an item.
+    method = make_method(BaseStreamMethod[ServerSentEvent])()
+    body = sse(
+        'data: {"type": "delta"}',
+        'data: {"error": {"message": "Overloaded"}}',
+    )
+    response = FakeStreamResponse([body], headers=SSE_HEADERS)
+    received: list[ServerSentEvent] = []
+
+    with pytest.raises(APIStatusError, match="Overloaded"):
+        async for event in StreamResponseParser().parse(
+            method, response, loads, BaseErrorResolver()
+        ):
+            received.append(event)  # noqa: PERF401 - fails mid-loop
+
+    assert [event.data for event in received] == ['{"type": "delta"}']
+
+
+async def test_raw_event_without_json_data_is_yielded() -> None:
+    method = make_method(BaseStreamMethod[ServerSentEvent])()
+    body = sse("data: plain text", "data: null")
+    response = FakeStreamResponse([body], headers=SSE_HEADERS)
+
+    events = await collect(
+        StreamResponseParser().parse(
+            method, response, loads, BaseErrorResolver()
+        )
+    )
+
+    assert [event.data for event in events] == ["plain text", "null"]
+
+
 async def test_event_over_the_limit_is_a_response_error() -> None:
     method = make_method(BaseStreamMethod[ServerSentEvent])()
     parser = StreamResponseParser(max_event_size=100)

@@ -23,7 +23,7 @@ DEFAULT_RETRY_DEADLINE: Final[float] = 900.0
 RETRY_ATTEMPT_LIMIT: Final[int] = 4
 """Maximum number of attempts for a single request, including the first one."""
 
-_jitter: Final[wait_random_exponential] = wait_random_exponential(
+_JITTER: Final[wait_random_exponential] = wait_random_exponential(
     multiplier=0.5,
     max=30,
 )
@@ -84,7 +84,7 @@ def calculate_wait(state: RetryCallState) -> float:
     Returns:
         Seconds to wait.
     """
-    delay = _jitter(state)
+    delay = _JITTER(state)
 
     if state.outcome is None:
         return delay

@@ -14,7 +14,10 @@ class BaseAPIType(BaseModel):
     not break validation. Fields can be populated by name or alias. Give
     a wire name with ``validation_alias`` and ``serialization_alias``
     rather than ``alias``: then the constructor takes the field name in
-    both mypy and pyright (with ``alias`` they disagree).
+    both mypy and pyright (with ``alias`` they disagree). A field of a
+    type Pydantic cannot validate fails at class definition: payloads
+    are JSON, so such a field is a mistake (only the ``raw`` of shared
+    results allows any type, see ``BaseResponse``).
 
     Attributes:
         __upstream_schema__: Name of the definition in the provider's
@@ -31,5 +34,4 @@ class BaseAPIType(BaseModel):
         extra="ignore",
         validate_by_name=True,
         validate_by_alias=True,
-        arbitrary_types_allowed=True,
     )

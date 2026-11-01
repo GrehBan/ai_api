@@ -7,6 +7,7 @@ import types
 from collections.abc import Collection, Mapping
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Union,
@@ -30,13 +31,17 @@ def is_mapping_type(annotation: Any) -> bool:
     """Check whether a field annotation allows mappings or models.
 
     Args:
-        annotation: The annotation of a field, unions included.
+        annotation: The annotation of a field, unions and
+            ``Annotated`` included.
 
     Returns:
         ``True`` if the annotation or a member of its union is a mapping
         or a Pydantic model.
     """
     origin = get_origin(annotation)
+
+    if origin is Annotated:
+        return is_mapping_type(get_args(annotation)[0])
 
     if origin in {Union, types.UnionType}:
         return any(is_mapping_type(arg) for arg in get_args(annotation))
@@ -52,7 +57,8 @@ def is_container_type(annotation: Any) -> bool:
     """Check whether a field annotation allows containers.
 
     Args:
-        annotation: The annotation of a field, unions included.
+        annotation: The annotation of a field, unions and
+            ``Annotated`` included.
 
     Returns:
         ``True`` if the annotation or a member of its union is a mapping,
@@ -60,6 +66,9 @@ def is_container_type(annotation: Any) -> bool:
         strings and bytes are scalars.
     """
     origin = get_origin(annotation)
+
+    if origin is Annotated:
+        return is_container_type(get_args(annotation)[0])
 
     if origin in {Union, types.UnionType}:
         return any(is_container_type(arg) for arg in get_args(annotation))
@@ -132,6 +141,34 @@ def query_value(
     return _query_item(name, value, formatter)
 
 
+def _children(value: Any) -> dict[Any, Any] | None:
+    """Name the parts of a value the file helpers look into.
+
+    The one definition of what they traverse, so wrapping streams and
+    looking for one-shot files never disagree: lists, tuples, mappings
+    and Pydantic models, nested at any depth.
+
+    Args:
+        value: A field value of a method.
+
+    Returns:
+        Each part by its index, key or field name; ``None`` for a value
+        with no parts.
+    """
+    if isinstance(value, BaseModel):
+        return dict(value)
+
+    if isinstance(value, Mapping):
+        mapping: Mapping[Any, Any] = value
+        return dict(mapping)
+
+    if isinstance(value, list | tuple):
+        sequence: list[Any] | tuple[Any, ...] = value
+        return dict(enumerate(sequence))
+
+    return None
+
+
 def wrap_streams(value: Any) -> Any:
     """Wrap raw binary streams into ``IOFile``, recursing into containers.
 
@@ -140,10 +177,14 @@ def wrap_streams(value: Any) -> Any:
 
     Returns:
         The value with every binary stream replaced by an ``IOFile``;
-        the same object if it contains no streams.
+        the same object if it contains no streams. A model is copied
+        with the wrapped fields, never changed in place.
 
     Raises:
         ValueError: If a text stream is found.
+        TypeError: If a stream sits in a container this cannot rebuild
+            (a subclass of ``list``, ``tuple`` or ``dict``, another
+            mapping): left raw, Pydantic would dump it lazily.
     """
     if isinstance(value, (io.BufferedIOBase, io.RawIOBase)):
         return IOFile(value)
@@ -151,23 +192,33 @@ def wrap_streams(value: Any) -> Any:
     if isinstance(value, io.IOBase):
         raise ValueError("Only binary streams can be uploaded")
 
+    children = _children(value)
+
+    if children is None:
+        return value
+
+    wrapped = {key: wrap_streams(item) for key, item in children.items()}
+    changed = {
+        key: item for key, item in wrapped.items() if item is not children[key]
+    }
+
+    if not changed:
+        return value
+
+    if isinstance(value, BaseModel):
+        return value.model_copy(update=changed)
+
     if type(value) in {list, tuple}:
-        items = [wrap_streams(item) for item in value]
-
-        if all(new is old for new, old in zip(items, value, strict=True)):
-            return value
-
-        return type(value)(items)
+        return type(value)(wrapped.values())
 
     if type(value) is dict:
-        wrapped = {key: wrap_streams(item) for key, item in value.items()}
-
-        if all(wrapped[key] is item for key, item in value.items()):
-            return value
-
         return wrapped
 
-    return value
+    message = (
+        f"A stream inside a {type(value).__name__} cannot be wrapped; "
+        "use a list, tuple or dict"
+    )
+    raise TypeError(message)
 
 
 def has_one_shot_file(value: Any) -> bool:
@@ -182,13 +233,8 @@ def has_one_shot_file(value: Any) -> bool:
     if isinstance(value, InputFile):
         return not value.reusable
 
-    if isinstance(value, BaseModel):
-        return any(has_one_shot_file(item) for _, item in value)
+    children = _children(value)
 
-    if isinstance(value, Mapping):
-        return any(has_one_shot_file(item) for item in value.values())
-
-    if isinstance(value, (list, tuple)):
-        return any(has_one_shot_file(item) for item in value)
-
-    return False
+    return children is not None and any(
+        has_one_shot_file(item) for item in children.values()
+    )

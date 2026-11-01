@@ -24,8 +24,10 @@ class ServerSentEvent:
         data: The ``data`` lines of the event, joined with ``\n``.
         event: The event type; ``"message"`` when the event has none.
         id: The last event ID seen so far in the stream, if any.
-        retry: The reconnection time in milliseconds, if the event sets
-            one.
+        retry: The reconnection time in milliseconds last set in the
+            stream, if any. As for ``id``, the HTML standard applies a
+            ``retry`` field at once, not to its event only, so it is kept
+            until another one replaces it.
     """
 
     data: str
@@ -113,13 +115,14 @@ class SSEDecoder:
     def _dispatch(self) -> ServerSentEvent | None:
         """Finish the current event and reset its fields.
 
-        The last event ID is kept: it applies to later events too.
+        The last event ID and reconnection time are kept: they apply to
+        later events too.
 
         Returns:
             The event, or ``None`` if it has no ``data``.
         """
-        data, event, retry = self._data, self._event, self._retry
-        self._data, self._event, self._retry = [], "", None
+        data, event = self._data, self._event
+        self._data, self._event = [], ""
         self._size = 0
 
         if not data:
@@ -129,5 +132,5 @@ class SSEDecoder:
             data="\n".join(data),
             event=event or "message",
             id=self._last_id,
-            retry=retry,
+            retry=self._retry,
         )

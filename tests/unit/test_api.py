@@ -28,8 +28,18 @@ def test_base_url_is_parsed(base_url: str | URL) -> None:
         ("https://", "absolute HTTP"),
         ("https://api.example.com?key=1", "query or fragment"),
         ("https://api.example.com#top", "query or fragment"),
+        ("https://user:pw@api.example.com", "credentials"),
+        ("https://user@api.example.com", "credentials"),
     ],
-    ids=["scheme", "relative", "no-host", "query", "fragment"],
+    ids=[
+        "scheme",
+        "relative",
+        "no-host",
+        "query",
+        "fragment",
+        "user-and-password",
+        "user",
+    ],
 )
 def test_invalid_base_url_is_rejected(base_url: str, message: str) -> None:
     with pytest.raises(ValueError, match=message):

@@ -250,10 +250,19 @@ def test_invalid_retry_is_ignored(value: str) -> None:
     ]
 
 
-def test_retry_applies_to_its_event_only() -> None:
-    events = events_of(["retry: 10", "data: a", "", "data: b", ""])
+def test_retry_is_kept_until_it_is_replaced() -> None:
+    # As id: the HTML standard applies retry at once, not to one event.
+    events = events_of(
+        ["retry: 10", "data: a", "", "data: b", "", "retry: 20", "data: c", ""]
+    )
 
-    assert [event.retry for event in events] == [10, None]
+    assert [event.retry for event in events] == [10, 10, 20]
+
+
+def test_retry_of_an_event_without_data_is_kept() -> None:
+    events = events_of(["retry: 10", "", "data: a", ""])
+
+    assert [event.retry for event in events] == [10]
 
 
 def test_incomplete_last_event_is_dropped() -> None:

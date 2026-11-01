@@ -14,6 +14,7 @@ from ai_api.http.headers import (
     CONTENT_TYPE,
     SERVER_SOFTWARE,
     USER_AGENT,
+    X_API_KEY,
     Headers,
 )
 from tests.conftest import TEST_TOKEN
@@ -135,7 +136,9 @@ def test_bearer_header_name() -> None:
 def test_api_key_defaults_to_x_api_key() -> None:
     auth = APIKeyAuth("sk-secret-123")
 
-    assert (auth.header_name, auth.encode()) == ("x-api-key", "sk-secret-123")
+    assert auth.header_name is X_API_KEY
+    assert auth.header_name.lower() == "x-api-key"
+    assert auth.encode() == "sk-secret-123"
     assert "sk-secret-123" not in repr(auth)
 
 

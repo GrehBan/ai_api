@@ -122,7 +122,9 @@ class StreamResponseParser:
                 an NDJSON line that reports an error; such an event is
                 raised as the ``APIStatusError`` the session's error
                 resolver builds, instead of being yielded. An SSE event
-                of type ``error`` is always raised.
+                of type ``error`` is always raised. ``ServerSentEvent``
+                items are checked too when their data is JSON; data that
+                is not JSON is yielded as it is.
         """
         self._max_line_size = max_line_size
         self._max_event_size = max_event_size
@@ -396,6 +398,14 @@ class _EventReader[T]:
             item: T
 
             if self._adapter is None:
+                # Raw events are yielded as they are, but one whose data
+                # is JSON is checked like a validated one: an error must
+                # not pass as an item because the item type is raw.
+                body = self._loads_or_none(event.data)
+
+                if body is not None and self._error_events.matches(body):
+                    raise self._resolve(body)
+
                 ending.check_open()
                 item = cast(T, event)
             else:

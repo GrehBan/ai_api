@@ -22,10 +22,62 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
+from pydantic import BaseModel
+
 from ai_api.types.protocols import IEventMatcher
 
 _MISSING: Final = object()
 """Marks a field the item does not have."""
+
+
+def _key(value: object) -> object:
+    """Key a value so that JSON's kinds stay apart.
+
+    Python takes ``True == 1`` and ``hash(True) == hash(1)``, so a set
+    of values would match a JSON ``1`` against ``true``. Booleans get a
+    key of their own; numbers share one, since JSON writes ``1`` and
+    ``1.0`` for the same number; anything else is itself, so a
+    ``StrEnum`` member still matches its string.
+
+    Args:
+        value: A field value or an accepted value.
+
+    Returns:
+        The value to compare and hash.
+    """
+    if isinstance(value, bool):
+        return (bool, value)
+
+    if isinstance(value, int | float):
+        return (float, value)
+
+    return value
+
+
+def _field(item: object, name: str) -> object:
+    """Read a field of an item, without running any code of it.
+
+    Args:
+        item: A model, a decoded JSON value or ``DONE_MARKER``.
+        name: The field's name.
+
+    Returns:
+        A key of a mapping, a field (or an extra field) of a Pydantic
+        model, an attribute of any other object, or ``_MISSING``. A
+        model's properties are not read: a matcher must not fail on an
+        item, and a property may raise.
+    """
+    if isinstance(item, Mapping):
+        return cast(Mapping[Any, object], item).get(name, _MISSING)
+
+    if isinstance(item, BaseModel):
+        if name in type(item).model_fields:
+            return getattr(item, name)
+
+        extra = item.model_extra or {}
+        return extra.get(name, _MISSING)
+
+    return getattr(item, name, _MISSING)
 
 
 class BaseMatcher(ABC):
@@ -53,6 +105,20 @@ class BaseMatcher(ABC):
             A matcher of both.
         """
         return AnyOf(self, other)
+
+    def __ror__(self, other: IEventMatcher) -> AnyOf:
+        """Match what either matcher matches, with this one on the right.
+
+        Lets a matcher that only follows ``IEventMatcher``, without this
+        base class, stand on the left of ``|``.
+
+        Args:
+            other: Another matcher.
+
+        Returns:
+            A matcher of both, ``other`` first.
+        """
+        return AnyOf(other, self)
 
 
 class AnyOf(BaseMatcher):
@@ -122,16 +188,23 @@ class AnyOf(BaseMatcher):
         """Show the combined matchers.
 
         Returns:
-            The matchers joined with ``|``.
+            The matchers joined with ``|``; a single one as
+            ``AnyOf(...)``, since it is not equal to that matcher alone.
         """
+        if len(self.matchers) == 1:
+            return f"AnyOf({self.matchers[0]!r})"
+
         return " | ".join(map(repr, self.matchers))
 
 
 class FieldValues(BaseMatcher):
     """Matches an item whose field has one of the given values.
 
-    The field is read as a key of a mapping (decoded JSON) or as an
-    attribute of any other object (a model).
+    The field is read as a key of a mapping (decoded JSON), a field of a
+    Pydantic model (never one of its properties) or an attribute of any
+    other object. Values are compared as JSON tells them apart: ``true``
+    is not ``1``. Matchers of the same field and values are equal, as
+    ``EventTypes("x")`` and ``FieldValues("type", "x")`` are.
 
     Attributes:
         name: The field's name.
@@ -158,6 +231,7 @@ class FieldValues(BaseMatcher):
 
         self.name = name
         self.values: frozenset[object] = frozenset(values)
+        self._keys: frozenset[object] = frozenset(map(_key, values))
 
     def matches(self, item: object) -> bool:
         """Check the field of one item.
@@ -169,43 +243,35 @@ class FieldValues(BaseMatcher):
             Whether the item has the field and its value is accepted; an
             unhashable value is never accepted.
         """
-        value: object
-
-        if isinstance(item, Mapping):
-            value = cast(Mapping[Any, object], item).get(self.name, _MISSING)
-        else:
-            value = getattr(item, self.name, _MISSING)
+        value = _field(item, self.name)
 
         try:
-            return value in self.values
+            return _key(value) in self._keys
         except TypeError:  # an unhashable value, such as an object
             return False
 
     def __eq__(self, other: object) -> bool:
-        """Compare by class, field and values.
+        """Compare by field and values, whatever the class.
 
         Args:
             other: Any object.
 
         Returns:
-            Whether ``other`` matches the same field and values.
+            Whether ``other`` matches the same field and values, so the
+            same items.
         """
         if not isinstance(other, FieldValues):
             return NotImplemented
 
-        return (type(self), self.name, self.values) == (
-            type(other),
-            other.name,
-            other.values,
-        )
+        return (self.name, self._keys) == (other.name, other._keys)
 
     def __hash__(self) -> int:
-        """Hash by class, field and values.
+        """Hash by field and values.
 
         Returns:
             The hash.
         """
-        return hash((type(self), self.name, self.values))
+        return hash((FieldValues, self.name, self._keys))
 
     def __repr__(self) -> str:
         """Show the field and the values.
@@ -220,9 +286,7 @@ class FieldValues(BaseMatcher):
 class EventTypes(FieldValues):
     """Matches an event by its ``type``.
 
-    Attributes:
-        types: The accepted types; a contract test checks that each one
-            exists in the provider's upstream stream schema.
+    It is ``FieldValues("type", ...)``, and equal to it.
 
     Example:
         >>> EventTypes("message_stop").matches({"type": "message_stop"})
@@ -239,7 +303,15 @@ class EventTypes(FieldValues):
             ValueError: If no type is given.
         """
         super().__init__("type", *types)
-        self.types: frozenset[str] = frozenset(types)
+
+    @property
+    def types(self) -> frozenset[str]:
+        """The accepted types.
+
+        A contract test checks that each one exists in the provider's
+        upstream stream schema.
+        """
+        return cast(frozenset[str], self.values)
 
     def __repr__(self) -> str:
         """Show the types.

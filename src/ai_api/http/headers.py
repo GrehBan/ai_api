@@ -169,7 +169,7 @@ class Headers:
         Returns:
             A new case-insensitive mapping.
         """
-        headers = self.headers.copy()
+        headers = self.copy()
 
         if extra is not None:
             headers.update(_as_mapping(extra))

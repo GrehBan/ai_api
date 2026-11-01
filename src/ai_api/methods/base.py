@@ -400,11 +400,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                 empty, or a ``.``/``..`` segment.
         """
         params = self.__request_path_params__
-
-        if not params:
-            return self.__request_path__
-
-        values = self.model_dump(include=set(params), mode="python")
+        # Always formatted, also without placeholders, so "{{" and "}}"
+        # become literal braces in every path alike.
+        values = (
+            self.model_dump(include=set(params), mode="python")
+            if params
+            else {}
+        )
 
         return self.__request_path__.format_map(
             {
