@@ -86,6 +86,12 @@ from ai_api.response.parse.sse import (
 from ai_api.response.stream import (
     Stream,
 )
+from ai_api.serialization.protocols import (
+    IValueFormatter,
+)
+from ai_api.serialization.values import (
+    BaseValueFormatter,
+)
 from ai_api.session.base import (
     BaseSession,
 )
@@ -136,6 +142,7 @@ __all__ = [
     "BaseErrorResolver",
     "BaseSession",
     "BaseStreamMethod",
+    "BaseValueFormatter",
     "BearerAuth",
     "BillingError",
     "BodyFormat",
@@ -152,6 +159,7 @@ __all__ = [
     "IGenerationClient",
     "IGenerationResource",
     "IOFile",
+    "IValueFormatter",
     "IncompleteReason",
     "InputFile",
     "InternalServerError",

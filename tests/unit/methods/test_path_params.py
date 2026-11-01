@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import enum
 import math
 from typing import Any, Literal
@@ -155,14 +156,63 @@ def test_path_safe_keeps_slash() -> None:
         ("", "has an unsafe value"),
         (".", "has an unsafe value"),
         ("..", "has an unsafe value"),
-        (math.nan, "has an unsafe value: nan"),
-        (math.inf, "has an unsafe value: inf"),
+        (math.nan, "cannot send NaN or infinity"),
+        (math.inf, "cannot send NaN or infinity"),
     ],
     ids=["none", "empty", "dot", "dot-dot", "nan", "inf"],
 )
 def test_unsafe_values(value: Any, match: str) -> None:
     with pytest.raises(ValueError, match=f"'value' {match}"):
         build_path("/m/{value}", {"value": value})
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_non_finite_float_field_is_rejected(value: float) -> None:
+    # Typed as float: the JSON dump gave "nan" here, not null.
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        path="/m/{value}",
+        fields={"value": float},
+    )
+
+    with pytest.raises(ValueError, match="cannot send NaN or infinity"):
+        _ = method_cls.model_validate({"value": value}).request_path
+
+
+@pytest.mark.parametrize(
+    ("annotation", "value", "expected"),
+    [
+        (
+            datetime.datetime,
+            datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC),
+            "2026-01-02T03%3A04%3A05Z",
+        ),
+        (datetime.date, datetime.date(2026, 1, 2), "2026-01-02"),
+        (datetime.timedelta, datetime.timedelta(seconds=30), "PT30S"),
+    ],
+    ids=["datetime", "date", "timedelta"],
+)
+def test_dates_are_written_in_iso_8601(
+    annotation: Any,
+    value: Any,
+    expected: str,
+) -> None:
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        path="/m/{value}",
+        fields={"value": annotation},
+    )
+
+    path = method_cls.model_validate({"value": value}).request_path
+
+    assert path == f"/m/{expected}"
+
+
+def test_naive_datetime_is_rejected() -> None:
+    naive = datetime.datetime(2026, 1, 2)  # noqa: DTZ001 - on purpose
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        build_path("/m/{value}", {"value": naive})
 
 
 @pytest.mark.parametrize(

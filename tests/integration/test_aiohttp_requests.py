@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import socket
 import ssl
 from typing import Any
@@ -34,11 +35,19 @@ from ai_api.http.exceptions.transport import (
 )
 from ai_api.http.headers import SERVER_SOFTWARE, Headers
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
+from ai_api.serialization.values import BaseValueFormatter
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
 pytestmark = pytest.mark.integration
+
+
+class UnixFormatter(BaseValueFormatter):
+    """Writes a moment as Unix seconds, durations stay ISO 8601."""
+
+    def format_datetime(self, value: datetime.datetime, /) -> str:
+        return str(round(value.timestamp()))
 
 
 class Model(BaseAPIType):
@@ -193,6 +202,29 @@ async def test_path_query_and_json_body_in_one_request(
     assert dict(request.query) == {"limit": "5", "dry_run": "true"}
     assert request.headers["Content-Type"] == "application/json"
     assert request.body == b'{"name":"new","tags":["a","b"]}'
+
+
+class Schedule(BaseAPIMethod[None]):
+    __request_path__ = "/schedule"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+    __value_formatter__ = UnixFormatter()
+
+    at: datetime.datetime
+    ttl: datetime.timedelta
+
+
+async def test_json_body_uses_the_method_formatter(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
+
+    await session.send_request(
+        Schedule(at=at, ttl=datetime.timedelta(minutes=5))
+    )
+
+    assert recorder.last.body == b'{"at":"1767323045","ttl":"PT5M"}'
 
 
 @pytest.mark.parametrize(

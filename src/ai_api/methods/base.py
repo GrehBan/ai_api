@@ -33,6 +33,8 @@ from ai_api.response.parse.protocols import (
 )
 from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.serialization.protocols import IValueFormatter
+from ai_api.serialization.values import BaseValueFormatter
 from ai_api.types.protocols import IEventMatcher
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
@@ -133,6 +135,10 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         __returning__: Runtime class of the result; inferred from the
             generic argument unless a subclass sets it explicitly.
         __request_body_format__: Encoding of the request body.
+        __value_formatter__: Writes dates, times and durations in every
+            part of the request (body, form, query and path). ISO 8601 by
+            default; a provider whose API wants another format sets its
+            own on its base method.
         __retryable__: Whether transient failures may be retried. Ignored
             when the request carries a file that can be read only once.
         __response_format__: How the response body is parsed.
@@ -152,6 +158,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     __request_query__: ClassVar[AbstractSet[str]] = frozenset()
     __returning__: ClassVar[type[Any] | None] = None
     __request_body_format__: ClassVar[BodyFormat] = BodyFormat.NONE
+    __value_formatter__: ClassVar[IValueFormatter] = BaseValueFormatter()
     __retryable__: ClassVar[bool] = False
     __response_format__: ClassVar[ResponseFormat]
     __request_headers__: ClassVar[HeadersType | None] = None
@@ -381,22 +388,23 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     def request_path(self) -> str:
         """Path appended to the API's base URL, placeholders filled in.
 
-        Each parameter is dumped in JSON mode (so enums give their value)
+        Each parameter is written as text (enums as their values,
+        booleans as ``true``/``false``, dates through ``value_formatter``)
         and percent-encoded; only ``__request_path_safe__`` characters are
         kept.
 
         Raises:
             TypeError: If a parameter (of a field typed ``Any``) holds a
-                mapping, a model or a list.
-            ValueError: If a parameter is ``None``, empty, or a ``.``/``..``
-                segment.
+                mapping, a model or a collection.
+            ValueError: If a parameter is ``None``, NaN or infinite,
+                empty, or a ``.``/``..`` segment.
         """
         params = self.__request_path_params__
 
         if not params:
             return self.__request_path__
 
-        values = self.model_dump(include=set(params), mode="json")
+        values = self.model_dump(include=set(params), mode="python")
 
         return self.__request_path__.format_map(
             {
@@ -404,7 +412,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     name,
                     values.get(name),
                     self.__request_path_safe__,
-                    getattr(self, name),
+                    self.value_formatter,
                 )
                 for name in params
             }
@@ -419,6 +427,11 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     def request_body_format(self) -> BodyFormat:
         """Encoding of the request body."""
         return self.__request_body_format__
+
+    @property
+    def value_formatter(self) -> IValueFormatter:
+        """Writes the dates, times and durations of the request."""
+        return self.__value_formatter__
 
     @property
     def retryable(self) -> bool:
@@ -444,12 +457,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         Returns:
             Fields listed in ``__request_query__`` converted to strings
-            (booleans as ``"true"``/``"false"``) or, for lists and tuples,
-            to lists of strings; ``None`` if the method has no query
-            parameters.
+            (booleans as ``"true"``/``"false"``, dates through
+            ``value_formatter``) or, for lists, tuples and sets, to lists
+            of strings; ``None`` if the method has no query parameters.
 
         Raises:
             TypeError: If a value is an object or contains one.
+            ValueError: If a list contains ``None``, or a value is NaN or
+                infinite or rejected by the formatter.
         """
         if not self.__request_query__:
             return None
@@ -458,10 +473,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             include=set(self.__request_query__),
             exclude_none=True,
             by_alias=True,
-            mode="json",
+            mode="python",
         )
 
-        return {key: query_value(key, value) for key, value in data.items()}
+        return {
+            key: query_value(key, value, self.value_formatter)
+            for key, value in data.items()
+        }
 
     def get_body_map(self) -> Mapping[str, Any]:
         """Return the body fields.

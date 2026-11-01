@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `IValueFormatter` and `BaseValueFormatter` (`ai_api`,
+  `ai_api.serialization`): a method's `__value_formatter__` (property
+  `value_formatter`, also on `IBaseMethod`) writes dates, times and
+  durations in every part of the request. The default is ISO 8601; an API
+  that wants another format overrides it on its base method, and one field
+  can use Pydantic's `PlainSerializer`.
+
 - Conversions: `ai_api.adapters.IConversion[SourceT, TargetT]` (a protocol
   of `__call__(source, /)`, so a plain function fits) and its ABC
   `BaseConversion`, for pure value conversions between a provider's types
@@ -56,6 +63,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** a datetime in a JSON or form body is sent in ISO 8601
+  (`"2026-01-02T03:04:05Z"`) instead of a Unix timestamp string, and a
+  timedelta as an ISO 8601 duration (`"PT30S"`) instead of the timestamp of
+  now plus the delta. Query and path values were already ISO 8601; a date
+  or time in the body goes through the same formatter. To keep Unix
+  seconds, set a `BaseValueFormatter` subclass as `__value_formatter__`.
+- **Breaking:** `IBodyBuilder.build` and `BodyNormalizer.normalize` /
+  `normalize_mapping` take the method's formatter; `AiohttpSession` passes
+  `method.value_formatter`.
+- Query, path and form values follow one rule (`scalar_text`): enums as
+  their values, booleans as `true`/`false`, dates through the formatter.
+  A naive datetime now raises `ValueError` in a query or path too, and a
+  value with no text form (such as a class) raises `TypeError`.
+- `BodyNormalizer.MAX_DEPTH` is 253, orjson's limit for a body field: a
+  field nested 254 to 256 levels deep raised the encoder's `TypeError`
+  instead of the documented `ValueError`.
 - A method without a body (`BodyFormat.NONE`, the default) whose field is
   neither a path nor a query parameter raises `TypeError` at class
   definition, instead of dropping the field from every request; the aiohttp
@@ -98,6 +121,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- NaN and infinity raise `ValueError` in every part of the request: a
+  `float` path parameter was sent as `nan`, a NaN in an `Any` query field
+  as the string `None`, and a form field as `nan`.
+- A nested model passed to the normalizer is dumped by alias, so its wire
+  names are kept, and enum dict keys are sent as their values (orjson
+  rejected them). Keys that give the same value raise `ValueError`.
+- A text stream in a body raises a clear `TypeError` in the normalizer
+  instead of a message about binary data from the body builder.
 - `OutputText.logprobs` accepts `null`, which OpenAI sends when log
   probabilities were not requested; such a response failed validation.
 

@@ -174,6 +174,7 @@ A method class declares the HTTP request in its dunder class attributes. Its fie
 | `__request_query__` | empty | Names of fields sent as query parameters; fields that are neither path nor query parameters go to the body. Unknown names and mapping or model fields raise `TypeError` at class definition |
 | `__request_body_format__` | `BodyFormat.NONE` | `JSON`, `FORM`, `MULTIPART` or `NONE` |
 | `__request_headers__` | `None` | Headers sent with every request of the method, as a mapping or `Headers`; see [Default headers](#default-headers) for which ones win |
+| `__value_formatter__` | `BaseValueFormatter()` | Writes dates, times and durations (ISO 8601); see [Dates, times and durations](#dates-times-and-durations) |
 | `__retryable__` | `False` | Retry transient failures (up to 4 attempts in total) |
 | `__returning__` | inferred | Result class, taken from the generic argument |
 | `__response_format__` | inferred | How the response body is parsed |
@@ -250,13 +251,59 @@ A method without a body sends every field as a path or query parameter. A field 
 Before encoding, the values are normalized:
 
 - **`None`** fields are dropped, at the top level and in nested models, but kept as `null` inside lists and dicts, where the position or key matters.
-- **Nested models** (`BaseAPIType`) are dumped to dicts.
-- **Enums** are sent as their values.
-- **Datetimes** become Unix timestamps in seconds, as strings. A naive datetime raises `ValueError`, because its moment is ambiguous.
-- **Timedeltas** become the timestamp of now plus the delta, for parameters such as an expiry time.
-- **Circular references** and nesting deeper than 256 levels raise `ValueError` instead of hitting Python's recursion limit.
+- **Nested models** (`BaseAPIType`) are dumped to dicts, by their wire names.
+- **Enums** are sent as their values, also as dict keys. Two keys that give the same value, such as `Color.RED` and `"red"`, raise `ValueError`, since one of the values would be lost.
+- **Dates, times and durations** are written by the method's formatter, in ISO 8601 by default (see [Dates, times and durations](#dates-times-and-durations)).
+- **Text streams** raise `TypeError`: uploads are bytes, so open the file in binary mode.
+- **Circular references** and nesting deeper than 253 levels raise `ValueError`, instead of an encoder error: orjson refuses deeper data.
 
 In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`. A repeated field can express neither `null` nor nesting, so `None` in a list raises `ValueError` and a list inside a list raises `TypeError`.
+
+### Dates, times and durations
+
+A value is written the same way in every part of the request (JSON body, form, query and path), by the method's `__value_formatter__`. The default `BaseValueFormatter` uses ISO 8601, the `date-time`, `date` and `time` formats of JSON Schema and OpenAPI:
+
+| Value | Sent as |
+|---|---|
+| `datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)` | `"2026-01-02T03:04:05Z"`; another offset as `+03:00` |
+| `date(2026, 1, 2)` | `"2026-01-02"` |
+| `time(12, 30)` | `"12:30:00"` |
+| `timedelta(seconds=30)` | `"PT30S"` |
+
+A naive datetime raises `ValueError`, because the moment it names depends on the reader's clock. NaN and infinity raise `ValueError` everywhere, since no API can read them; in a query or path they used to become `nan` or `None`.
+
+An API that wants another format gets a subclass that overrides what differs, set on the base class of its methods. A single field takes its own format through Pydantic's `PlainSerializer`, which runs before the formatter:
+
+```python
+import datetime
+from typing import Annotated
+
+from pydantic import PlainSerializer
+
+from ai_api import BaseValueFormatter
+
+
+class UnixSeconds(BaseValueFormatter):        # the API wants Unix seconds
+    def format_datetime(self, value: datetime.datetime, /) -> str:
+        return str(round(value.timestamp()))
+
+
+class LegacyMethod[T](BaseAPIMethod[T]):      # base of the API's methods
+    __value_formatter__ = UnixSeconds()
+
+
+class CreateJob(LegacyMethod[Model]):
+    __request_path__ = "/jobs"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+
+    run_at: datetime.datetime                 # "1767323045"
+    timeout: datetime.timedelta               # "PT30S": not overridden
+    expires_at: Annotated[                    # 1767323045, a JSON number
+        datetime.datetime,
+        PlainSerializer(lambda value: round(value.timestamp())),
+    ]
+```
 
 ### Query parameters
 
@@ -271,7 +318,7 @@ class ListModels(BaseAPIMethod[ModelList]):
     limit: int | None = None          # sent as ?limit=...
 ```
 
-A list or tuple is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`; `None` in the list raises `ValueError`, since a repeated key has no `null` and dropping it would shift the other items. Booleans become `true` and `false`, and enums their values. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
+A list, tuple or set is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`; `None` in the list raises `ValueError`, since a repeated key has no `null` and dropping it would shift the other items. Booleans become `true` and `false`, enums their values, and dates as in [Dates, times and durations](#dates-times-and-durations); NaN and infinity raise `ValueError`. A value with no text form, such as a class, raises `TypeError`. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
 
 To send a field under another name, use `validation_alias` and `serialization_alias` rather than `alias`. The constructor then takes the field name in both mypy and pyright; with `alias`, mypy wants the field name and pyright the alias. At runtime both names are accepted.
 
@@ -309,9 +356,9 @@ class RetrieveModel(BaseAPIMethod[Model]):
 RetrieveModel(model_id="example-1").request_path   # "/models/example-1"
 ```
 
-- **Escaping.** Values are percent-encoded, including `/`, `?` and `#`, so `model_id="../admin"` cannot change the request path. Enums give their value, as in query parameters.
+- **Escaping.** Values are percent-encoded, including `/`, `?` and `#`, so `model_id="../admin"` cannot change the request path. Values are written as in query parameters: enums give their value, booleans `true`/`false`, dates ISO 8601.
 - **`build_url` gets an encoded path.** Join it without encoding it again, e.g. with `URL.joinpath(..., encoded=True)` as `BaseAPI` does. yarl's `/` operator would turn `%2F` into `%252F`, and the server would see a different identifier.
-- **Rejected values.** `None`, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
+- **Rejected values.** `None`, NaN, infinity, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
 - **Identifiers with slashes.** For values such as `meta-llama/Llama-3`, set `__request_path_safe__ = "/"` on that method. Each segment is still checked for `.` and `..`.
 - **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__` and a field annotated as a list, set, dict or model (it has no single segment) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
 
@@ -1094,7 +1141,7 @@ Defaults that protect the API key and the request:
 - **TLS.** Certificates are verified against the `certifi` CA bundle, the same on every operating system. A TLS failure raises `APITLSError`, which is not retried.
 - **Secrets in logs.** `BearerAuth` and `APIKeyAuth` keep the token out of `repr`, and reject whitespace that could inject another header.
 - **Untrusted servers.** `max_body_size`, `max_line_size` and `max_event_size` limit what is held in memory, and an SSE stream with another `Content-Type` is rejected instead of being read as empty.
-- **Invalid JSON values.** NaN and infinity are rejected rather than sent as `null`.
+- **Invalid values.** NaN and infinity are rejected in every part of the request, rather than sent as `null`, `nan` or `None`.
 
 ## Design decisions
 

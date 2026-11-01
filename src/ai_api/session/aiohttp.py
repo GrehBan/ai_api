@@ -441,6 +441,7 @@ class AiohttpSession(BaseSession):
         body = self._body_builder.build(
             method.get_body_map(),
             method.request_body_format,
+            method.value_formatter,
         )
 
         redirects: dict[str, Any] = (

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import string
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
+
+from ai_api.serialization.values import scalar_text
+
+if TYPE_CHECKING:
+    from ai_api.serialization.protocols import IValueFormatter
 
 _DOT_SEGMENTS: Final[frozenset[str]] = frozenset({".", ".."})
 
@@ -40,39 +46,39 @@ def parse_path_params(template: str) -> frozenset[str]:
     return frozenset(names)
 
 
-def encode_path_value(name: str, value: Any, safe: str, raw: Any) -> str:
+def encode_path_value(
+    name: str,
+    value: Any,
+    safe: str,
+    formatter: IValueFormatter,
+) -> str:
     """Convert a path parameter to an escaped path segment.
 
     Args:
         name: The parameter name, for error messages.
-        value: The JSON-mode dump of the field value.
+        value: The Python-mode dump of the field value.
         safe: Characters left unescaped, e.g. ``"/"``.
-        raw: The field value itself, for error messages.
+        formatter: Writes the dates, times and durations.
 
     Returns:
-        The percent-encoded value.
+        The percent-encoded value, written by the rule of ``scalar_text``.
 
     Raises:
-        TypeError: If the value dumps to an object or a list, which has
+        TypeError: If the value is an object or a collection, which has
             no single path segment.
-        ValueError: If the value is ``None``, dumps to ``null`` (such as
-            NaN), is empty, or is a ``.``/``..`` segment, which would
+        ValueError: If the value is ``None``, NaN or infinite, rejected by
+            the formatter, empty, or a ``.``/``..`` segment, which would
             change the request path.
     """
-    if isinstance(value, (dict, list)):
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)):
         raise TypeError(
-            f"Path parameter {name!r} must be a scalar, not {raw!r}"
+            f"Path parameter {name!r} must be a scalar, not {value!r}"
         )
 
     if value is None:
-        if raw is not None:
-            raise ValueError(
-                f"Path parameter {name!r} has an unsafe value: {raw!r}"
-            )
-
         raise ValueError(f"Path parameter {name!r} is not set")
 
-    text = str(value).lower() if isinstance(value, bool) else str(value)
+    text = scalar_text(value, formatter, label=f"Path parameter {name!r}")
     segments = text.split("/") if "/" in safe else [text]
 
     if any(not segment or segment in _DOT_SEGMENTS for segment in segments):
