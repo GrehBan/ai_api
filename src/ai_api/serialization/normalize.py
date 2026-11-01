@@ -38,6 +38,32 @@ def _key(key: Any) -> Any:
     return key
 
 
+def _checked_stream(stream: io.IOBase) -> io.IOBase:
+    """Accept a stream as an upload only if it can be read as bytes.
+
+    Args:
+        stream: A stream in a body value.
+
+    Returns:
+        The stream itself, for the body builder to send.
+
+    Raises:
+        TypeError: If it is a text stream: uploads are bytes, and it would
+            fail later, in the body builder, with a message about binary
+            data.
+        ValueError: If it is closed or not readable.
+    """
+    if not isinstance(stream, (io.BufferedIOBase, io.RawIOBase)):
+        raise TypeError(
+            "Only binary streams can be uploaded, not a text stream"
+        )
+
+    if stream.closed or not stream.readable():
+        raise ValueError("Invalid file stream")
+
+    return stream
+
+
 class BodyNormalizer:
     """Prepares request body values for a transport-specific builder.
 
@@ -122,17 +148,7 @@ class BodyNormalizer:
             return value
 
         if isinstance(value, io.IOBase):
-            # Uploads are bytes; a text stream would fail later, in the
-            # body builder, with a message about binary data.
-            if not isinstance(value, (io.BufferedIOBase, io.RawIOBase)):
-                raise TypeError(
-                    "Only binary streams can be uploaded, not a text stream"
-                )
-
-            if value.closed or not value.readable():
-                raise ValueError("Invalid file stream")
-
-            return value
+            return _checked_stream(value)
 
         if isinstance(value, BaseAPIType):
             return self._normalize(
@@ -153,27 +169,49 @@ class BodyNormalizer:
             return format_temporal(value, formatter)
 
         if isinstance(value, (Mapping, list, tuple)):
-            if id(value) in parents:
-                raise ValueError("Request body contains a circular reference")
-
-            if len(parents) >= MAX_DEPTH:
-                raise ValueError(
-                    f"Request body is nested deeper than {MAX_DEPTH} levels"
-                )
-
-            parents.add(id(value))
-
-            try:
-                if isinstance(value, Mapping):
-                    return self._normalize_dict(value, formatter, parents)
-
-                return [
-                    self._normalize(item, formatter, parents) for item in value
-                ]
-            finally:
-                parents.discard(id(value))
+            return self._normalize_container(value, formatter, parents)
 
         return value
+
+    def _normalize_container(
+        self,
+        value: Mapping[Any, Any] | list[Any] | tuple[Any, ...],
+        formatter: IValueFormatter,
+        parents: set[int],
+    ) -> dict[Any, Any] | list[Any]:
+        """Normalize the items of a dict, list or tuple.
+
+        Args:
+            value: The container.
+            formatter: Writes the dates, times and durations.
+            parents: Ids of the enclosing containers, to detect cycles.
+
+        Returns:
+            A new dict, or a list for a list or a tuple.
+
+        Raises:
+            ValueError: If the container contains itself, is nested deeper
+                than ``MAX_DEPTH``, or an item cannot be normalized.
+        """
+        if id(value) in parents:
+            raise ValueError("Request body contains a circular reference")
+
+        if len(parents) >= MAX_DEPTH:
+            raise ValueError(
+                f"Request body is nested deeper than {MAX_DEPTH} levels"
+            )
+
+        parents.add(id(value))
+
+        try:
+            if isinstance(value, Mapping):
+                return self._normalize_dict(value, formatter, parents)
+
+            return [
+                self._normalize(item, formatter, parents) for item in value
+            ]
+        finally:
+            parents.discard(id(value))
 
     def _normalize_dict(
         self,

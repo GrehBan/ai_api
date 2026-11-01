@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
 ### Added
 
 - `IValueFormatter` and `BaseValueFormatter` (`ai_api`,
@@ -61,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects is a validation error.
 - `typing-extensions`, `aresponses` and `isort` are no longer
   dependencies.
+- Ruff checks cyclomatic complexity (`C90`, `max-complexity = 10`, the
+  mccabe default; a lower limit would flag flat `match` dispatchers);
+  `BodyNormalizer._normalize` hands streams and containers to helpers of
+  their own to stay under it, with the same behaviour.
 - Tests: the local `Recorder` fails a test on any request it was not
   scripted for, mirrored provider client tests run once per provider
   (`tests/providers/test_provider_clients.py`), the backoff is checked by
@@ -578,6 +584,7 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/GrehBan/ai_api/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GrehBan/ai_api/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GrehBan/ai_api/compare/2b58dfc...v0.1.0

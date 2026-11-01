@@ -4,7 +4,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 
 You describe each API call as a small declarative class. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming.
 
-> **Status: pre-alpha (0.2.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
+> **Status: pre-alpha (0.3.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
 
 ## Contents
 
