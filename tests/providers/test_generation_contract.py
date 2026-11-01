@@ -19,7 +19,6 @@ from typing import Any
 import pytest
 from aiohttp import ClientTimeout
 
-from ai_api.client.factory import SessionFactory
 from ai_api.enums import IncompleteReason, Provider
 from ai_api.http.exceptions.status import (
     BadRequestError,
@@ -42,6 +41,7 @@ from ai_api.providers.openai.client import session_factory as openai_factory
 from ai_api.providers.openai.methods import StreamResponse
 from ai_api.resources import IGenerationResource
 from ai_api.response.stream import Stream
+from ai_api.session.factory import SessionFactory
 from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
     CompletedEvent,

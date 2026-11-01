@@ -5,8 +5,12 @@ from __future__ import annotations
 from ai_api.session.base import (
     BaseSession,
 )
+from ai_api.session.factory import (
+    SessionFactory,
+)
 from ai_api.session.protocols import (
     ISession,
+    ISessionFactory,
     Timeout,
 )
 from ai_api.session.retry import (
@@ -19,5 +23,7 @@ __all__ = [
     "DEFAULT_MAX_RETRY_AFTER",
     "DEFAULT_RETRY_DEADLINE",
     "ISession",
+    "ISessionFactory",
+    "SessionFactory",
     "Timeout",
 ]

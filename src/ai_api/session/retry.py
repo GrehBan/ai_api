@@ -20,6 +20,9 @@ DEFAULT_MAX_RETRY_AFTER: Final[float] = 60.0
 DEFAULT_RETRY_DEADLINE: Final[float] = 900.0
 """Time after which no new retry starts, in seconds (15 minutes)."""
 
+RETRY_ATTEMPT_LIMIT: Final[int] = 4
+"""Maximum number of attempts for a single request, including the first one."""
+
 _jitter: Final[wait_random_exponential] = wait_random_exponential(
     multiplier=0.5,
     max=30,

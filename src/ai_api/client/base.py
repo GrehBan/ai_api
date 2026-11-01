@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Self
 
-from ai_api.client.protocols import ISessionFactory
 from ai_api.client.validators import (
     check_same_provider,
     provider_of,
+    providers_of,
     resolve_token,
 )
 from ai_api.enums import Provider
-from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.exceptions import SessionMismatchWarning
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.stream import Stream
 from ai_api.session.base import BaseSession
-from ai_api.session.protocols import ISession, Timeout
+from ai_api.session.protocols import ISession, ISessionFactory, Timeout
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -28,8 +29,14 @@ if TYPE_CHECKING:
 _LIBRARY: Final = str(Path(__file__).resolve().parents[1])
 """The package directory, skipped so a warning points at the caller."""
 
-_PARTS: Final = ("provider", "session_factory", "api_key_env", "auth_headers")
-"""Class attributes every provider client sets, besides adapter_type."""
+_PARTS: Final = (
+    "provider",
+    "session_factory",
+    "api_key_env",
+    "auth_headers",
+    "adapter_types",
+)
+"""Class attributes every provider client sets."""
 
 
 class BaseClient[SessionT: ISession]:
@@ -136,13 +143,14 @@ class BaseClient[SessionT: ISession]:
         )
 
 
-class BaseProviderClient[AdapterT](BaseClient[ISession]):
+class BaseProviderClient(BaseClient[ISession]):
     """What a provider's client shares: its session, from a token.
 
-    A subclass declares its parts and builds ``generation`` from
-    ``adapter_type`` in its own ``__init__``, after this one, since the
-    shared resource is a higher layer than the client. The parts name
-    one provider, checked when the subclass is defined.
+    A subclass declares its parts and, in its own ``__init__``, builds
+    its resources from adapters made by ``adapter()``: the shared
+    resources are a higher layer than the client, so the base class
+    cannot build them. The parts name one provider, checked when the
+    subclass is defined, for every adapter it declares.
 
     The client takes a token, a ready ``session=`` or, without either,
     the token in ``api_key_env``; ``session_kwargs`` configure the
@@ -157,22 +165,30 @@ class BaseProviderClient[AdapterT](BaseClient[ISession]):
             session, such as ``OPENAI_API_KEY``.
         auth_headers: Headers the provider takes the key in, such as
             ``Authorization``.
-        adapter_type: The adapter class of ``generation``.
+        adapter_types: Every adapter class the client builds, one per
+            shared resource; empty for a client without one.
 
     Example:
-        >>> class ExampleClient(BaseProviderClient[ExampleAdapter]):
+        >>> class ExampleClient(BaseProviderClient):
         ...     provider = PROVIDER
         ...     session_factory = session_factory
         ...     api_key_env = "EXAMPLE_API_KEY"
         ...     auth_headers = frozenset({AUTHORIZATION})
-        ...     adapter_type = ExampleAdapter
+        ...     adapter_types = (ExampleGenerationAdapter,)
+        ...
+        ...     def __init__(self, token=None, *, session=None):
+        ...         adapter = self.adapter(ExampleGenerationAdapter)
+        ...         super().__init__(token, session=session)
+        ...         self.generation = GenerationResource(
+        ...             self.session, adapter
+        ...         )
     """
 
     provider: ClassVar[Provider]
     session_factory: ClassVar[ISessionFactory[ISession, Any, ...]]
     api_key_env: ClassVar[str]
     auth_headers: ClassVar[frozenset[str]]
-    adapter_type: type[AdapterT]
+    adapter_types: ClassVar[tuple[type, ...]]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Check that the parts of the client name one provider.
@@ -181,17 +197,13 @@ class BaseProviderClient[AdapterT](BaseClient[ISession]):
             **kwargs: Class keyword arguments.
 
         Raises:
-            TypeError: If a part is missing, or the client, the session
-                factory's error resolver and the adapter name different
-                providers.
+            TypeError: If a part is missing, two adapter classes share a
+                name, or the client, the session factory's error
+                resolver and an adapter name different providers.
         """
         super().__init_subclass__(**kwargs)
 
-        missing = [
-            name
-            for name in (*_PARTS, "adapter_type")
-            if not hasattr(cls, name)
-        ]
+        missing = [name for name in _PARTS if not hasattr(cls, name)]
         if missing:
             message = f"{cls.__name__} must set {', '.join(missing)}"
             raise TypeError(message)
@@ -201,8 +213,48 @@ class BaseProviderClient[AdapterT](BaseClient[ISession]):
             error_resolver=provider_of(
                 cls.session_factory.error_resolver, "error resolver"
             ),
-            adapter=provider_of(cls.adapter_type, "adapter"),
+            **providers_of(cls.adapter_types, "adapter"),
         )
+
+    def adapter[**P, A](
+        self,
+        adapter_type: Callable[P, A],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> A:
+        """Build one of the client's adapters.
+
+        Type checkers check the arguments as a call of the adapter class
+        itself and give its type back. It may be called before
+        ``super().__init__()``, so an adapter rejects its options before
+        a session exists.
+
+        Args:
+            adapter_type: An adapter class listed in ``adapter_types``;
+                only listed classes had their provider checked.
+            *args: Positional arguments of the adapter.
+            **kwargs: Keyword arguments of the adapter.
+
+        Returns:
+            The new adapter.
+
+        Raises:
+            TypeError: If the class is not in ``adapter_types``.
+        """
+        # Kept apart from the if: an "in" test would narrow the type of
+        # adapter_type to the tuple's and lose the adapter's own type.
+        declared = adapter_type in self.adapter_types
+
+        if not declared:
+            name = getattr(adapter_type, "__name__", repr(adapter_type))
+            message = (
+                f"{type(self).__name__} builds {name}, which is not in "
+                "its adapter_types"
+            )
+            raise TypeError(message)
+
+        return adapter_type(*args, **kwargs)
 
     def __init__(
         self,
@@ -259,31 +311,33 @@ class BaseProviderClient[AdapterT](BaseClient[ISession]):
             session: The session given to the client.
 
         Warns:
-            UserWarning: If the session uses the generic
-                ``BaseErrorResolver``, or sends the key in a header the
-                provider does not take. The warning points at the code
-                that built the client.
+            SessionMismatchWarning: If the session's error resolver is
+                not the provider's (a subclass of it is), or the session
+                sends the key in a header the provider does not take. The
+                warning points at the code that built the client.
         """
         if not isinstance(session, BaseSession):
             return
 
-        if type(session.error_resolver) is BaseErrorResolver:
-            resolver = type(cls.session_factory.error_resolver).__name__
+        expected = type(cls.session_factory.error_resolver)
+        given = session.error_resolver
+
+        if not isinstance(given, expected):
             warnings.warn(
-                f"{cls.__name__} is using the generic BaseErrorResolver. "
-                f"Consider using {resolver} for provider-specific error "
-                "handling.",
-                UserWarning,
+                f"{cls.__name__} is using {type(given).__name__}. "
+                f"Consider using {expected.__name__} for provider-specific "
+                "error handling.",
+                SessionMismatchWarning,
                 skip_file_prefixes=(_LIBRARY,),
             )
 
         accepted = {header.lower() for header in cls.auth_headers}
         if session.auth.header_name.lower() not in accepted:
-            expected = " or ".join(sorted(cls.auth_headers))
+            headers = " or ".join(sorted(cls.auth_headers))
             warnings.warn(
                 f"{cls.__name__} sends the key in "
                 f"{session.auth.header_name}, but {cls.provider.value} "
-                f"takes it in {expected}.",
-                UserWarning,
+                f"takes it in {headers}.",
+                SessionMismatchWarning,
                 skip_file_prefixes=(_LIBRARY,),
             )

@@ -23,6 +23,7 @@ from ai_api.session.protocols import Timeout
 from ai_api.session.retry import (
     DEFAULT_MAX_RETRY_AFTER,
     DEFAULT_RETRY_DEADLINE,
+    RETRY_ATTEMPT_LIMIT,
     calculate_wait,
     retry_condition,
 )
@@ -250,7 +251,7 @@ class BaseSession(ABC):
         if not retryable:
             return await call()
 
-        stop: stop_base = stop_after_attempt(4)
+        stop: stop_base = stop_after_attempt(RETRY_ATTEMPT_LIMIT)
 
         if self.retry_deadline is not None:
             stop |= stop_before_delay(self.retry_deadline)

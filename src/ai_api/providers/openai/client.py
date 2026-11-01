@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Final, Unpack
 
 from ai_api.client.base import BaseProviderClient
-from ai_api.client.factory import SessionFactory
 from ai_api.http.auth import BearerAuth
 from ai_api.http.headers import AUTHORIZATION
 from ai_api.providers.openai.adapters.generation import (
@@ -19,6 +18,7 @@ from ai_api.providers.openai.types.events import ResponseStreamEvent
 from ai_api.providers.openai.types.responses import Response
 from ai_api.resources.generation import GenerationResource
 from ai_api.session.aiohttp import AiohttpSession, AiohttpSessionOptions
+from ai_api.session.factory import SessionFactory
 from ai_api.session.protocols import ISession
 
 session_factory: Final = SessionFactory(
@@ -33,7 +33,7 @@ OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 """Environment variable with the API key, read without a token or session."""
 
 
-class OpenAIClient(BaseProviderClient[OpenAIGenerationAdapter]):
+class OpenAIClient(BaseProviderClient):
     """Client of the OpenAI API.
 
     A given session that does not fit OpenAI (the generic
@@ -54,7 +54,7 @@ class OpenAIClient(BaseProviderClient[OpenAIGenerationAdapter]):
     session_factory = session_factory
     api_key_env = OPENAI_API_KEY_ENV
     auth_headers = frozenset({AUTHORIZATION})
-    adapter_type = OpenAIGenerationAdapter
+    adapter_types = (OpenAIGenerationAdapter,)
 
     generation: GenerationResource[Response, ResponseStreamEvent]
 
@@ -82,5 +82,6 @@ class OpenAIClient(BaseProviderClient[OpenAIGenerationAdapter]):
                 neither is and ``OPENAI_API_KEY`` is unset or empty, or
                 ``session_kwargs`` are given with a ``session``.
         """
+        adapter = self.adapter(OpenAIGenerationAdapter)
         super().__init__(token, session=session, **session_kwargs)
-        self.generation = GenerationResource(self.session, self.adapter_type())
+        self.generation = GenerationResource(self.session, adapter)

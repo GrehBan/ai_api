@@ -110,3 +110,13 @@ class RequestValidationError(AIAPIError, ValueError):
         super().__init__(message, provider=provider.value, field=field)
         self.provider = provider
         self.field = field
+
+
+class SessionMismatchWarning(UserWarning):
+    """A session given to a provider client does not fit its provider.
+
+    Raised as a warning, not an error: a gateway or a custom resolver may
+    be a deliberate choice. Turn it off with the standard filters, for
+    example ``warnings.filterwarnings("ignore",
+    category=SessionMismatchWarning)``.
+    """

@@ -50,6 +50,37 @@ def resolve_token(
     return token
 
 
+def providers_of(
+    sources: tuple[type, ...],
+    kind: str,
+) -> dict[str, Provider]:
+    """Read the provider each class of a provider client declares.
+
+    Args:
+        sources: Classes of one kind, such as the adapter classes.
+        kind: What they are, for the names and error messages.
+
+    Returns:
+        The provider of each class, keyed by ``"<kind> <class name>"``.
+
+    Raises:
+        TypeError: If a class declares no ``Provider``, or two classes
+            share a name: one of them would be dropped from the check.
+    """
+    providers: dict[str, Provider] = {}
+
+    for source in sources:
+        name = f"{kind} {source.__name__}"
+
+        if name in providers:
+            message = f"Two {kind} classes are named {source.__name__}"
+            raise TypeError(message)
+
+        providers[name] = provider_of(source, kind)
+
+    return providers
+
+
 def provider_of(source: object, name: str) -> Provider:
     """Read the provider a part of a provider package declares.
 

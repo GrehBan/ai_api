@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import types
+import warnings
 from typing import Any
 
 import pytest
 
+from ai_api import SessionMismatchWarning
 from ai_api.adapters.base import BaseAdapter, BaseCompositeAdapter
 from ai_api.client.base import BaseProviderClient
-from ai_api.client.factory import SessionFactory
-from ai_api.client.validators import check_same_provider, provider_of
+from ai_api.client.validators import (
+    check_same_provider,
+    provider_of,
+    providers_of,
+)
 from ai_api.enums import Provider
 from ai_api.http.auth import APIKeyAuth, BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
@@ -22,6 +27,7 @@ from ai_api.providers.openai.api import OPENAI_API
 from ai_api.providers.openai.client import OpenAIClient
 from ai_api.providers.openai.resolver import OpenAIErrorResolver
 from ai_api.session.aiohttp import AiohttpSession
+from ai_api.session.factory import SessionFactory
 from ai_api.types.requests import GenerationRequest
 from ai_api.types.responses import GenerationResponse
 from tests.conftest import TEST_TOKEN, LocalAPI
@@ -39,28 +45,53 @@ def factory(resolver: BaseErrorResolver) -> SessionFactory[Any, Any, ...]:
 OPENAI_FACTORY = factory(OpenAIErrorResolver())
 
 
-def declare(**parts: Any) -> type[BaseProviderClient[Any]]:
-    """Declare a provider client with the given parts."""
+class ModelsAdapter(
+    BaseAdapter[GenerationRequest, str, GenerationResponse[str]]
+):
+    """A second adapter of the client, as a ``models`` resource would add."""
+
+    provider = Provider.OPENAI
+
+    def __init__(self, *, page_size: int = 20) -> None:
+        self.page_size = page_size
+
+    def to_method(self, request: GenerationRequest) -> Any:
+        raise NotImplementedError
+
+    def to_response(
+        self,
+        raw: str,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        raise NotImplementedError
+
+
+class AnthropicModelsAdapter(ModelsAdapter):
+    """The same adapter, of another provider."""
+
+    provider = Provider.ANTHROPIC
+
+
+def declare(**parts: Any) -> type[BaseProviderClient]:
+    """Declare a provider client with the given parts; ``None`` drops one."""
     namespace: dict[str, Any] = {
         "provider": Provider.OPENAI,
         "session_factory": OPENAI_FACTORY,
         "api_key_env": "EXAMPLE_API_KEY",
         "auth_headers": frozenset({AUTHORIZATION}),
-        "adapter_type": OpenAIGenerationAdapter,
+        "adapter_types": (OpenAIGenerationAdapter, ModelsAdapter),
     }
     namespace.update(parts)
     namespace = {k: v for k, v in namespace.items() if v is not None}
     return types.new_class(
         "ExampleClient",
-        (BaseProviderClient[Any],),
+        (BaseProviderClient,),
         exec_body=lambda body: body.update(namespace),
     )
 
 
 def test_parts_of_one_provider_are_accepted() -> None:
-    client_type = declare()
-
-    client = client_type(TEST_TOKEN)
+    client = declare()(TEST_TOKEN)
 
     assert client.provider is Provider.OPENAI
     assert isinstance(client.session, AiohttpSession)
@@ -71,35 +102,74 @@ def test_parts_of_one_provider_are_accepted() -> None:
     [
         (
             {"provider": Provider.ANTHROPIC},
-            "client=anthropic, error_resolver=openai, adapter=openai",
+            "client=anthropic, error_resolver=openai, "
+            "adapter OpenAIGenerationAdapter=openai, "
+            "adapter ModelsAdapter=openai",
         ),
         (
             {"session_factory": factory(AnthropicErrorResolver())},
-            "client=openai, error_resolver=anthropic, adapter=openai",
+            "client=openai, error_resolver=anthropic, "
+            "adapter OpenAIGenerationAdapter=openai, "
+            "adapter ModelsAdapter=openai",
         ),
         (
-            {"adapter_type": AnthropicGenerationAdapter},
-            "client=openai, error_resolver=openai, adapter=anthropic",
+            {"adapter_types": (AnthropicGenerationAdapter, ModelsAdapter)},
+            "client=openai, error_resolver=openai, "
+            "adapter AnthropicGenerationAdapter=anthropic, "
+            "adapter ModelsAdapter=openai",
+        ),
+        (
+            {
+                "adapter_types": (
+                    OpenAIGenerationAdapter,
+                    AnthropicModelsAdapter,
+                )
+            },
+            "client=openai, error_resolver=openai, "
+            "adapter OpenAIGenerationAdapter=openai, "
+            "adapter AnthropicModelsAdapter=anthropic",
         ),
     ],
-    ids=["client", "resolver", "adapter"],
+    ids=["client", "resolver", "first-adapter", "second-adapter"],
 )
 def test_a_part_of_another_provider_fails_at_definition(
     parts: dict[str, Any],
     listed: str,
 ) -> None:
-    # Every source is named, so the odd one out is plain to see.
+    # Every source is named, so the odd one out is plain to see; every
+    # adapter is checked, not only the first.
     with pytest.raises(TypeError, match=f"disagree: {listed}"):
         declare(**parts)
 
 
 @pytest.mark.parametrize(
     "missing",
-    ["provider", "session_factory", "api_key_env", "auth_headers"],
+    [
+        "provider",
+        "session_factory",
+        "api_key_env",
+        "auth_headers",
+        "adapter_types",
+    ],
 )
 def test_a_missing_part_fails_at_definition(missing: str) -> None:
     with pytest.raises(TypeError, match=f"must set {missing}"):
         declare(**{missing: None})
+
+
+def test_a_client_without_shared_resources_declares_no_adapter() -> None:
+    client = declare(adapter_types=())(TEST_TOKEN)
+
+    with pytest.raises(TypeError, match="not in its adapter_types"):
+        client.adapter(OpenAIGenerationAdapter)
+
+
+def test_adapter_classes_with_one_name_fail_at_definition() -> None:
+    twin = types.new_class("ModelsAdapter", (ModelsAdapter,))
+
+    # Keyed by name, one of the two would drop out of the check.
+    with pytest.raises(TypeError, match="Two adapter classes are named"):
+        declare(adapter_types=(ModelsAdapter, twin))
 
 
 def test_a_resolver_without_provider_fails_at_definition() -> None:
@@ -113,6 +183,34 @@ def test_a_resolver_without_provider_fails_at_definition() -> None:
         declare(session_factory=session_factory)
 
 
+def test_adapter_builds_a_declared_adapter_with_its_arguments() -> None:
+    client = declare()(TEST_TOKEN)
+
+    adapter = client.adapter(ModelsAdapter, page_size=5)
+
+    assert type(adapter) is ModelsAdapter
+    assert adapter.page_size == 5
+
+
+def test_adapter_refuses_a_class_the_client_does_not_declare() -> None:
+    # Only declared classes had their provider checked.
+    client = declare()(TEST_TOKEN)
+
+    with pytest.raises(
+        TypeError,
+        match="ExampleClient builds AnthropicModelsAdapter, which is not",
+    ):
+        client.adapter(AnthropicModelsAdapter)
+
+
+def test_a_subclass_of_a_declared_adapter_is_not_declared() -> None:
+    # It may name another provider, so it must be listed itself.
+    client = declare(adapter_types=(ModelsAdapter,))(TEST_TOKEN)
+
+    with pytest.raises(TypeError, match="not in its adapter_types"):
+        client.adapter(AnthropicModelsAdapter)
+
+
 def test_check_same_provider_accepts_one_provider() -> None:
     check_same_provider(a=Provider.OPENAI, b=Provider.OPENAI)
 
@@ -122,6 +220,15 @@ def test_provider_of_names_the_source() -> None:
 
     with pytest.raises(TypeError, match="The adapter 1 declares no provider"):
         provider_of(1, "adapter")
+
+
+def test_providers_of_keys_each_class_by_kind_and_name() -> None:
+    assert providers_of(
+        (ModelsAdapter, AnthropicModelsAdapter), "adapter"
+    ) == {
+        "adapter ModelsAdapter": Provider.OPENAI,
+        "adapter AnthropicModelsAdapter": Provider.ANTHROPIC,
+    }
 
 
 def test_the_environment_variable_of_the_client_is_read(
@@ -134,22 +241,58 @@ def test_the_environment_variable_of_the_client_is_read(
     assert client.session.auth.encode() == "Bearer from-env"
 
 
+def session_with(api: LocalAPI, resolver: BaseErrorResolver) -> AiohttpSession:
+    return AiohttpSession(api, BearerAuth(TEST_TOKEN), resolver)
+
+
 def test_warnings_name_the_client_and_what_it_takes(api: LocalAPI) -> None:
     session = AiohttpSession(
         api, APIKeyAuth(TEST_TOKEN, header_name="X-Key"), BaseErrorResolver()
     )
 
-    with pytest.warns(UserWarning) as caught:
+    with pytest.warns(SessionMismatchWarning) as caught:
         OpenAIClient(session=session)
 
     messages = [str(warning.message) for warning in caught]
     assert messages == [
-        "OpenAIClient is using the generic BaseErrorResolver. Consider "
-        "using OpenAIErrorResolver for provider-specific error handling.",
+        "OpenAIClient is using BaseErrorResolver. Consider using "
+        "OpenAIErrorResolver for provider-specific error handling.",
         "OpenAIClient sends the key in X-Key, but openai takes it in "
         "Authorization.",
     ]
     assert all(warning.filename == __file__ for warning in caught)
+    assert all(issubclass(warning.category, UserWarning) for warning in caught)
+
+
+def test_another_providers_resolver_is_warned_about(api: LocalAPI) -> None:
+    with pytest.warns(
+        SessionMismatchWarning,
+        match="is using AnthropicErrorResolver. Consider using "
+        "OpenAIErrorResolver",
+    ):
+        OpenAIClient(session=session_with(api, AnthropicErrorResolver()))
+
+
+def test_a_subclass_of_the_providers_resolver_is_accepted(
+    api: LocalAPI,
+) -> None:
+    class QuotaAware(OpenAIErrorResolver):
+        """A customized resolver, as README suggests."""
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        session = session_with(api, QuotaAware())
+        client = OpenAIClient(session=session)
+
+    assert client.session is session
+
+
+def test_the_warning_is_turned_off_by_its_category(api: LocalAPI) -> None:
+    # The standard filters, not a setting of the library.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=SessionMismatchWarning)
+        OpenAIClient(session=session_with(api, BaseErrorResolver()))
 
 
 class NoProvider(BaseAdapter[GenerationRequest, str, GenerationResponse[str]]):

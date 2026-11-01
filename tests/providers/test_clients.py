@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from ai_api.client.base import BaseClient
-from ai_api.client.factory import SessionFactory
 from ai_api.enums import Provider
 from ai_api.http.auth import APIKeyAuth, BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
@@ -29,6 +28,7 @@ from ai_api.providers.openai.resolver import (
 )
 from ai_api.response.buffered import BufferedResponse
 from ai_api.session.aiohttp import AiohttpSession
+from ai_api.session.factory import SessionFactory
 from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,
@@ -169,7 +169,7 @@ def test_openai_client_accepts_a_fitting_session() -> None:
 
 
 def test_generic_resolver_is_warned_about_at_the_call_site() -> None:
-    with pytest.warns(UserWarning, match="generic BaseErrorResolver") as info:
+    with pytest.warns(UserWarning, match="is using BaseErrorResolver") as info:
         OpenAIClient(session=FakeTransport(error_resolver=BaseErrorResolver()))
 
     assert info[0].filename == __file__

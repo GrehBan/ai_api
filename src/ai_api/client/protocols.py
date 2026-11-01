@@ -1,12 +1,10 @@
-"""Interfaces of a provider client and of its session factory."""
+"""Interface of a client."""
 
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Protocol, Self
 
-from ai_api.http.exceptions.protocols import IErrorResolver
-from ai_api.http.protocols import IAuth
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.stream import Stream
 from ai_api.session.protocols import ISession, Timeout
@@ -90,33 +88,5 @@ class IClient(Protocol):
         Returns:
             A context manager that yields the stream and closes it on
             exit.
-        """
-        ...
-
-
-class ISessionFactory[SessionT: ISession, AuthT: IAuth, **P](Protocol):
-    """Builds sessions for one provider."""
-
-    @property
-    def error_resolver(self) -> IErrorResolver:
-        """The provider's error resolver, given to every session."""
-        ...
-
-    def __call__(
-        self,
-        auth: AuthT | str,
-        /,
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> SessionT:
-        """Build a session.
-
-        Args:
-            auth: An ``IAuth``, or a token.
-            *args: Further positional arguments of the session.
-            **kwargs: Further keyword arguments of the session.
-
-        Returns:
-            The new session.
         """
         ...
