@@ -27,7 +27,7 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from jsonschema import Draft202012Validator
 
@@ -244,6 +244,55 @@ def source_of(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def candidates(docs: Path, fixture: dict[str, Any]) -> list[tuple[str, str]]:
+    """Split one documented example into the payloads it holds.
+
+    Args:
+        docs: The ``docs-lite`` folder.
+        fixture: The example's entry in the dump's index.
+
+    Returns:
+        ``("responses", text)`` for a JSON example, or one
+        ``("events", data)`` per event of a stream example.
+    """
+    text = (docs / fixture["file"]).read_text(encoding="utf-8")
+    if fixture["kind"] == "json":
+        return [("responses", text)]
+    return [("events", data) for data in sse_data(text)]
+
+
+def endpoint_body(
+    raw: str,
+    group: str,
+    kind: tuple[str, str],
+    tags: set[str],
+) -> dict[str, Any] | None:
+    """Decode a payload if it belongs to the endpoint.
+
+    Args:
+        raw: The payload's JSON text.
+        group: ``"responses"`` or ``"events"``.
+        kind: The field and value that mark the endpoint's responses.
+        tags: The event types of the endpoint's stream.
+
+    Returns:
+        The decoded object, or ``None`` for text that is not a JSON
+        object, a response of another kind or an event of another stream.
+    """
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    field, value = kind
+    if group == "responses" and body.get(field) != value:
+        return None
+    if group == "events" and body.get("type") not in tags:
+        return None
+    return cast(dict[str, Any], body)
+
+
 def snapshot(
     docs: Path,
     endpoint: Endpoint,
@@ -287,21 +336,9 @@ def snapshot(
     for fixture in fixtures:
         if fixture["provider"] != endpoint.provider:
             continue
-        text = (docs / fixture["file"]).read_text(encoding="utf-8")
-        if fixture["kind"] == "json":
-            candidates = [("responses", text)]
-        else:
-            candidates = [("events", data) for data in sse_data(text)]
-        for group, raw in candidates:
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(body, dict):
-                continue
-            if group == "responses" and body.get(field) != value:
-                continue
-            if group == "events" and body.get("type") not in tags:
+        for group, raw in candidates(docs, fixture):
+            body = endpoint_body(raw, group, (field, value), tags)
+            if body is None:
                 continue
             validator = responses if group == "responses" else events
             error = first_error(validator, body)

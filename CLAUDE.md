@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`ai-api` is a pre-alpha (0.2.0), async-first, low-level toolkit for building typed HTTP API clients (aimed at AI providers such as OpenAI/Anthropic). It provides the infrastructure plus a first provider client (`OpenAIClient`) with the methods and types of OpenAI's Responses API and the shared `client.generation` resource, and an `AnthropicClient` with the methods and types of Anthropic's Messages API; both have the shared `client.generation` resource. The public surface is unstable.
+`ai-api` is a pre-alpha (0.3.0), async-first, low-level toolkit for building typed HTTP API clients (aimed at AI providers such as OpenAI/Anthropic). It provides the infrastructure plus a first provider client (`OpenAIClient`) with the methods and types of OpenAI's Responses API and the shared `client.generation` resource, and an `AnthropicClient` with the methods and types of Anthropic's Messages API; both have the shared `client.generation` resource. The public surface is unstable.
 
 ## Commands
 
