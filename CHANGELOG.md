@@ -15,13 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durations in every part of the request. The default is ISO 8601; an API
   that wants another format overrides it on its base method, and one field
   can use Pydantic's `PlainSerializer`.
-- `BaseProviderClient[AdapterT]` (`ai_api`, `ai_api.client`): what a
-  provider client shares, from its `provider`, `session_factory`,
-  `api_key_env`, `auth_headers` and `adapter_type`; `OpenAIClient` and
-  `AnthropicClient` are built on it. The client, its resolver and its
-  adapter must name one provider (`check_same_provider`), checked when
-  the class is defined. `ISessionFactory` is exported from `ai_api.client`
-  and has `error_resolver`.
+- `BaseProviderClient` (`ai_api`, `ai_api.client`): what a provider
+  client shares, from its `provider`, `session_factory`, `api_key_env`,
+  `auth_headers` and `adapter_types` (every adapter class it builds, one
+  per shared resource); `OpenAIClient` and `AnthropicClient` are built on
+  it. The client, its resolver and every adapter must name one provider
+  (`check_same_provider`), checked when the class is defined;
+  `client.adapter(AdapterClass, ...)` builds an adapter, typed as a call
+  of the class, and refuses a class not in `adapter_types`.
+- `SessionMismatchWarning` (`ai_api`), a `UserWarning`: a session given
+  to a provider client whose error resolver is not the provider's (a
+  subclass of it is fine; another provider's resolver was not warned
+  about before) or whose key goes in a header the provider does not take.
+  Turn it off with the standard warning filters.
+- `ISessionFactory`, with `error_resolver`, and `SessionFactory` are
+  exported from `ai_api.session`; **breaking:** `SessionFactory` moved
+  from `ai_api.client.factory` to `ai_api.session.factory`.
+- `RETRY_ATTEMPT_LIMIT` (`ai_api.session.retry`): the 4 attempts of a
+  retried request, as a constant.
 - `BaseErrorResolver.error_statuses` and `classify_status`: a provider
   sets its table of in-band codes and types and overrides the
   classification of a status; `classify` keeps an in-band failure

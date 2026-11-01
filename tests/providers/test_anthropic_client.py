@@ -145,7 +145,7 @@ def test_anthropic_client_accepts_both_auth_headers(auth: Any) -> None:
 def test_generic_resolver_is_warned_about_at_the_call_site() -> None:
     session = FakeTransport(error_resolver=BaseErrorResolver())
 
-    with pytest.warns(UserWarning, match="generic BaseErrorResolver") as info:
+    with pytest.warns(UserWarning, match="is using BaseErrorResolver") as info:
         AnthropicClient(session=session)
 
     assert info[0].filename == __file__

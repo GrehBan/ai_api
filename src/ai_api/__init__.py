@@ -27,6 +27,7 @@ from ai_api.enums import (
 from ai_api.exceptions import (
     AIAPIError,
     RequestValidationError,
+    SessionMismatchWarning,
 )
 from ai_api.http.api import (
     BaseAPI,
@@ -180,6 +181,7 @@ __all__ = [
     "Role",
     "ServerSentEvent",
     "ServiceUnavailableError",
+    "SessionMismatchWarning",
     "Stream",
     "StreamFile",
     "TextDeltaEvent",

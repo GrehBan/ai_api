@@ -38,7 +38,7 @@ from ai_api.adapters import (
     IConversion,
 )
 from ai_api.adapters import Stop as GenerationStop
-from ai_api.client import IClient, ISessionFactory
+from ai_api.client import IClient
 from ai_api.http import IAPI, BearerAuth
 from ai_api.methods import IAPIMethod, IStreamMethod
 from ai_api.providers.anthropic import AnthropicClient
@@ -65,7 +65,7 @@ from ai_api.resources import (
     IUseCase,
 )
 from ai_api.response import map_stream
-from ai_api.session import ISession
+from ai_api.session import ISession, ISessionFactory
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
@@ -502,6 +502,13 @@ def session_factories_are_typed() -> None:
     assert session
 
 
-def clients_build_their_adapter_type() -> None:
-    assert_type(OpenAIClient("sk").adapter_type(), OpenAIGenerationAdapter)
+def clients_build_their_adapters() -> None:
+    client = OpenAIClient("sk")
+    assert_type(
+        client.adapter(OpenAIGenerationAdapter), OpenAIGenerationAdapter
+    )
+    client.adapter(OpenAIGenerationAdapter, stop_conversion=1)  # type: ignore[arg-type]
+    client.adapter(OpenAIGenerationAdapter, max_tokens=1)  # type: ignore[call-arg]
+    anthropic = AnthropicClient("sk")
+    anthropic.adapter(AnthropicGenerationAdapter, default_max_tokens="8")  # type: ignore[arg-type]
     assert_type(OpenAIClient.provider, Provider)

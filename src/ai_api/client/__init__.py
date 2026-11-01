@@ -8,12 +8,10 @@ from ai_api.client.base import (
 )
 from ai_api.client.protocols import (
     IClient,
-    ISessionFactory,
 )
 
 __all__ = [
     "BaseClient",
     "BaseProviderClient",
     "IClient",
-    "ISessionFactory",
 ]

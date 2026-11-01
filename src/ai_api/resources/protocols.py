@@ -169,7 +169,8 @@ class IGenerationClient[RawT = Any, RawItemT = Any](IClient, Protocol):
 
     ``RawT`` is the provider's response and ``RawItemT`` one item of its
     stream; both default to ``Any`` for code that works with any
-    provider.
+    provider. It lives with the resources, not with the clients, since
+    it names a resource protocol and the client layer is below this one.
 
     Example:
         >>> async def ask(client: IGenerationClient, question: str) -> str:

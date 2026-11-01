@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Final, Unpack
 
 from ai_api.client.base import BaseProviderClient
-from ai_api.client.factory import SessionFactory
 from ai_api.http.auth import BearerAuth
 from ai_api.http.headers import AUTHORIZATION, X_API_KEY
 from ai_api.providers.anthropic.adapters.generation import (
@@ -18,6 +17,7 @@ from ai_api.providers.anthropic.types.events import MessageStreamEvent
 from ai_api.providers.anthropic.types.messages import Message
 from ai_api.resources.generation import GenerationResource
 from ai_api.session.aiohttp import AiohttpSession, AiohttpSessionOptions
+from ai_api.session.factory import SessionFactory
 from ai_api.session.protocols import ISession
 
 session_factory: Final = SessionFactory(
@@ -32,7 +32,7 @@ ANTHROPIC_API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
 """Environment variable with the API key, read without a token or session."""
 
 
-class AnthropicClient(BaseProviderClient[AnthropicGenerationAdapter]):
+class AnthropicClient(BaseProviderClient):
     """Client of the Anthropic API.
 
     Anthropic takes the key in ``Authorization`` or ``x-api-key``; a
@@ -55,7 +55,7 @@ class AnthropicClient(BaseProviderClient[AnthropicGenerationAdapter]):
     session_factory = session_factory
     api_key_env = ANTHROPIC_API_KEY_ENV
     auth_headers = frozenset({AUTHORIZATION, X_API_KEY})
-    adapter_type = AnthropicGenerationAdapter
+    adapter_types = (AnthropicGenerationAdapter,)
 
     generation: GenerationResource[Message, MessageStreamEvent]
 
@@ -91,6 +91,8 @@ class AnthropicClient(BaseProviderClient[AnthropicGenerationAdapter]):
         """
         # Built first: a bad default_max_tokens fails before a session
         # (and its connection pool) exists.
-        adapter = self.adapter_type(default_max_tokens=default_max_tokens)
+        adapter = self.adapter(
+            AnthropicGenerationAdapter, default_max_tokens=default_max_tokens
+        )
         super().__init__(token, session=session, **session_kwargs)
         self.generation = GenerationResource(self.session, adapter)
