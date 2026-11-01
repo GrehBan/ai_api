@@ -13,13 +13,13 @@ from collections import deque
 from collections.abc import (
     AsyncIterator,
     Iterable,
+    Iterator,
     Mapping,
 )
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.parser import BytesParser
-from types import SimpleNamespace
-from typing import Any, Self, cast
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,6 +31,7 @@ from pytest_mock import MockerFixture
 from tenacity import RetryCallState
 from yarl import URL
 
+from ai_api.http import headers as http_headers
 from ai_api.http.auth import BearerAuth
 from ai_api.http.exceptions.protocols import IErrorResolver
 from ai_api.http.exceptions.resolver import BaseErrorResolver
@@ -39,6 +40,7 @@ from ai_api.http.protocols import IAPI, HeadersType, IAuth, Query
 from ai_api.methods.base import BaseMethod
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.buffered import BufferedResponse
+from ai_api.session import aiohttp as session_aiohttp
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.session.base import BaseSession
 from ai_api.session.protocols import Timeout
@@ -83,56 +85,26 @@ def no_provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def no_close_delay(mocker: MockerFixture) -> None:
-    """Drop the ``asyncio.sleep(0.25)`` from ``AiohttpSession.close()``.
+def no_close_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop the 0.25 s pause of ``AiohttpSession.close()``.
 
-    Only the ``asyncio`` name inside the session module is replaced, so
-    sleeps elsewhere (server handlers, tests) keep their real duration.
+    Only the delay constant is replaced: the module and its ``asyncio``
+    stay real, so everything else in it behaves as in production.
     """
-    real_sleep = asyncio.sleep
-
-    async def instant_sleep(delay: float, result: Any = None) -> Any:
-        return await real_sleep(0, result)
-
-    mocker.patch(
-        "ai_api.session.aiohttp.asyncio",
-        SimpleNamespace(
-            sleep=instant_sleep,
-            get_running_loop=asyncio.get_running_loop,
-        ),
-    )
-
-
-class _FrozenDatetimeMeta(type):
-    """Lets real datetimes pass ``isinstance`` checks against the fake."""
-
-    def __instancecheck__(cls, instance: object) -> bool:
-        return isinstance(instance, datetime.datetime)
-
-
-class _FrozenDatetime(datetime.datetime, metaclass=_FrozenDatetimeMeta):
-    """``datetime`` whose ``now()`` always returns ``NOW``."""
-
-    @classmethod
-    def now(cls, tz: datetime.tzinfo | None = None) -> Self:
-        moment = NOW if tz is None else NOW.astimezone(tz)
-        return cls.combine(moment.date(), moment.timetz())
+    monkeypatch.setattr(session_aiohttp, "_CLOSE_DELAY", 0)
 
 
 @pytest.fixture
-def frozen_now(mocker: MockerFixture) -> datetime.datetime:
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> datetime.datetime:
     """Fix the current time at ``NOW`` for the library's clock reads.
 
-    Covers ``Retry-After`` dates in the error resolver, the only place
-    the library reads the clock.
+    Replaces ``http.headers._now``, the only place the library reads the
+    clock (``Retry-After`` dates), and nothing else.
 
     Returns:
         ``NOW``.
     """
-    mocker.patch(
-        "ai_api.http.headers.datetime",
-        _FrozenDatetime,
-    )
+    monkeypatch.setattr(http_headers, "_now", lambda: NOW)
     return NOW
 
 
@@ -479,14 +451,18 @@ def _parse_multipart(content_type: str, body: bytes) -> list[RecordedPart]:
 class Recorder:
     """aiohttp app that records requests and answers from a script.
 
-    Replies are taken from ``replies`` in order; ``default`` answers once
-    the script is exhausted. Every path and HTTP method is routed here.
+    Replies are taken from ``replies`` in order; once the script is
+    exhausted, ``default`` answers, if a test set one. Without it, the
+    request is unscripted: it gets a 500 and the ``recorder`` fixture
+    fails the test, so a retry or a second request nobody planned for
+    cannot pass silently. Every path and HTTP method is routed here.
     """
 
     def __init__(self) -> None:
         self.requests: list[RecordedRequest] = []
         self.replies: deque[Reply] = deque()
-        self.default = Reply()
+        self.default: Reply | None = None
+        self.unscripted: list[RecordedRequest] = []
         self.app = web.Application()
         self.app.router.add_route("*", "/{tail:.*}", self._handle)
 
@@ -501,8 +477,15 @@ class Recorder:
         return self.requests[-1]
 
     async def _handle(self, request: web.Request) -> web.StreamResponse:
-        self.requests.append(await self._record(request))
+        recorded = await self._record(request)
+        self.requests.append(recorded)
         reply = self.replies.popleft() if self.replies else self.default
+
+        if reply is None:
+            self.unscripted.append(recorded)
+            return web.json_response(
+                {"error": {"message": "unscripted request"}}, status=500
+            )
 
         if reply.delay:
             await asyncio.sleep(reply.delay)
@@ -600,9 +583,18 @@ class Recorder:
 
 
 @pytest.fixture
-def recorder() -> Recorder:
-    """A fresh request recorder; ``api`` serves it."""
-    return Recorder()
+def recorder() -> Iterator[Recorder]:
+    """A fresh request recorder; ``api`` serves it.
+
+    Fails the test if a request came that no reply was scripted for.
+    """
+    recorder = Recorder()
+    yield recorder
+    unscripted = [
+        f"{request.method} {request.raw_path}"
+        for request in recorder.unscripted
+    ]
+    assert not unscripted, f"unscripted requests: {unscripted}"
 
 
 @pytest.fixture

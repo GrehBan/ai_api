@@ -116,6 +116,7 @@ async def test_default_headers(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     await session.send_request(Ping())
 
     headers = recorder.last.headers
@@ -124,6 +125,7 @@ async def test_default_headers(
 
 
 async def test_extra_headers(api: LocalAPI, recorder: Recorder) -> None:
+    recorder.reply(Reply())
     extra = Headers({"X-Trace": "abc", "User-Agent": "overridden"})
 
     async with make_session(api, headers=extra) as session:
@@ -139,6 +141,7 @@ async def test_headers_added_after_the_first_request_are_sent(
     api: LocalAPI,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(*[Reply()] * 2)
     async with make_session(api) as session:
         await session.send_request(Ping())
         session.headers.add({"X-Added": "later"})
@@ -153,6 +156,7 @@ class TracedPing(Ping):
 
 
 async def test_header_precedence(api: LocalAPI, recorder: Recorder) -> None:
+    recorder.reply(Reply())
     defaults = {"X-Level": "session", "X-Session": "s"}
 
     async with make_session(api, headers=defaults) as session:
@@ -173,6 +177,7 @@ async def test_call_headers_are_not_kept(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(*[Reply()] * 2)
     await session.send_request(Ping(), headers={"X-Call": "1"})
     await session.send_request(Ping())
 
@@ -219,6 +224,7 @@ async def test_json_body_uses_the_method_formatter(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
 
     await session.send_request(
@@ -251,6 +257,7 @@ async def test_regression_path_is_not_encoded_twice(
 
 
 async def test_form_body(session: AiohttpSession, recorder: Recorder) -> None:
+    recorder.reply(Reply())
     await session.send_request(
         SubmitForm(name="n", tags=["a", "b"], active=False)
     )
@@ -263,6 +270,7 @@ async def test_form_body(session: AiohttpSession, recorder: Recorder) -> None:
 
 
 async def test_no_body(session: AiohttpSession, recorder: Recorder) -> None:
+    recorder.reply(Reply())
     await session.send_request(Ping())
 
     assert recorder.last.method == "GET"
@@ -411,6 +419,8 @@ async def test_call_timeout_keeps_the_other_limits(
     recorder: Recorder,
     mocker: MockerFixture,
 ) -> None:
+    # Two buffered requests and one stream.
+    recorder.reply(*[Reply()] * 3)
     limits = {"connect": 2, "sock_read": 3, "sock_connect": 4}
     request = mocker.spy(ClientSession, "request")
 
@@ -535,6 +545,7 @@ async def test_client_session_is_created_lazily_and_recreated(
     recorder: Recorder,
     mocker: MockerFixture,
 ) -> None:
+    recorder.reply(*[Reply()] * 3)
     created = mocker.patch(
         "ai_api.session.aiohttp.ClientSession",
         wraps=ClientSession,

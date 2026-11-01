@@ -20,6 +20,7 @@ import pytest
 from aiohttp import ClientTimeout
 
 from ai_api.enums import IncompleteReason, Provider
+from ai_api.exceptions import RequestValidationError
 from ai_api.http.exceptions.status import (
     BadRequestError,
     QuotaExceededError,
@@ -39,9 +40,10 @@ from ai_api.providers.anthropic.methods import StreamMessage
 from ai_api.providers.openai import OpenAIClient
 from ai_api.providers.openai.client import session_factory as openai_factory
 from ai_api.providers.openai.methods import StreamResponse
-from ai_api.resources import IGenerationResource
+from ai_api.resources import GenerationResource, IGenerationResource
 from ai_api.response.stream import Stream
 from ai_api.session.factory import SessionFactory
+from ai_api.session.protocols import ISession
 from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
     CompletedEvent,
@@ -64,6 +66,7 @@ class Client:
     """What the scenarios need of a provider client."""
 
     generation: IGenerationResource[Any, Any]
+    session: ISession
 
     def stream(
         self, method: BaseStreamMethod[Any]
@@ -321,6 +324,36 @@ async def test_refusal_is_an_answer(
 
     assert response.incomplete_reason is IncompleteReason.REFUSAL
     assert response.refusal == case.refusal
+
+
+def test_generation_shares_the_client_session(client: Client) -> None:
+    assert isinstance(client.generation, GenerationResource)
+    assert client.generation.session is client.session
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_conversation_must_end_with_a_user_turn(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    # Refused before anything is sent, by every provider.
+    turns = [Turn.user("Hi"), Turn.assistant("Hello")]
+
+    async with client:
+        with pytest.raises(
+            RequestValidationError, match="last turn"
+        ) as caught:
+            if mode == "create":
+                await client.generation.create(model="m", input=turns)
+            else:
+                async with client.generation.stream(model="m", input=turns):
+                    pass
+
+    assert caught.value.provider is case.provider
+    assert caught.value.field == "input"
+    assert recorder.requests == []
 
 
 async def test_conversation_continues_with_the_response(

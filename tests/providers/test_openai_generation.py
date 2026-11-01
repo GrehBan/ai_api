@@ -24,7 +24,6 @@ from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
 from ai_api.providers.openai.client import session_factory
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
-from ai_api.resources import GenerationResource, IGenerationResource
 from ai_api.types.requests import GenerationRequest, Turn
 from ai_api.types.responses import (
     CompletedEvent,
@@ -145,17 +144,6 @@ def test_turns_are_sent_as_input_messages() -> None:
         {"role": "assistant", "content": "Hello!"},
         {"role": "user", "content": "How are you?"},
     ]
-
-
-def test_conversation_must_end_with_a_user_turn() -> None:
-    request = REQUEST.model_copy(update={"input": [Turn.assistant("Hello")]})
-
-    with pytest.raises(RequestValidationError, match="last turn") as caught:
-        adapter.to_method(request)
-
-    assert caught.value.provider is Provider.OPENAI
-    assert caught.value.field == "input"
-    assert caught.value.__cause__ is None
 
 
 def test_completed_response_is_converted() -> None:
@@ -346,17 +334,6 @@ def client(
     """``OpenAIClient`` built from a token, sent to the local server."""
     monkeypatch.setattr(session_factory, "api", api)
     return OpenAIClient(TEST_TOKEN)
-
-
-def test_client_generation_shares_the_client_session(
-    client: OpenAIClient,
-) -> None:
-    resource: IGenerationResource[Response, ResponseStreamEvent] = (
-        client.generation
-    )
-
-    assert isinstance(client.generation, GenerationResource)
-    assert resource.session is client.session
 
 
 async def test_client_generation_runs_on_responses(

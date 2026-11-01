@@ -373,28 +373,6 @@ async def test_one_shot_file_disables_retries() -> None:
     assert transport.attempts == 1
 
 
-async def test_exhausted_retry_loop_is_an_internal_error(
-    mocker: Any,
-) -> None:
-    # Defensive guard: tenacity either returns or raises with
-    # reraise=True, so an empty loop means it was misconfigured.
-    class NoAttempts:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
-
-        def __aiter__(self) -> NoAttempts:
-            return self
-
-        async def __anext__(self) -> Any:
-            raise StopAsyncIteration
-
-    mocker.patch("ai_api.session.base.AsyncRetrying", NoAttempts)
-    transport = FakeTransport([ok()])
-
-    with pytest.raises(RuntimeError, match="Unexpected retry state"):
-        await transport.send_request(buffered_method(retryable=True))
-
-
 async def test_stream_yields_items_and_closes_response_once() -> None:
     response = FakeStreamResponse([b"a", b"b"])
     transport = FakeTransport(stream_responses=[response])

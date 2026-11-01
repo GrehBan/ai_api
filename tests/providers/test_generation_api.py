@@ -7,7 +7,6 @@ provider clients take the arguments of their ``AiohttpSession``.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 from typing import Any, get_overloads, get_type_hints
@@ -119,9 +118,7 @@ def test_keyword_overloads_name_the_request_fields(
 
 
 def test_session_options_match_the_session_arguments() -> None:
-    # The autouse no_close_delay fixture patches the module's asyncio.
-    names = {"asyncio": asyncio}
-    hints = get_type_hints(AiohttpSession.__init__, localns=names)
+    hints = get_type_hints(AiohttpSession.__init__)
     keyword = {
         name: hints[name]
         for name, parameter in inspect.signature(
@@ -130,7 +127,7 @@ def test_session_options_match_the_session_arguments() -> None:
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     }
 
-    assert get_type_hints(AiohttpSessionOptions, localns=names) == keyword
+    assert get_type_hints(AiohttpSessionOptions) == keyword
 
 
 @pytest.mark.parametrize(

@@ -10,8 +10,14 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+from pytest_aiohttp import AiohttpServer
 
-from ai_api.http.exceptions.status import ServiceUnavailableError
+from ai_api.http.auth import BearerAuth
+from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.status import (
+    InternalServerError,
+    ServiceUnavailableError,
+)
 from ai_api.http.exceptions.transport import APIConnectionError
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.response.buffered import BufferedResponse
@@ -20,6 +26,7 @@ from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,
     FakeTransport,
+    LocalAPI,
     Recorder,
     Reply,
     make_method,
@@ -145,8 +152,48 @@ async def test_close_is_instant_and_repeatable(
     session: AiohttpSession,
     recorder: Recorder,
 ) -> None:
+    recorder.reply(Reply())
     await session.send_request(make_method(BaseAPIMethod[None])())
 
     async with asyncio.timeout(0.2):
         await session.close()
         await session.close()
+
+
+async def test_unscripted_request_gets_500_and_is_recorded(
+    aiohttp_server: AiohttpServer,
+) -> None:
+    # A request nobody scripted, such as a hidden retry, must not pass:
+    # it gets a 500 and the recorder fixture fails the test at teardown.
+    own = Recorder()
+    server = await aiohttp_server(own.app)
+
+    async with AiohttpSession(
+        LocalAPI(server.make_url("/")),
+        BearerAuth(TEST_TOKEN),
+        BaseErrorResolver(),
+    ) as session:
+        with pytest.raises(InternalServerError):
+            await session.send_request(make_method(BaseAPIMethod[None])())
+
+    assert [request.raw_path for request in own.unscripted] == ["/v1/test"]
+
+
+async def test_default_reply_answers_once_the_script_is_exhausted(
+    aiohttp_server: AiohttpServer,
+) -> None:
+    own = Recorder()
+    own.reply(Reply(body=b"first"))
+    own.default = Reply(body=b"default")
+    server = await aiohttp_server(own.app)
+
+    async with AiohttpSession(
+        LocalAPI(server.make_url("/")),
+        BearerAuth(TEST_TOKEN),
+        BaseErrorResolver(),
+    ) as session:
+        method = make_method(BaseAPIMethod[bytes])()
+        bodies = [await session.send_request(method) for _ in range(3)]
+
+    assert bodies == [b"first", b"default", b"default"]
+    assert own.unscripted == []

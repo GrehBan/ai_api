@@ -1,16 +1,21 @@
-"""``BaseProviderClient``: one provider for every part, checked early."""
+"""``BaseClient`` and ``BaseProviderClient``.
+
+``BaseClient`` delegates to its session and owns it; a provider client
+names one provider in every part, checked early.
+"""
 
 from __future__ import annotations
 
 import types
 import warnings
+from types import TracebackType
 from typing import Any
 
 import pytest
 
 from ai_api import SessionMismatchWarning
 from ai_api.adapters.base import BaseAdapter, BaseCompositeAdapter
-from ai_api.client.base import BaseProviderClient
+from ai_api.client.base import BaseClient, BaseProviderClient
 from ai_api.client.validators import (
     check_same_provider,
     provider_of,
@@ -20,17 +25,25 @@ from ai_api.enums import Provider
 from ai_api.http.auth import APIKeyAuth, BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.headers import AUTHORIZATION
+from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
 from ai_api.providers.anthropic.resolver import AnthropicErrorResolver
 from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
 from ai_api.providers.openai.api import OPENAI_API
 from ai_api.providers.openai.client import OpenAIClient
 from ai_api.providers.openai.resolver import OpenAIErrorResolver
+from ai_api.response.buffered import BufferedResponse
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.session.factory import SessionFactory
 from ai_api.types.requests import GenerationRequest
 from ai_api.types.responses import GenerationResponse
-from tests.conftest import TEST_TOKEN, LocalAPI
+from tests.conftest import (
+    TEST_TOKEN,
+    FakeStreamResponse,
+    FakeTransport,
+    LocalAPI,
+    make_method,
+)
 
 
 def factory(resolver: BaseErrorResolver) -> SessionFactory[Any, Any, ...]:
@@ -331,3 +344,84 @@ def test_an_abstract_adapter_needs_no_provider() -> None:
             return None
 
     assert not hasattr(Partial, "provider")
+
+
+def buffered() -> BaseAPIMethod[bytes]:
+    return make_method(BaseAPIMethod[bytes])()
+
+
+def streamed() -> BaseStreamMethod[bytes]:
+    return make_method(BaseStreamMethod[bytes], http_method="GET")()
+
+
+async def test_client_delegates_to_its_session() -> None:
+    transport = FakeTransport(
+        [BufferedResponse(200, {}, b"done")],
+        [FakeStreamResponse([b"a", b"b"])],
+    )
+    client = BaseClient(transport)
+
+    assert await client.send_request(buffered()) == b"done"
+
+    async with client.stream(streamed()) as chunks:
+        assert [chunk async for chunk in chunks] == [b"a", b"b"]
+
+
+async def test_client_forwards_call_options() -> None:
+    transport = FakeTransport(
+        [BufferedResponse(200, {}, b"done")],
+        [FakeStreamResponse([b"a"])],
+    )
+    client = BaseClient(transport)
+
+    await client.send_request(buffered(), headers={"X-A": "1"}, timeout=3)
+
+    async with client.stream(streamed(), headers={"X-B": "2"}, timeout=4):
+        pass
+
+    assert transport.call_options == [({"X-A": "1"}, 3), ({"X-B": "2"}, 4)]
+
+
+async def test_client_context_closes_its_session() -> None:
+    transport = FakeTransport()
+
+    async with BaseClient(transport) as client:
+        assert client.session is transport
+
+    assert transport.close_calls == 1
+
+
+async def test_client_close_closes_its_session() -> None:
+    transport = FakeTransport()
+
+    await BaseClient(transport).close()
+
+    assert transport.close_calls == 1
+
+
+class ContextSession(FakeTransport):
+    """Records what its ``__aexit__`` was given."""
+
+    exited: tuple[Any, ...] | None = None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.exited = (exc_type, exc_value, traceback)
+        await self.close()
+
+
+async def test_leaving_the_client_leaves_the_session() -> None:
+    session = ContextSession()
+    client = BaseClient(session)
+    error = ValueError("in the block")
+
+    with pytest.raises(ValueError, match="in the block"):
+        async with client:
+            raise error
+
+    assert session.exited is not None
+    assert session.exited[1] is error

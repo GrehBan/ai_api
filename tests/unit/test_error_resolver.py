@@ -108,6 +108,15 @@ def test_parse_retry_after_header_name_is_case_insensitive() -> None:
     assert parse_retry_after({"retry-after": "3"}) == 3.0
 
 
+def test_parse_retry_after_reads_the_real_clock() -> None:
+    # Without frozen_now: dates far from any test run's clock.
+    past = {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}
+    future = {"Retry-After": "Fri, 01 Jan 2100 00:00:00 GMT"}
+
+    assert parse_retry_after(past) == 0.0
+    assert (parse_retry_after(future) or 0) > 365 * 24 * 3600
+
+
 def test_parse_retry_after_future_date(frozen_now: datetime.datetime) -> None:
     value = _http_date(frozen_now + datetime.timedelta(seconds=90))
 

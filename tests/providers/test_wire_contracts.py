@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, get_args
+from typing import Any, Final, get_args
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -336,10 +336,56 @@ def test_anthropic_takes_no_sampling_parameters() -> None:
         assert errors(schema, body | {name: 0.5}), name
 
 
+def documented_text(case: Case, body: dict[str, Any]) -> str:
+    """Join the text of a documented response straight from its JSON.
+
+    Args:
+        case: The endpoint.
+        body: The documented response.
+
+    Returns:
+        Its text parts, joined, as the provider's SDK reads them.
+    """
+    if case is OPENAI:
+        return "".join(
+            part["text"]
+            for item in body["output"]
+            if item["type"] == "message"
+            for part in item["content"]
+            if part["type"] == "output_text"
+        )
+    return "".join(
+        block["text"] for block in body["content"] if block["type"] == "text"
+    )
+
+
+USAGE_FIELDS: Final = {
+    "openai/responses": ("input_tokens", "output_tokens", "total_tokens"),
+    "anthropic/messages": ("input_tokens", "output_tokens"),
+}
+"""The token counts of each endpoint's ``usage``, compared as they are."""
+
+
 @pytest.mark.parametrize("case", CASES)
 def test_documented_responses_parse(case: Case) -> None:
+    # Validation alone would pass a field read into the wrong place or
+    # dropped by extra="ignore": compare what the model gives with the
+    # JSON it came from.
     for body in examples(case, "responses.json"):
-        case.response.model_validate(body)
+        model = case.response.model_validate(body)
+        assert isinstance(model, Response | Message)
+        text = model.output_text if isinstance(model, Response) else model.text
+
+        assert model.id == body["id"]
+        assert model.model == body["model"]
+        assert (text or "") == documented_text(case, body)
+
+        if body.get("usage") is None:
+            assert model.usage is None
+            continue
+
+        for name in USAGE_FIELDS[case.name]:
+            assert getattr(model.usage, name) == body["usage"][name], name
 
 
 @pytest.mark.parametrize("case", CASES)
