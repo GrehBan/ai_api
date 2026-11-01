@@ -338,6 +338,13 @@ class AdapterCompositeUseCase[
 ](BaseCompositeUseCase[ReqT, RespT, EventT, SessionT]):
     """A use case that orchestrates one adapter both ways.
 
+    It repeats the constructor and the delegation of ``AdapterUseCase``
+    and ``AdapterStreamUseCase`` on purpose: the logic is already shared
+    in ``_respond`` and ``open_adapted_stream``, and inheriting from both
+    would tie two generic signatures with different type parameters
+    together, which type checkers and readers follow worse than a few
+    repeated lines.
+
     Attributes:
         adapter: Converts the request, the response and the stream items.
         terminal: Recognizes the final event of the shared stream;

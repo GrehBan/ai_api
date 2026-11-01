@@ -6,13 +6,13 @@ from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any, Final, cast
 
-from ai_api.enums import Provider
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import (
     APIStatusError,
     QuotaExceededError,
     ServiceUnavailableError,
 )
+from ai_api.providers.anthropic.api import PROVIDER
 
 OVERLOADED: Final = 529
 """Status of ``overloaded_error``: the API is temporarily overloaded."""
@@ -40,7 +40,15 @@ SPEND_CAP_CODE: Final = "enforced_spend_limit_reached"
 """``error.details.error_code`` of a 429 for a reached tier spend cap."""
 
 SPEND_LIMIT_MESSAGE: Final = "You have reached your specified"
-"""Start of the message of a 400 for a reached spend limit you set."""
+"""Start of the message of a 400 for a reached spend limit you set.
+
+Anthropic gives this 400 no code of its own: it is an
+``invalid_request_error`` whose message starts with ``You have reached
+your specified API usage limits`` or ``... workspace API usage limits``
+(docs: api/rate-limits, "Setting your own spend limit"). The prefix is
+all there is to recognize it by; the documented messages are pinned by a
+test, so a change shows up when the snapshot is refreshed.
+"""
 
 
 class AnthropicErrorResolver(BaseErrorResolver):
@@ -53,12 +61,12 @@ class AnthropicErrorResolver(BaseErrorResolver):
     says so) is a ``QuotaExceededError`` and is not retried. The 529
     ``overloaded_error`` is a transient ``ServiceUnavailableError``, as
     OpenAI's 503. An ``error`` event of a stream arrives with the
-    stream's 200 status, so its class is picked by its type; it is never
-    transient, whatever its class: the generation ran and failed, and
-    running it again is the caller's choice, as for OpenAI.
+    stream's 200 status, so its class is picked by its type; as for
+    every resolver, it is never transient.
     """
 
-    provider = Provider.ANTHROPIC
+    provider = PROVIDER
+    error_statuses = ERROR_STATUSES
 
     def get_error_code(
         self,
@@ -78,7 +86,7 @@ class AnthropicErrorResolver(BaseErrorResolver):
         code: object = cast(Mapping[str, Any], details).get("error_code")
         return code if isinstance(code, str) else None
 
-    def classify(
+    def classify_status(
         self,
         *,
         status: int,
@@ -87,35 +95,31 @@ class AnthropicErrorResolver(BaseErrorResolver):
         message: str | None,
         retry_after: float | None,
     ) -> tuple[type[APIStatusError], bool]:
-        """Pick the error class and whether the error is transient.
+        """Pick the error class and transience of Anthropic's statuses.
 
         Args:
-            status: HTTP status of the response.
+            status: HTTP status the error is classified by.
             code: Provider error code, if any.
             error_type: Provider error type, if any.
             message: Error message, if any.
             retry_after: Seconds from ``Retry-After``, if any.
 
         Returns:
-            The error class and the ``transient`` flag, always ``False``
-            for a failure reported after a status below 400.
+            ``QuotaExceededError`` (never transient) for a reached spend
+            cap or limit, a transient ``ServiceUnavailableError`` for 529,
+            else the default classification.
         """
-        in_band = status < HTTPStatus.BAD_REQUEST
-
-        if in_band and error_type is not None:
-            status = ERROR_STATUSES.get(error_type, status)
         if self._is_spend_limit(status, code, message):
             return QuotaExceededError, False
         if status == OVERLOADED:
-            return ServiceUnavailableError, not in_band
-        error_class, transient = super().classify(
+            return ServiceUnavailableError, True
+        return super().classify_status(
             status=status,
             code=code,
             error_type=error_type,
             message=message,
             retry_after=retry_after,
         )
-        return error_class, transient and not in_band
 
     @staticmethod
     def _is_spend_limit(

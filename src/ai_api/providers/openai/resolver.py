@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any, Final, cast
 
-from ai_api.enums import Provider
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import APIStatusError, QuotaExceededError
+from ai_api.providers.openai.api import PROVIDER
 from ai_api.types.matchers import FieldValues
 
 FAILED_RESPONSE: Final = FieldValues("status", "failed")
@@ -88,13 +88,12 @@ class OpenAIErrorResolver(BaseErrorResolver):
     with status ``failed`` are read by their ``response.error``. They
     come with a 200 status, so their class is picked by their code or
     type through ``ERROR_STATUSES``; a code it does not list, such as
-    ``invalid_prompt``, gives ``APIStatusError`` itself. Such an in-band
-    failure is never transient, whatever its class: the generation ran
-    and failed, and running it again is the caller's choice, as in the
-    official SDK, which retries by the HTTP status only.
+    ``invalid_prompt``, gives ``APIStatusError`` itself. As for every
+    resolver, such an in-band failure is never transient.
     """
 
-    provider = Provider.OPENAI
+    provider = PROVIDER
+    error_statuses = ERROR_STATUSES
 
     def resolve(
         self,
@@ -128,7 +127,7 @@ class OpenAIErrorResolver(BaseErrorResolver):
 
         return super().resolve(status=status, body=body, headers=headers)
 
-    def classify(
+    def classify_status(
         self,
         *,
         status: int,
@@ -137,35 +136,28 @@ class OpenAIErrorResolver(BaseErrorResolver):
         message: str | None,
         retry_after: float | None,
     ) -> tuple[type[APIStatusError], bool]:
-        """Pick the error class and whether the error is transient.
+        """Pick the error class and transience, quota errors first.
 
         Args:
-            status: HTTP status of the response.
+            status: HTTP status the error is classified by.
             code: Provider error code, if any.
             error_type: Provider error type, if any.
             message: Error message, if any.
             retry_after: Seconds from ``Retry-After``, if any.
 
         Returns:
-            The error class and the ``transient`` flag, always ``False``
-            for a failure reported after a status below 400.
+            ``QuotaExceededError`` (never transient) for a 429 with a
+            quota code or type, else the default classification.
         """
-        in_band = status < HTTPStatus.BAD_REQUEST
-
-        if in_band:
-            status = ERROR_STATUSES.get(
-                code or "", ERROR_STATUSES.get(error_type or "", status)
-            )
         if status == HTTPStatus.TOO_MANY_REQUESTS and (
             code in QUOTA_CODES or error_type in QUOTA_CODES
         ):
             return QuotaExceededError, False
 
-        error_class, transient = super().classify(
+        return super().classify_status(
             status=status,
             code=code,
             error_type=error_type,
             message=message,
             retry_after=retry_after,
         )
-        return error_class, transient and not in_band

@@ -366,6 +366,7 @@ async def test_stream_yields_deltas_then_completes(
     assert deltas == case.deltas
     last = received[-1]
     assert isinstance(last, CompletedEvent)
+    assert last.provider is case.provider
     assert last.usage == case.stream_usage
     assert last.incomplete_reason is None
     assert json.loads(recorder.last.body)["stream"] is True

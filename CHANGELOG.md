@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durations in every part of the request. The default is ISO 8601; an API
   that wants another format overrides it on its base method, and one field
   can use Pydantic's `PlainSerializer`.
+- `BaseProviderClient[AdapterT]` (`ai_api`, `ai_api.client`): what a
+  provider client shares, from its `provider`, `session_factory`,
+  `api_key_env`, `auth_headers` and `adapter_type`; `OpenAIClient` and
+  `AnthropicClient` are built on it. The client, its resolver and its
+  adapter must name one provider (`check_same_provider`), checked when
+  the class is defined. `ISessionFactory` is exported from `ai_api.client`
+  and has `error_resolver`.
+- `BaseErrorResolver.error_statuses` and `classify_status`: a provider
+  sets its table of in-band codes and types and overrides the
+  classification of a status; `classify` keeps an in-band failure
+  non-transient for every resolver.
+- `ContentTooLargeError` for HTTP 413 (Anthropic's `request_too_large`
+  was a plain `APIStatusError`).
+- `CompletedEvent.provider`, as on `GenerationResponse`; every adapter has
+  a `provider` (`PROVIDER` of its package, `Provider.GENERIC` outside the
+  library).
 - `Stream.items_received`: how many items a stream has given.
   `transform_stream(..., stream_type=...)` yields a `Stream` subclass built
   on the transformed items, which `GenerationResource` uses for its
@@ -67,6 +83,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** a concrete adapter must set `provider`, and
+  `CompletedEvent` requires it.
+- **Breaking:** OpenAI's `ERROR_EVENTS` is `RESPONSE_ERROR_EVENTS`, so it
+  is not mistaken for the parser's default of the same name; the
+  module-level `warn_about_session` functions are now the classmethod
+  `BaseProviderClient.warn_about_session`, whose second warning names the
+  headers the provider takes.
+- Leaving a client's `async with` calls the session's `__aexit__`, as
+  entering calls its `__aenter__`, instead of `close()`.
 - **Breaking:** 529 is no longer transient in `BaseErrorResolver`: it is
   Anthropic's own status, and `AnthropicErrorResolver` keeps classifying it
   as a transient `ServiceUnavailableError`.

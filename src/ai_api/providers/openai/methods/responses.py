@@ -19,8 +19,14 @@ TERMINAL_EVENTS: Final = EventTypes(
 )
 """The events that end a complete Responses stream."""
 
-ERROR_EVENTS: Final = EventTypes("error", "response.failed") | TopLevelError()
-"""The events of a Responses stream that are raised as errors."""
+RESPONSE_ERROR_EVENTS: Final = (
+    EventTypes("error", "response.failed") | TopLevelError()
+)
+"""The events of a Responses stream that are raised as errors.
+
+The parser's default ``ERROR_EVENTS`` plus ``response.failed``; named
+apart so the two are not mistaken for each other.
+"""
 
 
 class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
@@ -81,6 +87,8 @@ class StreamResponse(ResponseParams, BaseStreamMethod[ResponseStreamEvent]):
     __retryable__ = True
     __response_format__ = ResponseFormat.SSE
     __stream_terminal__ = TERMINAL_EVENTS
-    __stream_parser__ = StreamResponseParser(error_events=ERROR_EVENTS)
+    __stream_parser__ = StreamResponseParser(
+        error_events=RESPONSE_ERROR_EVENTS
+    )
 
     stream: Literal[True] = True

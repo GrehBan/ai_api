@@ -92,7 +92,9 @@ def to_event(raw: RawEvent) -> GenerationEvent[RawEvent]:
         case "response.output_text.delta":
             return TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
         case "response.completed":
-            return CompletedEvent[RawEvent](model="m", raw=raw)
+            return CompletedEvent[RawEvent](
+                provider=Provider.OPENAI, model="m", raw=raw
+            )
         case _:
             return OtherEvent[RawEvent](raw=raw)
 
@@ -254,6 +256,8 @@ class ResponsesAdapter(
         GenerationEvent[RawEvent],
     ]
 ):
+    provider = Provider.OPENAI
+
     def to_method(self, request: GenerationRequest) -> Create:
         return Create(model=request.model, input=request.input)
 
@@ -288,6 +292,7 @@ class ResponsesAdapter(
                 yield TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
 
         yield CompletedEvent[RawEvent](
+            provider=self.provider,
             model=request.model,
             raw=RawEvent(type=f"{request.model}:{deltas}"),
         )
@@ -523,7 +528,7 @@ def test_event_types_are_enum_members() -> None:
     )
 
     event = events.validate_python(
-        {"type": "completed", "model": "m", "raw": {}}
+        {"type": "completed", "provider": "generic", "model": "m", "raw": {}}
     )
 
     assert isinstance(event, CompletedEvent)
@@ -567,7 +572,10 @@ def test_parametrized_response_validates_raw() -> None:
     ("data", "event_type"),
     [
         ({"type": "text_delta", "text": "x"}, TextDeltaEvent[RawEvent]),
-        ({"type": "completed", "model": "m"}, CompletedEvent[RawEvent]),
+        (
+            {"type": "completed", "provider": "generic", "model": "m"},
+            CompletedEvent[RawEvent],
+        ),
         ({"type": "other"}, OtherEvent[RawEvent]),
     ],
     ids=["text-delta", "completed", "other"],
@@ -591,6 +599,8 @@ class ScriptedAdapter(
 ):
     """Ignores the provider's items and yields the given event types."""
 
+    provider = Provider.GENERIC
+
     def __init__(self, *types: str) -> None:
         self.types = types
         self.closed = False
@@ -609,7 +619,9 @@ class ScriptedAdapter(
             for kind in self.types:
                 raw = RawEvent(type=kind)
                 if kind == "completed":
-                    yield CompletedEvent[RawEvent](model="m", raw=raw)
+                    yield CompletedEvent[RawEvent](
+                        provider=self.provider, model="m", raw=raw
+                    )
                 else:
                     yield OtherEvent[RawEvent](raw=raw)
         finally:
@@ -758,7 +770,13 @@ class PlainAdapter(ScriptedAdapter):
         request: GenerationRequest,
     ) -> AsyncIterator[GenerationEvent[RawEvent]]:
         return PlainEvents(
-            [CompletedEvent[RawEvent](model="m", raw=RawEvent(type="x"))]
+            [
+                CompletedEvent[RawEvent](
+                    provider=Provider.GENERIC,
+                    model="m",
+                    raw=RawEvent(type="x"),
+                )
+            ]
         )
 
 

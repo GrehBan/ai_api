@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.types.requests.base import BaseRequest
 from ai_api.types.responses.base import BaseResponse
 from ai_api.types.responses.events import BaseResponseEvent
+
+if TYPE_CHECKING:
+    from ai_api.enums import Provider
 
 
 class IConversion[SourceT, TargetT](Protocol):
@@ -44,6 +47,11 @@ class IAdapter[
     and holds no session.
     """
 
+    @property
+    def provider(self) -> Provider:
+        """The provider whose methods the adapter builds."""
+        ...
+
     def to_method(self, request: ReqT) -> IAPIMethod[RawT]:
         """Build the provider's method for a shared request.
 
@@ -75,6 +83,11 @@ class IStreamAdapter[
     EventT: BaseResponseEvent,
 ](Protocol):
     """Converts one shared request and its provider's stream."""
+
+    @property
+    def provider(self) -> Provider:
+        """The provider whose methods the adapter builds."""
+        ...
 
     def to_stream_method(self, request: ReqT) -> IStreamMethod[RawItemT]:
         """Build the provider's stream method for a shared request.

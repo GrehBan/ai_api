@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from types import TracebackType
 from typing import Any
 
 import pytest
@@ -193,6 +194,34 @@ def test_other_sessions_are_not_checked() -> None:
         client = OpenAIClient(session=session)
 
     assert client.session is session
+
+
+class ContextSession(FakeTransport):
+    """Records what its ``__aexit__`` was given."""
+
+    exited: tuple[Any, ...] | None = None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.exited = (exc_type, exc_value, traceback)
+        await self.close()
+
+
+async def test_leaving_the_client_leaves_the_session() -> None:
+    session = ContextSession()
+    client = BaseClient(session)
+    error = ValueError("in the block")
+
+    with pytest.raises(ValueError, match="in the block"):
+        async with client:
+            raise error
+
+    assert session.exited is not None
+    assert session.exited[1] is error
 
 
 def test_openai_quota_error_is_not_retried() -> None:

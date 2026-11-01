@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from ai_api.enums import Provider
 from ai_api.http.exceptions.status import RateLimitError
 from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.resources.stream import GenerationStream
@@ -19,7 +20,9 @@ from ai_api.types.responses.events import (
     TextDeltaEvent,
 )
 
-COMPLETED = CompletedEvent[Any](id="r-1", model="m", text="Hello!", raw={})
+COMPLETED = CompletedEvent[Any](
+    id="r-1", provider=Provider.GENERIC, model="m", text="Hello!", raw={}
+)
 
 EVENTS: list[GenerationEvent[Any]] = [
     OtherEvent[Any](raw={}),

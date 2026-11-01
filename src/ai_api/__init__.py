@@ -14,6 +14,7 @@ from ai_api.__meta__ import (
 )
 from ai_api.client.base import (
     BaseClient,
+    BaseProviderClient,
 )
 from ai_api.enums import (
     BodyFormat,
@@ -47,6 +48,7 @@ from ai_api.http.exceptions.status import (
     BadRequestError,
     BillingError,
     ConflictError,
+    ContentTooLargeError,
     GatewayTimeoutError,
     InternalServerError,
     NotFoundError,
@@ -140,6 +142,7 @@ __all__ = [
     "BaseAPIType",
     "BaseClient",
     "BaseErrorResolver",
+    "BaseProviderClient",
     "BaseSession",
     "BaseStreamMethod",
     "BaseValueFormatter",
@@ -149,6 +152,7 @@ __all__ = [
     "BytesFile",
     "CompletedEvent",
     "ConflictError",
+    "ContentTooLargeError",
     "GatewayTimeoutError",
     "GenerationEvent",
     "GenerationEventType",

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Final
 
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.adapters.validation import check_last_turn, request_errors
-from ai_api.enums import Provider
 from ai_api.exceptions import RequestValidationError
 from ai_api.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION,
@@ -15,6 +14,7 @@ from ai_api.providers.anthropic.adapters.conversions import (
     USAGE_CONVERSION,
     StreamState,
 )
+from ai_api.providers.anthropic.api import PROVIDER
 from ai_api.providers.anthropic.methods.messages import (
     CreateMessage,
     StreamMessage,
@@ -97,6 +97,8 @@ class AnthropicGenerationAdapter(
         ... )
     """
 
+    provider = PROVIDER
+
     def __init__(
         self,
         *,
@@ -147,7 +149,7 @@ class AnthropicGenerationAdapter(
             RequestValidationError: Anthropic cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(Provider.ANTHROPIC, SHARED_FIELDS):
+        with request_errors(self.provider, SHARED_FIELDS):
             return CreateMessage(**fields)
 
     def to_response(
@@ -172,7 +174,7 @@ class AnthropicGenerationAdapter(
         stop = self.stop_conversion(raw)
         return GenerationResponse[Message](
             id=raw.id,
-            provider=Provider.ANTHROPIC,
+            provider=self.provider,
             model=raw.model,
             text=raw.text,
             usage=self.usage_conversion(raw.usage),
@@ -195,7 +197,7 @@ class AnthropicGenerationAdapter(
             RequestValidationError: Anthropic cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(Provider.ANTHROPIC, SHARED_FIELDS):
+        with request_errors(self.provider, SHARED_FIELDS):
             return StreamMessage(**fields)
 
     async def to_events(
@@ -240,6 +242,7 @@ class AnthropicGenerationAdapter(
                     message = state.message()
                     yield CompletedEvent[MessageStreamEvent](
                         id=message.id,
+                        provider=self.provider,
                         model=message.model,
                         text=state.text(),
                         usage=self.usage_conversion(state.usage()),
@@ -267,7 +270,7 @@ class AnthropicGenerationAdapter(
                 ``user`` turn, or the metadata has keys other than
                 ``user_id``.
         """
-        check_last_turn(request, Provider.ANTHROPIC)
+        check_last_turn(request, self.provider)
         fields: dict[str, Any] = {
             "model": request.model,
             "messages": self.input_conversion(request.input),
@@ -282,7 +285,7 @@ class AnthropicGenerationAdapter(
                     f"unsupported keys: {', '.join(unknown)}"
                 )
                 raise RequestValidationError(
-                    message, provider=Provider.ANTHROPIC, field="metadata"
+                    message, provider=self.provider, field="metadata"
                 )
             fields["metadata"] = request.metadata
         return fields

@@ -501,7 +501,7 @@ async with session.stream(StreamMessage(prompt="Hi")) as events:
 - **Parsing.** SSE follows the HTML standard: multi-line `data`, comments, `event`, `id` and `retry`, and `\n`, `\r\n` or `\r` line endings. An event split across chunks is held back until it is complete, and an unfinished event at the end of the body is dropped. NDJSON skips blank lines.
 - **Validation.** Each event is validated through a `TypeAdapter` built once, when the class is defined, from the generic argument as written. That is why discriminated unions and `type` aliases work as item types. An event that doesn't match raises `APIResponseError`.
 - **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that). Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. Only SSE and NDJSON have events to check, so a terminal on a `BYTES` or `TEXT` stream raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
-- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, so a provider's `classify` can mark it transient. So does decoded data that the parser's `error_events` matcher accepts. The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
+- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, and it is never transient: the generation already ran. So does decoded data that the parser's `error_events` matcher accepts. The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
 - **Raw events.** `BaseStreamMethod[ServerSentEvent]` yields events as they are, with their `data`, `event`, `id` and `retry`. `[DONE]` and error events are handled the same way.
 - **Limits.** `StreamResponseParser(max_line_size=...)` limits one SSE or NDJSON line and `max_event_size=...` the data of one SSE event, in characters. Both are off by default; set them for an untrusted server, since a line without an end would otherwise grow in memory.
 
@@ -578,6 +578,7 @@ AIAPIError
 │   ├── NotFoundError           404
 │   ├── RequestTimeoutError     408
 │   ├── ConflictError           409
+│   ├── ContentTooLargeError    413
 │   ├── UnprocessableEntityError 422
 │   ├── RateLimitError          429
 │   ├── QuotaExceededError      (returned by custom resolvers)
@@ -663,7 +664,11 @@ Error responses are mapped by an error resolver. `BaseErrorResolver` reads:
 - the request id from the `X-Request-Id` or `Request-Id` header, or from a `request_id` field of the body;
 - `Retry-After`, in the two forms of RFC 9110: whole seconds in ASCII digits or an HTTP date. Any other form (`1.5`, `-5`, `1e3`) counts as no header, so a negative number cannot mean an immediate retry.
 
-A body that is not JSON gives an error without a code or message, so an HTML error page from a proxy still becomes the right `APIStatusError` for its status. Subclass the resolver to handle a provider's specifics, overriding `provider`, `get_error_code` or `classify`:
+A body that is not JSON gives an error without a code or message, so an HTML error page from a proxy still becomes the right `APIStatusError` for its status.
+
+A failure the API reports after a successful status (a stream's error event, a result that says it failed) is in-band. It is classified by the status that the resolver's `error_statuses` table gives its code, else its type, and it is never transient, whatever its class: the generation ran and failed, and running it again is your choice, as in the official SDKs, which retry by the HTTP status only.
+
+Subclass the resolver to handle a provider's specifics: set `provider` and `error_statuses`, and override `get_error_code` or `classify_status`, which picks the class and transience of a status (the in-band rule stays the base class's):
 
 ```python
 from ai_api import APIStatusError, Provider, QuotaExceededError
@@ -671,8 +676,9 @@ from ai_api import APIStatusError, Provider, QuotaExceededError
 
 class ExampleErrorResolver(BaseErrorResolver):
     provider = Provider.OPENAI
+    error_statuses = {"insufficient_quota": 429}   # in a stream, too
 
-    def classify(
+    def classify_status(
         self,
         *,
         status: int,
@@ -684,7 +690,7 @@ class ExampleErrorResolver(BaseErrorResolver):
         if status == 429 and code == "insufficient_quota":
             return QuotaExceededError, False      # not worth retrying
 
-        return super().classify(
+        return super().classify_status(
             status=status,
             code=code,
             error_type=error_type,
@@ -693,7 +699,7 @@ class ExampleErrorResolver(BaseErrorResolver):
         )
 ```
 
-The resolver returns the error instead of raising it, so the session raises it where the traceback is most useful. Error events inside streams go through the same resolver, so one `classify` covers both.
+The resolver returns the error instead of raising it, so the session raises it where the traceback is most useful. Error events inside streams go through the same resolver, so one `classify_status` covers both.
 
 Library errors can be pickled and copied, for example to pass them between processes. They are rebuilt from their attributes without calling `__init__` again, since `__init__` composes the message and would add the prefix twice.
 
@@ -1008,10 +1014,10 @@ What each shared field becomes for each provider, what is lost and when a reques
 
 A provider is a flat package under `providers/<name>/`, built from the same parts as `providers/openai/`:
 
-1. **`api.py`**: its `IAPI`, usually `BaseAPI("https://api.provider.com", "v1")`.
-2. **`resolver.py`**: a `BaseErrorResolver` subclass with the provider's `provider` value, and `get_error_code` or `classify` for its error codes, such as which 429s are quota errors and which statuses are transient.
-3. **`client.py`**: a module-level `SessionFactory(AiohttpSession, auth_factory=..., api=..., error_resolver=...)` and a `BaseClient` subclass that accepts a token or a ready session.
-4. **`types/`, `methods/` and `adapters/`** subpackages with its first endpoints: response models, method classes, and adapters that map them to the shared types; its resources build `AdapterUseCase`s from those adapters.
+1. **`api.py`**: its `IAPI`, usually `BaseAPI("https://api.provider.com", "v1")`, and `PROVIDER: Final = Provider.<NAME>`, the one place the package names its provider. `Provider` is a closed enum, extended only inside the library together with a provider package; code outside the library uses `Provider.GENERIC`.
+2. **`resolver.py`**: a `BaseErrorResolver` subclass with `provider = PROVIDER`, the provider's `error_statuses` table (the status each in-band code or type stands for), and `get_error_code` or `classify_status` for its error codes, such as which 429s are quota errors and which statuses are transient.
+3. **`client.py`**: a module-level `SessionFactory(AiohttpSession, auth_factory=..., api=..., error_resolver=...)` and a `BaseProviderClient[Adapter]` subclass that sets `provider = PROVIDER`, `session_factory`, `api_key_env`, `auth_headers` (the headers the provider takes the key in) and `adapter_type`, types `**session_kwargs` in its `__init__`, and builds `generation` from `self.adapter_type(...)` after `super().__init__()`. The base class reads the token, the ready session or the environment variable, builds the session and warns about a given session that does not fit. The client, the factory's resolver and the adapter must name the same provider: a mismatch raises `TypeError` when the class is defined.
+4. **`types/`, `methods/` and `adapters/`** subpackages with its first endpoints: response models, method classes, and adapters that map them to the shared types (an adapter sets `provider = PROVIDER`; a concrete adapter without it raises `TypeError`); its resources build `AdapterUseCase`s from those adapters.
 
 The package `__init__.py` re-exports the client, which makes it the one `__init__` allowed to import a transport.
 
@@ -1021,8 +1027,8 @@ Methods are specific to one provider. Resources and use cases are the layer abov
 
 - **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, a text or a list of `Turn`s, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
 - **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage` (`TokenUsage`: input, output and total tokens, with the cached and reasoning tokens among them), `incomplete_reason` (why the provider stopped early, an `IncompleteReason`; `None` if it finished), `raw_incomplete_reason`, `refusal` and the provider's own response in `raw`, so nothing the shared type lacks is lost.
-- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
-- **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
+- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `provider`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
+- **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`); its `provider` names the provider in the results and in the errors of the requests it refuses. `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
 - **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError` (or `RuntimeError` when the provider method's `__stream_terminal__` proved the stream complete), an event after it `APIResponseError`.
 - **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(...)` and `stream(...)`, with keyword arguments or a request, typed by the adapter's raw types; `stream` yields a `GenerationStream` with `text()` and `final()`. `BaseResource` groups the use cases of any other area.
 
@@ -1052,6 +1058,8 @@ class CompletionAdapter(
         GenerationEvent[MessageEvent],
     ]
 ):
+    provider = Provider.GENERIC           # a provider the library does not list
+
     def to_method(self, request: GenerationRequest) -> CreateCompletion:
         return CreateCompletion(
             model=request.model,
@@ -1065,7 +1073,7 @@ class CompletionAdapter(
     ) -> GenerationResponse[Completion]:
         return GenerationResponse[Completion](
             id=raw.id,
-            provider=Provider.GENERIC,
+            provider=self.provider,
             model=request.model,          # the API does not send it back
             text=raw.text,
             raw=raw,
@@ -1084,7 +1092,7 @@ class CompletionAdapter(
                 yield TextDeltaEvent[MessageEvent](text=event.text, raw=event)
             else:
                 yield CompletedEvent[MessageEvent](
-                    model=request.model, raw=event
+                    provider=self.provider, model=request.model, raw=event
                 )
 
 

@@ -26,6 +26,7 @@ from ai_api import (
     Headers,
     IGenerationClient,
     IncompleteReason,
+    Provider,
     ResponseFormat,
     Role,
     ServerSentEvent,
@@ -37,8 +38,8 @@ from ai_api.adapters import (
     IConversion,
 )
 from ai_api.adapters import Stop as GenerationStop
-from ai_api.client import IClient
-from ai_api.http import IAPI
+from ai_api.client import IClient, ISessionFactory
+from ai_api.http import IAPI, BearerAuth
 from ai_api.methods import IAPIMethod, IStreamMethod
 from ai_api.providers.anthropic import AnthropicClient
 from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
@@ -293,6 +294,8 @@ class TextAdapter(
 ):
     """Builds a method returning ``str`` and converts that ``str``."""
 
+    provider = Provider.GENERIC
+
     def to_method(self, request: GenerationRequest) -> GetText:
         return GetText()
 
@@ -310,6 +313,8 @@ class WrongMethodAdapter(
     BaseAdapter[GenerationRequest, str, GenerationResponse[str]],
 ):
     """The method's result must be the raw type of the response half."""
+
+    provider = Provider.GENERIC
 
     def to_method(self, request: GenerationRequest) -> GetModel:  # type: ignore[override]
         return GetModel(model_id="m")
@@ -341,6 +346,8 @@ class TextGeneration(
     ],
 ):
     """Generates from ``GetText`` at once and from ``Download`` streamed."""
+
+    provider = Provider.GENERIC
 
     def to_method(self, request: GenerationRequest) -> GetText:
         return GetText()
@@ -486,3 +493,15 @@ def clients_are_generation_clients(
     assert resource.session is openai.session
     any_generation_client(anthropic)
     any_generation_client(BaseClient(openai.session))  # type: ignore[arg-type]
+
+
+def session_factories_are_typed() -> None:
+    factory: ISessionFactory[AiohttpSession, BearerAuth, ...] = session_factory
+    assert_type(factory("sk"), AiohttpSession)
+    session: ISession = OpenAIClient.session_factory("sk")
+    assert session
+
+
+def clients_build_their_adapter_type() -> None:
+    assert_type(OpenAIClient("sk").adapter_type(), OpenAIGenerationAdapter)
+    assert_type(OpenAIClient.provider, Provider)

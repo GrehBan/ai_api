@@ -18,6 +18,7 @@ from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import (
     APIStatusError,
     BadRequestError,
+    ContentTooLargeError,
     InternalServerError,
     NotFoundError,
     QuotaExceededError,
@@ -156,7 +157,7 @@ def test_other_auth_header_is_warned_about() -> None:
         error_resolver=AnthropicErrorResolver(),
     )
 
-    with pytest.warns(UserWarning, match="x-api-key"):
+    with pytest.warns(UserWarning, match="(?i)x-api-key"):
         AnthropicClient(session=session)
 
 
@@ -207,11 +208,36 @@ def test_spend_cap_is_a_quota_error() -> None:
     assert error.transient is False
 
 
-def test_own_spend_limit_is_a_quota_error() -> None:
-    error = resolve(400, body("invalid_request_error", SPEND_LIMIT_MESSAGE))
+@pytest.mark.parametrize(
+    "message",
+    [
+        SPEND_LIMIT_MESSAGE,
+        "You have reached your specified workspace API usage limits. You "
+        "will regain access on 2026-11-01 at 00:00 UTC.",
+    ],
+    ids=["organization", "workspace"],
+)
+def test_own_spend_limit_is_a_quota_error(message: str) -> None:
+    # Both starts that api/rate-limits documents: this 400 has no code of
+    # its own, so the prefix is all there is to recognize it by.
+    error = resolve(400, body("invalid_request_error", message))
 
     assert type(error) is QuotaExceededError
     assert error.transient is False
+
+
+def test_too_large_request_is_a_content_too_large_error() -> None:
+    error = resolve(413, body("request_too_large", "Request too large"))
+
+    assert type(error) is ContentTooLargeError
+    assert error.transient is False
+
+
+def test_too_large_request_inside_a_stream_keeps_its_class() -> None:
+    error = resolve(200, body("request_too_large", "Request too large"))
+
+    assert type(error) is ContentTooLargeError
+    assert error.status == 200
 
 
 @pytest.mark.parametrize(

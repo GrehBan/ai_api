@@ -130,6 +130,14 @@ class ConflictError(APIStatusError):
     )
 
 
+class ContentTooLargeError(APIStatusError):
+    """HTTP 413: the request is larger than the API accepts (RFC 9110)."""
+
+    default_message = (
+        "Content too large: The request is larger than the API accepts."
+    )
+
+
 class UnprocessableEntityError(APIStatusError):
     """HTTP 422: the request is well-formed but semantically invalid."""
 
@@ -198,6 +206,7 @@ HTTP_ERRORS: Final[dict[int, type[APIStatusError]]] = {
     404: NotFoundError,
     408: RequestTimeoutError,
     409: ConflictError,
+    413: ContentTooLargeError,
     422: UnprocessableEntityError,
     429: RateLimitError,
     500: InternalServerError,

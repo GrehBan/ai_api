@@ -112,6 +112,7 @@ EXPECTED_HTTP_ERRORS = {
     404: http_errors.NotFoundError,
     408: http_errors.RequestTimeoutError,
     409: http_errors.ConflictError,
+    413: http_errors.ContentTooLargeError,
     422: http_errors.UnprocessableEntityError,
     429: http_errors.RateLimitError,
     500: http_errors.InternalServerError,

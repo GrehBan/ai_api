@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.adapters.validation import check_last_turn, request_errors
-from ai_api.enums import Provider
 from ai_api.providers.openai.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
     USAGE_CONVERSION,
     check_status,
 )
+from ai_api.providers.openai.api import PROVIDER
 from ai_api.providers.openai.methods.responses import (
     CreateResponse,
     StreamResponse,
@@ -76,6 +76,8 @@ class OpenAIGenerationAdapter(
         ... )
     """
 
+    provider = PROVIDER
+
     def __init__(
         self,
         *,
@@ -112,7 +114,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: OpenAI cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(Provider.OPENAI):
+        with request_errors(self.provider):
             return CreateResponse(**fields)
 
     def to_response(
@@ -139,7 +141,7 @@ class OpenAIGenerationAdapter(
         stop = self.stop_conversion(raw)
         return GenerationResponse[Response](
             id=raw.id,
-            provider=Provider.OPENAI,
+            provider=self.provider,
             model=raw.model,
             text=raw.output_text,
             usage=self._usage(raw.usage),
@@ -162,7 +164,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: OpenAI cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(Provider.OPENAI):
+        with request_errors(self.provider):
             return StreamResponse(**fields)
 
     async def to_events(
@@ -210,6 +212,7 @@ class OpenAIGenerationAdapter(
                 stop = self.stop_conversion(response)
                 return CompletedEvent[ResponseStreamEvent](
                     id=response.id,
+                    provider=self.provider,
                     model=response.model,
                     text=response.output_text,
                     usage=self._usage(response.usage),
@@ -245,7 +248,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: The conversation does not end with a
                 ``user`` turn.
         """
-        check_last_turn(request, Provider.OPENAI)
+        check_last_turn(request, self.provider)
         return {
             "model": request.model,
             "input": self.input_conversion(request.input),
