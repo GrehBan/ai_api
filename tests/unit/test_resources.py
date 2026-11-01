@@ -44,6 +44,7 @@ from ai_api.resources.usecases import (
 from ai_api.response.buffered import BufferedResponse
 from ai_api.response.stream import Stream, map_stream
 from ai_api.types.base import BaseAPIType
+from ai_api.types.matchers import EventTypes
 from ai_api.types.requests.generation import GenerationRequest, Turn
 from ai_api.types.responses.events import (
     GENERATION_TERMINAL,
@@ -91,7 +92,9 @@ def to_event(raw: RawEvent) -> GenerationEvent[RawEvent]:
         case "response.output_text.delta":
             return TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
         case "response.completed":
-            return CompletedEvent[RawEvent](model="m", raw=raw)
+            return CompletedEvent[RawEvent](
+                provider=Provider.OPENAI, model="m", raw=raw
+            )
         case _:
             return OtherEvent[RawEvent](raw=raw)
 
@@ -253,6 +256,8 @@ class ResponsesAdapter(
         GenerationEvent[RawEvent],
     ]
 ):
+    provider = Provider.OPENAI
+
     def to_method(self, request: GenerationRequest) -> Create:
         return Create(model=request.model, input=request.input)
 
@@ -287,6 +292,7 @@ class ResponsesAdapter(
                 yield TextDeltaEvent[RawEvent](text=raw.delta, raw=raw)
 
         yield CompletedEvent[RawEvent](
+            provider=self.provider,
             model=request.model,
             raw=RawEvent(type=f"{request.model}:{deltas}"),
         )
@@ -522,7 +528,7 @@ def test_event_types_are_enum_members() -> None:
     )
 
     event = events.validate_python(
-        {"type": "completed", "model": "m", "raw": {}}
+        {"type": "completed", "provider": "generic", "model": "m", "raw": {}}
     )
 
     assert isinstance(event, CompletedEvent)
@@ -566,7 +572,10 @@ def test_parametrized_response_validates_raw() -> None:
     ("data", "event_type"),
     [
         ({"type": "text_delta", "text": "x"}, TextDeltaEvent[RawEvent]),
-        ({"type": "completed", "model": "m"}, CompletedEvent[RawEvent]),
+        (
+            {"type": "completed", "provider": "generic", "model": "m"},
+            CompletedEvent[RawEvent],
+        ),
         ({"type": "other"}, OtherEvent[RawEvent]),
     ],
     ids=["text-delta", "completed", "other"],
@@ -590,6 +599,8 @@ class ScriptedAdapter(
 ):
     """Ignores the provider's items and yields the given event types."""
 
+    provider = Provider.GENERIC
+
     def __init__(self, *types: str) -> None:
         self.types = types
         self.closed = False
@@ -608,7 +619,9 @@ class ScriptedAdapter(
             for kind in self.types:
                 raw = RawEvent(type=kind)
                 if kind == "completed":
-                    yield CompletedEvent[RawEvent](model="m", raw=raw)
+                    yield CompletedEvent[RawEvent](
+                        provider=self.provider, model="m", raw=raw
+                    )
                 else:
                     yield OtherEvent[RawEvent](raw=raw)
         finally:
@@ -671,6 +684,46 @@ async def test_use_case_rejects_a_stream_without_its_final_event() -> None:
     assert adapter.closed
 
 
+class CreateTerminatedStream(CreateStream):
+    __stream_terminal__ = EventTypes("response.created")
+
+
+class TerminatedAdapter(ScriptedAdapter):
+    """Its method declares a terminal, so the parser proves the end."""
+
+    def to_stream_method(
+        self,
+        request: GenerationRequest,
+    ) -> CreateTerminatedStream:
+        return CreateTerminatedStream(model=request.model, input=request.input)
+
+
+async def test_complete_source_without_the_final_event_is_a_bug() -> None:
+    # The parser saw the provider's terminal, so the stream was not cut:
+    # the adapter lost the final event.
+    transport = FakeTransport(
+        stream_responses=[
+            FakeStreamResponse(
+                sse('{"type": "response.created"}'), headers=SSE
+            )
+        ]
+    )
+    adapter = TerminatedAdapter("other")
+    use_case = AdapterStreamUseCase(
+        transport, adapter, terminal=GENERATION_TERMINAL
+    )
+
+    async with use_case.stream(REQUEST) as events:
+        with pytest.raises(
+            RuntimeError,
+            match="TerminatedAdapter ended a complete stream without",
+        ):
+            async for _ in events:
+                pass
+
+    assert adapter.closed
+
+
 async def test_use_case_closes_the_adapter_on_break() -> None:
     use_case, adapter = scripted_use_case("other", "other", "completed")
 
@@ -717,7 +770,13 @@ class PlainAdapter(ScriptedAdapter):
         request: GenerationRequest,
     ) -> AsyncIterator[GenerationEvent[RawEvent]]:
         return PlainEvents(
-            [CompletedEvent[RawEvent](model="m", raw=RawEvent(type="x"))]
+            [
+                CompletedEvent[RawEvent](
+                    provider=Provider.GENERIC,
+                    model="m",
+                    raw=RawEvent(type="x"),
+                )
+            ]
         )
 
 

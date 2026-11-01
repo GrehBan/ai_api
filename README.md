@@ -174,6 +174,7 @@ A method class declares the HTTP request in its dunder class attributes. Its fie
 | `__request_query__` | empty | Names of fields sent as query parameters; fields that are neither path nor query parameters go to the body. Unknown names and mapping or model fields raise `TypeError` at class definition |
 | `__request_body_format__` | `BodyFormat.NONE` | `JSON`, `FORM`, `MULTIPART` or `NONE` |
 | `__request_headers__` | `None` | Headers sent with every request of the method, as a mapping or `Headers`; see [Default headers](#default-headers) for which ones win |
+| `__value_formatter__` | `BaseValueFormatter()` | Writes dates, times and durations (ISO 8601); see [Dates, times and durations](#dates-times-and-durations) |
 | `__retryable__` | `False` | Retry transient failures (up to 4 attempts in total) |
 | `__returning__` | inferred | Result class, taken from the generic argument |
 | `__response_format__` | inferred | How the response body is parsed |
@@ -223,7 +224,7 @@ The generic argument sets both the result type and the response format:
 | `BaseAPIMethod[bytes]` | `bytes` | Raw body |
 | `BaseAPIMethod[None]` | `None` | Empty body expected |
 
-Setting `__response_format__` explicitly, in the method or in an intermediate base class, overrides the inferred value. It must still produce the declared type: `TEXT` gives `str`, `BYTES` gives `bytes`, `NONE` gives `None` and `JSON` gives a model, while `SSE` and `NDJSON` are for stream methods only. A format that contradicts the generic argument, such as `BaseAPIMethod[SomeModel]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__response_parser__`. The check exists because the parser casts its result to the declared type: without it, a contradicting format would make the static type lie.
+Setting `__response_format__` explicitly, in the method or in an intermediate base class, overrides the inferred value. It must still produce the declared type: `TEXT` gives `str`, `BYTES` gives `bytes`, `NONE` gives `None` and `JSON` gives a model, while `SSE` and `NDJSON` are for stream methods only. A format that contradicts the generic argument, such as `BaseAPIMethod[SomeModel]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__response_parser__`. The check exists because the parser casts its result to the declared type: without it, a contradicting format would make the static type lie. For the same reason a generic argument that is not a class, such as `list[Model]`, `dict[str, Any]` or a union, raises `TypeError` at class definition unless the method sets its own `__response_parser__`: the default parser could only fail on the response, after the request was sent.
 
 How `BufferedResponseParser` reads each format:
 
@@ -245,16 +246,64 @@ A body that cannot be decoded or validated raises `APIResponseError`, which is n
 | `FORM` | `application/x-www-form-urlencoded` | files raise `TypeError` |
 | `MULTIPART` | `multipart/form-data` | the only format that carries files |
 
+A method without a body sends every field as a path or query parameter. A field that is neither raises `TypeError` when the class is defined, since it would never be sent: list it in `__request_query__` or set a body format. Fields with `exclude=True` are never sent, so they are allowed, and classes without `__request_path__` (bases of other methods) are not checked.
+
 Before encoding, the values are normalized:
 
 - **`None`** fields are dropped, at the top level and in nested models, but kept as `null` inside lists and dicts, where the position or key matters.
-- **Nested models** (`BaseAPIType`) are dumped to dicts.
-- **Enums** are sent as their values.
-- **Datetimes** become Unix timestamps in seconds, as strings. A naive datetime raises `ValueError`, because its moment is ambiguous.
-- **Timedeltas** become the timestamp of now plus the delta, for parameters such as an expiry time.
-- **Circular references** and nesting deeper than 256 levels raise `ValueError` instead of hitting Python's recursion limit.
+- **Nested models** (`BaseAPIType`) are dumped to dicts, by their wire names.
+- **Enums** are sent as their values, also as dict keys. Two keys that give the same value, such as `Color.RED` and `"red"`, raise `ValueError`, since one of the values would be lost.
+- **Dates, times and durations** are written by the method's formatter, in ISO 8601 by default (see [Dates, times and durations](#dates-times-and-durations)).
+- **Text streams** raise `TypeError`: uploads are bytes, so open the file in binary mode.
+- **Circular references** and nesting deeper than 253 levels raise `ValueError`, instead of an encoder error: orjson refuses deeper data.
 
-In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`.
+In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`. A repeated field can express neither `null` nor nesting, so `None` in a list raises `ValueError` and a list inside a list raises `TypeError`.
+
+### Dates, times and durations
+
+A value is written the same way in every part of the request (JSON body, form, query and path), by the method's `__value_formatter__`. The default `BaseValueFormatter` uses ISO 8601, the `date-time`, `date` and `time` formats of JSON Schema and OpenAPI:
+
+| Value | Sent as |
+|---|---|
+| `datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)` | `"2026-01-02T03:04:05Z"`; another offset as `+03:00` |
+| `date(2026, 1, 2)` | `"2026-01-02"` |
+| `time(12, 30)` | `"12:30:00"` |
+| `timedelta(seconds=30)` | `"PT30S"` |
+
+A naive datetime raises `ValueError`, because the moment it names depends on the reader's clock. NaN and infinity raise `ValueError` everywhere, since no API can read them; in a query or path they used to become `nan` or `None`.
+
+An API that wants another format gets a subclass that overrides what differs, set on the base class of its methods. A single field takes its own format through Pydantic's `PlainSerializer`, which runs before the formatter:
+
+```python
+import datetime
+from typing import Annotated
+
+from pydantic import PlainSerializer
+
+from ai_api import BaseValueFormatter
+
+
+class UnixSeconds(BaseValueFormatter):        # the API wants Unix seconds
+    def format_datetime(self, value: datetime.datetime, /) -> str:
+        return str(round(value.timestamp()))
+
+
+class LegacyMethod[T](BaseAPIMethod[T]):      # base of the API's methods
+    __value_formatter__ = UnixSeconds()
+
+
+class CreateJob(LegacyMethod[Model]):
+    __request_path__ = "/jobs"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+
+    run_at: datetime.datetime                 # "1767323045"
+    timeout: datetime.timedelta               # "PT30S": not overridden
+    expires_at: Annotated[                    # 1767323045, a JSON number
+        datetime.datetime,
+        PlainSerializer(lambda value: round(value.timestamp())),
+    ]
+```
 
 ### Query parameters
 
@@ -269,7 +318,7 @@ class ListModels(BaseAPIMethod[ModelList]):
     limit: int | None = None          # sent as ?limit=...
 ```
 
-A list or tuple is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`. Booleans become `true` and `false`, and enums their values. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
+A list, tuple or set is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`; `None` in the list raises `ValueError`, since a repeated key has no `null` and dropping it would shift the other items. Booleans become `true` and `false`, enums their values, and dates as in [Dates, times and durations](#dates-times-and-durations); NaN and infinity raise `ValueError`. A value with no text form, such as a class, raises `TypeError`. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
 
 To send a field under another name, use `validation_alias` and `serialization_alias` rather than `alias`. The constructor then takes the field name in both mypy and pyright; with `alias`, mypy wants the field name and pyright the alias. At runtime both names are accepted.
 
@@ -307,11 +356,11 @@ class RetrieveModel(BaseAPIMethod[Model]):
 RetrieveModel(model_id="example-1").request_path   # "/models/example-1"
 ```
 
-- **Escaping.** Values are percent-encoded, including `/`, `?` and `#`, so `model_id="../admin"` cannot change the request path. Enums give their value, as in query parameters.
+- **Escaping.** Values are percent-encoded, including `/`, `?` and `#`, so `model_id="../admin"` cannot change the request path. Values are written as in query parameters: enums give their value, booleans `true`/`false`, dates ISO 8601.
 - **`build_url` gets an encoded path.** Join it without encoding it again, e.g. with `URL.joinpath(..., encoded=True)` as `BaseAPI` does. yarl's `/` operator would turn `%2F` into `%252F`, and the server would see a different identifier.
-- **Rejected values.** `None`, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
+- **Rejected values.** `None`, NaN, infinity, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
 - **Identifiers with slashes.** For values such as `meta-llama/Llama-3`, set `__request_path_safe__ = "/"` on that method. Each segment is still checked for `.` and `..`.
-- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`) and a field that is also in `__request_query__` raise `TypeError` when the class is defined, not when the request is sent. Write literal braces as `{{` and `}}`.
+- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__` and a field annotated as a list, set, dict or model (it has no single segment) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
 
 ## Uploading files
 
@@ -351,7 +400,7 @@ How files behave on retry, and why:
 
 - **Every attempt opens the file again.** `InputFile.open()` returns a fresh iterator each time, so a retry sends the whole content, not the rest of a half-read stream.
 - **A one-shot source disables retries.** A request whose files can be read only once (`StreamFile`, a non-seekable `IOFile`) is never retried, even if `__retryable__` is set: a retry would send an empty or truncated file.
-- **A failing source is not a network error.** A missing `PathFile` (or one that points to a directory), or a source that fails while it is sent, raises `APIRequestError`, which is not retried. Retrying would fail the same way.
+- **A failing source is not a network error.** A missing `PathFile` (or one that points to a directory), or a source that fails while it is sent, raises `APIRequestError`, which is not retried. Retrying would fail the same way. So does an `IOFile` over a non-blocking stream that has no data ready: its `read()` returns `None`, which is not the end, and reading on would send a truncated file.
 
 Text streams are rejected when the method is created, and files in a JSON or URL-encoded body raise `TypeError`.
 
@@ -451,8 +500,8 @@ async with session.stream(StreamMessage(prompt="Hi")) as events:
 - **Format.** It must be set for models and unions: the item type alone doesn't tell SSE from NDJSON. Without it the class definition raises `TypeError`. `ServerSentEvent` items imply SSE.
 - **Parsing.** SSE follows the HTML standard: multi-line `data`, comments, `event`, `id` and `retry`, and `\n`, `\r\n` or `\r` line endings. An event split across chunks is held back until it is complete, and an unfinished event at the end of the body is dropped. NDJSON skips blank lines.
 - **Validation.** Each event is validated through a `TypeAdapter` built once, when the class is defined, from the generic argument as written. That is why discriminated unions and `type` aliases work as item types. An event that doesn't match raises `APIResponseError`.
-- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that). Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
-- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, so a provider's `classify` can mark it transient. So does decoded data that the parser's `error_events` matcher accepts. The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
+- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that). Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. Only SSE and NDJSON have events to check, so a terminal on a `BYTES` or `TEXT` stream raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
+- **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, and it is never transient: the generation already ran. So does decoded data that the parser's `error_events` matcher accepts. The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
 - **Raw events.** `BaseStreamMethod[ServerSentEvent]` yields events as they are, with their `data`, `event`, `id` and `retry`. `[DONE]` and error events are handled the same way.
 - **Limits.** `StreamResponseParser(max_line_size=...)` limits one SSE or NDJSON line and `max_event_size=...` the data of one SSE event, in characters. Both are off by default; set them for an untrusted server, since a line without an end would otherwise grow in memory.
 
@@ -462,7 +511,7 @@ A connection can break at any point of a long generation. What happens depends o
 
 | When | What you get | Retried |
 |---|---|---|
-| Before the response arrives: connection refused, DNS, TLS, connect timeout | `APIConnectionError`, `APITimeoutError` or `APITLSError` on entering the block | yes, if the method is retryable and the error is transient |
+| Before the response arrives: connection refused, DNS, a TLS handshake that breaks off, connect timeout, a certificate that fails verification | `APIConnectionError`, `APITimeoutError` or (for the certificate) `APITLSError` on entering the block | yes, if the method is retryable and the error is transient |
 | The server answers with an error status | the `APIStatusError` for it, on entering the block | yes, if the error is transient |
 | The connection drops after some items | `APIStreamInterruptedError` from `async for`, caused by the `APIConnectionError` | no |
 | No data for 600 s (`sock_read`) | `APIStreamInterruptedError` from `async for`, caused by the `APITimeoutError` | no |
@@ -529,6 +578,7 @@ AIAPIError
 │   ├── NotFoundError           404
 │   ├── RequestTimeoutError     408
 │   ├── ConflictError           409
+│   ├── ContentTooLargeError    413
 │   ├── UnprocessableEntityError 422
 │   ├── RateLimitError          429
 │   ├── QuotaExceededError      (returned by custom resolvers)
@@ -590,17 +640,17 @@ async def ask(prompt: str) -> str | None:
 
 A request is retried only when the method sets `__retryable__ = True`, does not carry a one-shot file, and the error's `transient` flag is true. By default that flag is true for:
 
-- statuses 408, 500, 502, 503, 504 and 529 (Anthropic's "overloaded");
+- statuses 408, 500, 502, 503, 504, and a provider's own transient statuses, which its resolver classifies (Anthropic's 529 "overloaded");
 - status 429 when the response has `Retry-After`;
 - connection errors, including a body cut off before its end, and timeouts.
 
-It is false for TLS errors, redirects that are not followed, invalid requests and failing upload sources, since repeating them gives the same result, and `APIResponseError` is never retried.
+It is false for certificate errors, redirects that are not followed, invalid requests and failing upload sources, since repeating them gives the same result, and `APIResponseError` is never retried.
 
 Waits use random exponential backoff of up to 30 s, but never less than `Retry-After`. When the API asks to wait longer than `max_retry_after` (60 s by default), the error is raised at once instead. No retry starts after `retry_deadline` (15 minutes from the first attempt by default), and a wait that would end later is not started; an attempt in progress is limited by its own timeout.
 
 The reasons behind these rules:
 
-- **Retries are opt-in per method.** Most AI endpoints are `POST`s that are not idempotent. A request that timed out may still have run on the server, and sending it again can start a second billed generation. The author of a method knows whether that is acceptable; the library does not.
+- **Retries are opt-in per method.** Most AI endpoints are `POST`s that are not idempotent. A request that timed out may still have run on the server, and sending it again can start a second billed generation. The author of a method knows whether that is acceptable; the library does not. The library's provider methods opt in, as the official SDKs do, and accept the same risk.
 - **A 429 is retried only with `Retry-After`.** Without it there is no telling a short rate limit from an exhausted quota, and retrying a quota error only delays the failure. With it, the server has said when to come back.
 - **`Retry-After` is capped.** A server that asks for ten minutes would otherwise block the caller silently. Raising the error lets the caller decide, for example to queue the work.
 - **The deadline bounds the total time.** Four attempts with long waits and long timeouts could otherwise take far longer than any caller expects.
@@ -612,9 +662,13 @@ Error responses are mapped by an error resolver. `BaseErrorResolver` reads:
 
 - the common `{"error": {"code", "type", "message"}}` body shape, and a string `error` (`{"error": "model not found"}`, as Ollama sends) as the message;
 - the request id from the `X-Request-Id` or `Request-Id` header, or from a `request_id` field of the body;
-- `Retry-After`, in seconds or as an HTTP date.
+- `Retry-After`, in the two forms of RFC 9110: whole seconds in ASCII digits or an HTTP date. Any other form (`1.5`, `-5`, `1e3`) counts as no header, so a negative number cannot mean an immediate retry.
 
-A body that is not JSON gives an error without a code or message, so an HTML error page from a proxy still becomes the right `APIStatusError` for its status. Subclass the resolver to handle a provider's specifics, overriding `provider`, `get_error_code` or `classify`:
+A body that is not JSON gives an error without a code or message, so an HTML error page from a proxy still becomes the right `APIStatusError` for its status.
+
+A failure the API reports after a successful status (a stream's error event, a result that says it failed) is in-band. It is classified by the status that the resolver's `error_statuses` table gives its code, else its type, and it is never transient, whatever its class: the generation ran and failed, and running it again is your choice, as in the official SDKs, which retry by the HTTP status only.
+
+Subclass the resolver to handle a provider's specifics: set `provider` and `error_statuses`, and override `get_error_code` or `classify_status`, which picks the class and transience of a status (the in-band rule stays the base class's):
 
 ```python
 from ai_api import APIStatusError, Provider, QuotaExceededError
@@ -622,8 +676,9 @@ from ai_api import APIStatusError, Provider, QuotaExceededError
 
 class ExampleErrorResolver(BaseErrorResolver):
     provider = Provider.OPENAI
+    error_statuses = {"insufficient_quota": 429}   # in a stream, too
 
-    def classify(
+    def classify_status(
         self,
         *,
         status: int,
@@ -635,7 +690,7 @@ class ExampleErrorResolver(BaseErrorResolver):
         if status == 429 and code == "insufficient_quota":
             return QuotaExceededError, False      # not worth retrying
 
-        return super().classify(
+        return super().classify_status(
             status=status,
             code=code,
             error_type=error_type,
@@ -644,7 +699,7 @@ class ExampleErrorResolver(BaseErrorResolver):
         )
 ```
 
-The resolver returns the error instead of raising it, so the session raises it where the traceback is most useful. Error events inside streams go through the same resolver, so one `classify` covers both.
+The resolver returns the error instead of raising it, so the session raises it where the traceback is most useful. Error events inside streams go through the same resolver, so one `classify_status` covers both.
 
 Library errors can be pickled and copied, for example to pass them between processes. They are rebuilt from their attributes without calling `__init__` again, since `__init__` composes the message and would add the prefix twice.
 
@@ -706,7 +761,7 @@ Any object with a `header_name` and an `encode()` method is an `IAuth`; it does 
 AiohttpSession(api, auth, resolver, headers=Headers({"anthropic-version": "2023-06-01"}))
 ```
 
-They are copied into the connection pool when it is created, so set them before the first request; changes made after that are not sent until the session is closed and opened again. For a header that changes, use a method's `__request_headers__` or a call's `headers=` instead.
+They are read on every request, so a header added later with `session.headers.add(...)` is sent from the next request on.
 
 A request gets headers from four places. Names are case-insensitive, and a later place replaces a header of an earlier one:
 
@@ -795,7 +850,7 @@ For a different URL scheme, write your own class with `base_url`, `version` and 
 
 ## Provider clients
 
-`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried. A stream's `error` event comes after a 200, so its class is picked by its code or type, such as a transient `ServiceUnavailableError` for `server_is_overloaded`. The client owns its session, so close it, ideally with `async with`:
+`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried, also when a stream's `error` event reports it. A stream's `error` event and a `failed` response come after a 200, so their class is picked by the code or type, such as `ServiceUnavailableError` for `server_is_overloaded` and `QuotaExceededError` for `insufficient_quota`. Such a failure is never transient: the generation ran and failed, and running it again is your choice, as in the official SDK, which retries by the HTTP status only. The client owns its session, so close it, ideally with `async with`:
 
 ```python
 from ai_api.providers.openai import OpenAIClient
@@ -809,7 +864,7 @@ async def list_models() -> ModelList:
 - **Key from the environment.** `OpenAIClient()` without a token or a session reads the key from `OPENAI_API_KEY`. An explicit token always wins over the variable, a session is never combined with it, and an empty variable counts as unset.
 - **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` with the generic `BaseErrorResolver`, or with authentication outside the `Authorization` header, gets a `UserWarning`, since both are almost certainly mistakes for OpenAI. To change only some options of the session built from a token, pass them to the client: `OpenAIClient(token, max_body_size=..., timeout=...)` takes every keyword argument of `AiohttpSession` (`AiohttpSessionOptions`), and type checkers check them; with a ready `session=` they raise `ValueError`, since they would be ignored. `session_factory(token, max_body_size=...)` from `ai_api.providers.openai.client` builds such a session on its own.
 - **Ownership.** A client closes its session when it is closed, also a session you passed in. One owner per session means no connection pool is left open by accident; create one session per client.
-- **Anthropic.** `AnthropicClient` (`ai_api.providers.anthropic`) works the same way: a token, a ready `session=` or `ANTHROPIC_API_KEY`, with the `https://api.anthropic.com/v1` URL, `BearerAuth` (Anthropic also accepts `x-api-key`, so `APIKeyAuth` in a given session gets no warning) and `AnthropicErrorResolver`. The resolver reads Anthropic's `error.type` as `error_type` and `details.error_code` as `code`; a reached spend cap (429 `enforced_spend_limit_reached`) or a spend limit you set (400) is a `QuotaExceededError` that is not retried, and the 529 `overloaded_error` is a transient `ServiceUnavailableError`, like OpenAI's 503. A stream's `error` event comes after a 200, so its class is picked by its type. Anthropic also requires an `anthropic-version` header; `API_VERSION` (`2026-10-21`) is the version the library's Anthropic types follow.
+- **Anthropic.** `AnthropicClient` (`ai_api.providers.anthropic`) works the same way: a token, a ready `session=` or `ANTHROPIC_API_KEY`, with the `https://api.anthropic.com/v1` URL, `BearerAuth` (Anthropic also accepts `x-api-key`, so `APIKeyAuth` in a given session gets no warning) and `AnthropicErrorResolver`. The resolver reads Anthropic's `error.type` as `error_type` and `details.error_code` as `code`; a reached spend cap (429 `enforced_spend_limit_reached`) or a spend limit you set (400) is a `QuotaExceededError` that is not retried, and the 529 `overloaded_error` is a transient `ServiceUnavailableError`, like OpenAI's 503. A stream's `error` event comes after a 200, so its class is picked by its type, and it is never transient, as for OpenAI. Anthropic also requires an `anthropic-version` header; `API_VERSION` (`2026-10-21`) is the version the library's Anthropic types follow.
 - **Other providers.** Subclass `BaseClient`, which delegates `send_request`, `stream`, `close` and `async with` to its session, and build the session with a `SessionFactory` (`client/factory.py`). `BaseClient` is generic in the session type: `BaseClient(AiohttpSession(...)).session` is typed as `AiohttpSession`, while `OpenAIClient`, which accepts any session, is a `BaseClient[ISession]`.
 
 ### OpenAI Responses API
@@ -842,7 +897,8 @@ async def ask_streamed(client: OpenAIClient) -> str:
 
 - **`output_text` is computed.** The API sends no such field; like the official SDKs, `Response.output_text` joins the `output_text` parts of the `message` items, and is `None` when there are none.
 - **Nothing unknown is dropped or rejected.** Output items, content parts and stream events that the library does not model yet (reasoning, tool calls, new event types) arrive as `UnknownOutputItem`, `UnknownContent` and `UnknownEvent`, with every field the provider sent kept as an extra field.
-- **Failures are raised.** A `failed` response, buffered (`CreateResponse`) or as the stream's `response.failed` event, raises the `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`, with the `Response` or the event in `raw`; so does the separate `error` event. `server_error` is a transient `InternalServerError`, `rate_limit_exceeded` a `RateLimitError`; a code without its own class, such as `invalid_prompt`, gives a plain, non-transient `APIStatusError`. This is stricter than the official SDK, which returns a failed response as a value. `CreateResponse` is not retried by default, because creating a response is not idempotent. `response.incomplete` stays a regular `ResponseStateEvent` with `response.incomplete_details`.
+- **Failures are raised.** A `failed` response, buffered (`CreateResponse`) or as the stream's `response.failed` event, raises the `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`, with the `Response` or the event in `raw`; so does the separate `error` event. `server_error` is an `InternalServerError`, `rate_limit_exceeded` a `RateLimitError`; a code without its own class, such as `invalid_prompt`, gives a plain `APIStatusError`. None of them is transient (see [Provider clients](#provider-clients)). This is stricter than the official SDK, which returns a failed response as a value.
+- **Retried like the SDK.** `CreateResponse` and `StreamResponse` set `__retryable__ = True`: a lost connection, a timeout, a 5xx or a 429 with `Retry-After` is retried, a stream only while it opens. `response.incomplete` stays a regular `ResponseStateEvent` with `response.incomplete_details`.
 - **Checked before sending.** `max_output_tokens` of at least 16, `temperature` from 0 to 2, and metadata of up to 16 pairs with keys up to 64 and values up to 512 characters, as OpenAI documents them.
 
 ### Anthropic Messages API
@@ -885,9 +941,10 @@ async def ask_claude_streamed(client: AnthropicClient) -> str:
     return text
 ```
 
+- **Retried like the SDK.** `CreateMessage` and `StreamMessage` set `__retryable__ = True`: a lost connection, a timeout, a 5xx, the 529 `overloaded_error` or a 429 with `Retry-After` is retried, a stream only while it opens.
 - **The version is part of the method.** Both methods send `anthropic-version: 2026-10-21` (`VERSION_HEADERS`), the version their types follow, whatever session sends them. A method of your own for Anthropic sets `__request_headers__ = VERSION_HEADERS` too.
 - **`text` is computed.** `Message.text` joins the `text` blocks of the content, and is `None` when there are none.
-- **Nothing unknown is dropped or rejected.** Content blocks, deltas and stream events the library does not model yet (thinking, tool use, new event types) arrive as `UnknownBlock`, `UnknownDelta` and `UnknownEvent`, with every field kept. The `error` event is raised as an `APIStatusError` chosen by its type, such as a transient `ServiceUnavailableError` for `overloaded_error`.
+- **Nothing unknown is dropped or rejected.** Content blocks, deltas and stream events the library does not model yet (thinking, tool use, new event types) arrive as `UnknownBlock`, `UnknownDelta` and `UnknownEvent`, with every field kept. The `error` event is raised as an `APIStatusError` chosen by its type, such as `ServiceUnavailableError` for `overloaded_error`; like OpenAI's in-band failures, it is never transient.
 - **Checked before sending.** `max_tokens` is required; `messages` needs at least one turn, and a turn (a `MessageParam`, a `TypedDict`, so dict literals type-check) takes only `role` and `content`; `metadata` takes only `user_id`, up to 512 characters. There are no `temperature`, `top_p` and `top_k`: API version 2026-10-21 rejects them.
 
 ### Shared generation
@@ -941,7 +998,7 @@ async def chat(client: IGenerationClient) -> GenerationResponse[Any]:
 What each shared field becomes for each provider, what is lost and when a request raises is listed in [docs/unification.md](docs/unification.md).
 
 - **Keyword arguments or a request.** `create(model=..., input=...)` and `stream(...)` take exactly the fields of `GenerationRequest`; a misspelled field is a type error and, at run time, a pydantic `ValidationError`. Passing a `GenerationRequest` and fields together raises `TypeError`.
-- **Stream helpers.** `stream(...)` yields a `GenerationStream`: iterate it for every shared event, or use `events.text()` for the text deltas only and `await events.final()` for the `CompletedEvent`, which carries the response's `id`, `model`, whole `text`, `usage` and why it stopped. `final()` reads the rest of the stream, and after `text()` or a loop it returns the `CompletedEvent` already read.
+- **Stream helpers.** `stream(...)` yields a `GenerationStream`: iterate it for every shared event, or use `events.text()` for the text deltas only and `await events.final()` for the `CompletedEvent`, which carries the response's `id`, `model`, whole `text`, `usage` and why it stopped. `final()` reads the rest of the stream, and after `text()` or a loop it returns the `CompletedEvent` already read. When a read failed (a provider's error event, a cut connection), every later read, `text()` and `final()` raise that same error again, never a misleading "ended without a CompletedEvent".
 - **Any provider.** `IGenerationClient[RawT = Any, RawItemT = Any]` (from `ai_api`) is a client with `generation`; every provider client matches it, so code typed with it takes any of them.
 - **A conversation is a list of turns.** `input` is a text, taken as one `user` turn, or a list of `Turn`s (`Turn.user(...)`, `Turn.assistant(...)`, or `response.to_turn()` for an earlier answer); the list must not be empty, and its last turn must be a `user` one. System prompts go in `instructions`, not in turns.
 - **A request a provider cannot take raises `RequestValidationError`** (from `ai_api`, a `ValueError`) before anything is sent, with the `provider` and the shared `field` at fault; a pydantic error behind it is its `__cause__`. Errors of `GenerationRequest` itself stay pydantic `ValidationError`s.
@@ -951,16 +1008,16 @@ What each shared field becomes for each provider, what is lost and when a reques
 - **OpenAI failures are raised.** A `failed` response raises the `APIStatusError` described under the Responses API, before the adapter sees it, in `create` and in `stream` alike. Any other buffered status that is not `completed` or `incomplete` (`cancelled`, `in_progress`, ...) raises `APIResponseError`, since there is no generated text to return.
 - **Anthropic mapping.** `AnthropicGenerationAdapter` (`ai_api.providers.anthropic.adapters`) sends a text `input` as one `user` turn, a list of turns as `messages`, and `instructions` as `system`. Anthropic requires `max_tokens`, so a request without `max_output_tokens` gets the client's `default_max_tokens` (`AnthropicClient(..., default_max_tokens=1024)`). Metadata other than `user_id` raises `RequestValidationError` instead of being dropped.
 - **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it (`cache_read_tokens`, `cache_write_tokens`), and `reasoning_tokens` are the thinking tokens. A `stop_reason` other than `end_turn` or `stop_sequence` stops the generation early, with the text kept: `max_tokens` is `MAX_TOKENS`, `refusal` is `REFUSAL` (with `stop_details.explanation`, else its `category`, in `refusal`) and any other is `OTHER`, with the `stop_reason` in `raw_incomplete_reason`. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a message without a `stop_reason` raises `APIResponseError`. Anthropic reports failures as `error` events, which are raised as `APIStatusError`.
-- **The end is checked for every provider.** `stream` yields exactly one `CompletedEvent`, as the last event: a stream that ends without it raises `APIStreamInterruptedError` (the provider method's terminal check usually raises it first), and an event after it raises `APIResponseError`. A failure is always an exception, never an event.
+- **The end is checked for every provider.** `stream` yields exactly one `CompletedEvent`, as the last event: a stream that ends without it raises `APIStreamInterruptedError` (the provider method's terminal check usually raises it first), and an event after it raises `APIResponseError`. When the provider's terminal proved the stream complete and the adapter still gave no `CompletedEvent`, the adapter lost it: that raises `RuntimeError` naming the adapter, not an interruption. A failure is always an exception, never an event.
 
 ### Adding a provider
 
 A provider is a flat package under `providers/<name>/`, built from the same parts as `providers/openai/`:
 
-1. **`api.py`**: its `IAPI`, usually `BaseAPI("https://api.provider.com", "v1")`.
-2. **`resolver.py`**: a `BaseErrorResolver` subclass with the provider's `provider` value, and `get_error_code` or `classify` for its error codes, such as which 429s are quota errors and which statuses are transient.
-3. **`client.py`**: a module-level `SessionFactory(AiohttpSession, auth_factory=..., api=..., error_resolver=...)` and a `BaseClient` subclass that accepts a token or a ready session.
-4. **`types/`, `methods/` and `adapters/`** subpackages with its first endpoints: response models, method classes, and adapters that map them to the shared types; its resources build `AdapterUseCase`s from those adapters.
+1. **`api.py`**: its `IAPI`, usually `BaseAPI("https://api.provider.com", "v1")`, and `PROVIDER: Final = Provider.<NAME>`, the one place the package names its provider. `Provider` is a closed enum, extended only inside the library together with a provider package; code outside the library uses `Provider.GENERIC`.
+2. **`resolver.py`**: a `BaseErrorResolver` subclass with `provider = PROVIDER`, the provider's `error_statuses` table (the status each in-band code or type stands for), and `get_error_code` or `classify_status` for its error codes, such as which 429s are quota errors and which statuses are transient.
+3. **`client.py`**: a module-level `SessionFactory(AiohttpSession, auth_factory=..., api=..., error_resolver=...)` and a `BaseProviderClient[Adapter]` subclass that sets `provider = PROVIDER`, `session_factory`, `api_key_env`, `auth_headers` (the headers the provider takes the key in) and `adapter_type`, types `**session_kwargs` in its `__init__`, and builds `generation` from `self.adapter_type(...)` after `super().__init__()`. The base class reads the token, the ready session or the environment variable, builds the session and warns about a given session that does not fit. The client, the factory's resolver and the adapter must name the same provider: a mismatch raises `TypeError` when the class is defined.
+4. **`types/`, `methods/` and `adapters/`** subpackages with its first endpoints: response models, method classes, and adapters that map them to the shared types (an adapter sets `provider = PROVIDER`; a concrete adapter without it raises `TypeError`); its resources build `AdapterUseCase`s from those adapters.
 
 The package `__init__.py` re-exports the client, which makes it the one `__init__` allowed to import a transport.
 
@@ -970,9 +1027,9 @@ Methods are specific to one provider. Resources and use cases are the layer abov
 
 - **Shared requests** (`ai_api.types.requests`): `BaseRequest`, which forbids unknown fields, and `GenerationRequest` (`model`, `input`, a text or a list of `Turn`s, `instructions`, `max_output_tokens`, `metadata`). `instructions` are given apart from the input, like a system prompt. It has no sampling parameters such as `temperature`: Anthropic removed them in API version `2026-10-21`, so they are not common to all providers.
 - **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage` (`TokenUsage`: input, output and total tokens, with the cached and reasoning tokens among them), `incomplete_reason` (why the provider stopped early, an `IncompleteReason`; `None` if it finished), `raw_incomplete_reason`, `refusal` and the provider's own response in `raw`, so nothing the shared type lacks is lost.
-- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
-- **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
-- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError`, an event after it `APIResponseError`.
+- **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `provider`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
+- **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`); its `provider` names the provider in the results and in the errors of the requests it refuses. `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
+- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError` (or `RuntimeError` when the provider method's `__stream_terminal__` proved the stream complete), an event after it `APIResponseError`.
 - **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(...)` and `stream(...)`, with keyword arguments or a request, typed by the adapter's raw types; `stream` yields a `GenerationStream` with `text()` and `final()`. `BaseResource` groups the use cases of any other area.
 
 ```python
@@ -1001,6 +1058,8 @@ class CompletionAdapter(
         GenerationEvent[MessageEvent],
     ]
 ):
+    provider = Provider.GENERIC           # a provider the library does not list
+
     def to_method(self, request: GenerationRequest) -> CreateCompletion:
         return CreateCompletion(
             model=request.model,
@@ -1014,7 +1073,7 @@ class CompletionAdapter(
     ) -> GenerationResponse[Completion]:
         return GenerationResponse[Completion](
             id=raw.id,
-            provider=Provider.GENERIC,
+            provider=self.provider,
             model=request.model,          # the API does not send it back
             text=raw.text,
             raw=raw,
@@ -1033,7 +1092,7 @@ class CompletionAdapter(
                 yield TextDeltaEvent[MessageEvent](text=event.text, raw=event)
             else:
                 yield CompletedEvent[MessageEvent](
-                    model=request.model, raw=event
+                    provider=self.provider, model=request.model, raw=event
                 )
 
 
@@ -1087,10 +1146,10 @@ Defaults that protect the API key and the request:
 - **Path injection.** Path parameters are percent-encoded, including `/`, and `.`, `..` and empty segments are rejected, so a parameter value cannot reach another endpoint. `base_url` and `version` are validated for the same reason.
 - **Leaking keys on redirects.** Redirects are off; when enabled, they never leave the origin of the request.
 - **Environment proxies.** Ignored unless `trust_env=True`.
-- **TLS.** Certificates are verified against the `certifi` CA bundle, the same on every operating system. A TLS failure raises `APITLSError`, which is not retried.
+- **TLS.** Certificates are verified against the `certifi` CA bundle, the same on every operating system. A certificate that fails verification raises `APITLSError`, which is not retried; a handshake that breaks off is an `APIConnectionError`, retried like other connection failures.
 - **Secrets in logs.** `BearerAuth` and `APIKeyAuth` keep the token out of `repr`, and reject whitespace that could inject another header.
 - **Untrusted servers.** `max_body_size`, `max_line_size` and `max_event_size` limit what is held in memory, and an SSE stream with another `Content-Type` is rejected instead of being read as empty.
-- **Invalid JSON values.** NaN and infinity are rejected rather than sent as `null`.
+- **Invalid values.** NaN and infinity are rejected in every part of the request, rather than sent as `null`, `nan` or `None`.
 
 ## Design decisions
 

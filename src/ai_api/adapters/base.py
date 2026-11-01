@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from typing import Any, ClassVar
 
+from ai_api.enums import Provider
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.types.requests.base import BaseRequest
 from ai_api.types.responses.base import BaseResponse
@@ -37,15 +39,76 @@ class BaseConversion[SourceT, TargetT](ABC):
         raise NotImplementedError
 
 
+def _is_abstract(cls: type) -> bool:
+    """Tell whether a class still has abstract methods.
+
+    ``ABCMeta`` sets ``__abstractmethods__`` only after
+    ``__init_subclass__`` has run, so it is computed here.
+
+    Args:
+        cls: The class being defined.
+
+    Returns:
+        ``True`` if a method of the class is still abstract.
+    """
+    names = set[str]().union(
+        *(getattr(base, "__abstractmethods__", ()) for base in cls.__mro__),
+        cls.__dict__,
+    )
+    return any(
+        getattr(getattr(cls, name, None), "__isabstractmethod__", False)
+        for name in names
+    )
+
+
+class _ProviderAdapter(ABC):  # noqa: B024 - its subclasses are abstract
+    """What every adapter has: the provider whose methods it builds.
+
+    A concrete adapter must set ``provider``, so the shared results it
+    builds, and the errors of the requests it refuses, name it; an
+    adapter outside the library, whose provider ``Provider`` does not
+    list, sets ``Provider.GENERIC``.
+
+    Attributes:
+        provider: The provider whose methods the adapter builds.
+    """
+
+    provider: ClassVar[Provider]
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Require ``provider`` on a concrete adapter.
+
+        Args:
+            **kwargs: Class keyword arguments.
+
+        Raises:
+            TypeError: If a class with no abstract method left does not
+                set ``provider`` to a ``Provider``.
+        """
+        super().__init_subclass__(**kwargs)
+
+        if _is_abstract(cls):
+            return
+
+        if not isinstance(getattr(cls, "provider", None), Provider):
+            message = (
+                f"{cls.__name__} must set provider to a Provider "
+                "(Provider.GENERIC for one the library does not list)"
+            )
+            raise TypeError(message)
+
+
 class BaseAdapter[
     ReqT: BaseRequest,
     RawT,
     RespT: BaseResponse,
-](ABC):
+](_ProviderAdapter):
     """Base class of adapters of requests answered at once.
 
     Example:
         >>> class ChatAdapter(BaseAdapter[GenerationRequest, Chat, Reply]):
+        ...     provider = Provider.GENERIC
+        ...
         ...     def to_method(self, request):
         ...         return CreateChat(model=request.model, ...)
         ...
@@ -83,7 +146,7 @@ class BaseStreamAdapter[
     ReqT: BaseRequest,
     RawItemT,
     EventT: BaseResponseEvent,
-](ABC):
+](_ProviderAdapter):
     """Base class of adapters of streamed requests.
 
     ``to_events`` is usually written as an async generator.

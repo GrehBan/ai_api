@@ -14,12 +14,14 @@ the library only once the snapshot is refreshed.
 
 from __future__ import annotations
 
+import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import Any, get_args
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -30,13 +32,19 @@ from ai_api.methods import BaseAPIMethod, BaseStreamMethod
 from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
 from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
 from ai_api.providers.anthropic.types import Message, MessageStreamEvent
+from ai_api.providers.anthropic.types import events as anthropic_events
+from ai_api.providers.anthropic.types import messages as anthropic_messages
 from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
 from ai_api.providers.openai.methods import CreateResponse, StreamResponse
 from ai_api.providers.openai.types import Response, ResponseStreamEvent
+from ai_api.providers.openai.types import events as openai_events
+from ai_api.providers.openai.types import responses as openai_responses
 from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.session.aiohttp import AiohttpSession
+from ai_api.types.base import BaseAPIType
 from ai_api.types.matchers import AnyOf, EventTypes
 from ai_api.types.requests import GenerationRequest, Turn
+from ai_api.types.unknown import BaseUnknown
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
 from tests.providers import test_openai_responses as openai
@@ -61,6 +69,7 @@ class Case:
         examples: The hand-written payloads of the other tests:
             responses and stream events.
         adapter: The shared generation adapter of the endpoint.
+        models: The modules of the endpoint's response and event models.
     """
 
     name: str
@@ -72,6 +81,7 @@ class Case:
     documented: dict[str, str]
     examples: tuple[list[dict[str, Any]], list[dict[str, Any]]]
     adapter: ICompositeAdapter[GenerationRequest, Any, Any, Any, Any]
+    models: tuple[ModuleType, ...]
 
 
 OPENAI = Case(
@@ -96,6 +106,7 @@ OPENAI = Case(
     documented={},
     examples=([openai.RESPONSE], openai.STREAM),
     adapter=OpenAIGenerationAdapter(),
+    models=(openai_responses, openai_events),
 )
 
 ANTHROPIC = Case(
@@ -125,6 +136,7 @@ ANTHROPIC = Case(
     },
     examples=([anthropic.MESSAGE], anthropic.STREAM),
     adapter=AnthropicGenerationAdapter(),
+    models=(anthropic_messages, anthropic_events),
 )
 
 CASES = [pytest.param(case, id=case.name) for case in (OPENAI, ANTHROPIC)]
@@ -397,3 +409,154 @@ def test_hand_written_examples_pass_the_schemas(case: Case) -> None:
         if body["type"] in case.documented:
             continue
         assert errors(event_schema, body) == [], body["type"]
+
+
+def upstream_definitions(name: str) -> dict[str, Any]:
+    """Collect the definitions of an endpoint's upstream schemas.
+
+    Args:
+        name: Snapshot folder, ``<provider>/<endpoint>``.
+
+    Returns:
+        Every ``$defs`` entry of the response and stream schemas, and
+        each root schema under its ``title`` (such as ``Response``).
+    """
+    definitions: dict[str, Any] = {}
+
+    for file in ("response.schema.json", "stream.schema.json"):
+        schema = load(name, file)
+        definitions.update(schema.get("$defs", {}))
+
+        if title := schema.get("title"):
+            definitions.setdefault(title, schema)
+
+    return definitions
+
+
+def resolve(node: Any, definitions: dict[str, Any]) -> Any:
+    """Follow a ``$ref`` to its definition.
+
+    Args:
+        node: A schema node.
+        definitions: The endpoint's definitions by name.
+
+    Returns:
+        The referenced definition, or the node itself.
+    """
+    while isinstance(node, dict) and "$ref" in node:
+        node = definitions[str(node["$ref"]).rsplit("/", 1)[-1]]
+    return node
+
+
+def allows_null(node: Any, definitions: dict[str, Any]) -> bool:
+    """Tell whether a schema node accepts ``null``.
+
+    Args:
+        node: A schema node.
+        definitions: The endpoint's definitions by name.
+
+    Returns:
+        Whether ``null`` is valid for the node.
+    """
+    node = resolve(node, definitions)
+
+    if not isinstance(node, dict):
+        return False
+
+    kind = node.get("type")
+
+    if kind == "null" or (isinstance(kind, list) and "null" in kind):
+        return True
+
+    return any(
+        allows_null(option, definitions)
+        for key in ("anyOf", "oneOf")
+        for option in node.get(key, [])
+    )
+
+
+def provider_models(case: Case) -> Iterator[type[BaseAPIType]]:
+    """Find the response and event models of an endpoint.
+
+    Args:
+        case: The endpoint.
+
+    Yields:
+        Every ``BaseAPIType`` subclass defined in the endpoint's model
+        modules, except the ``BaseUnknown`` ones, which keep whatever an
+        unknown ``type`` sends.
+    """
+    for module in case.models:
+        for _, model in inspect.getmembers(module, inspect.isclass):
+            if (
+                issubclass(model, BaseAPIType)
+                and model.__module__ == module.__name__
+                and not issubclass(model, BaseUnknown)
+            ):
+                yield model
+
+
+def upstream_names(model: type[BaseAPIType]) -> tuple[str, ...]:
+    """Read the upstream definitions a model declares it mirrors.
+
+    Args:
+        model: A provider model.
+
+    Returns:
+        The names; empty for a model without an upstream definition.
+    """
+    names = model.__dict__["__upstream_schema__"]
+    return (names,) if isinstance(names, str) else tuple(names)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_every_model_names_its_upstream_schema(case: Case) -> None:
+    definitions = upstream_definitions(case.name)
+    missing = [
+        model.__name__
+        for model in provider_models(case)
+        if "__upstream_schema__" not in model.__dict__
+    ]
+    unknown = [
+        f"{model.__name__}: {name}"
+        for model in provider_models(case)
+        if "__upstream_schema__" in model.__dict__
+        for name in upstream_names(model)
+        if name not in definitions
+    ]
+
+    assert not missing, f"set __upstream_schema__ on {missing}"
+    assert not unknown, f"no such upstream definition: {unknown}"
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_models_accept_what_upstream_allows(case: Case) -> None:
+    # Validation of examples sees only the values the docs happen to
+    # show; this compares every modeled field with the schema itself.
+    definitions = upstream_definitions(case.name)
+    problems: list[str] = []
+
+    for model in provider_models(case):
+        for name in upstream_names(model):
+            definition = resolve(definitions[name], definitions)
+            properties = definition.get("properties", {})
+            required = set(definition.get("required", []))
+
+            for field_name, field in model.model_fields.items():
+                wire = field.serialization_alias or field_name
+                where = f"{model.__name__}.{field_name} ({name}.{wire})"
+
+                if wire not in properties:
+                    problems.append(f"{where}: not in the upstream schema")
+                    continue
+
+                if allows_null(properties[wire], definitions) and not (
+                    field.annotation is Any
+                    or type(None) in get_args(field.annotation)
+                ):
+                    problems.append(f"{where}: upstream allows null")
+
+                if wire not in required and field.is_required():
+                    problems.append(f"{where}: optional upstream")
+
+    assert not problems, "\n".join(problems)

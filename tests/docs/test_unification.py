@@ -114,6 +114,7 @@ TAKEN_AS_IS = {
     "GenerationResponse.raw",
     "CompletedEvent.type",
     "CompletedEvent.id",
+    "CompletedEvent.provider",
     "CompletedEvent.model",
     "CompletedEvent.text",
     "CompletedEvent.raw",

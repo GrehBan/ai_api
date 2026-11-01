@@ -193,7 +193,7 @@ async def test_invalid_json_is_a_response_error(
         else b"{oops\n"
     )
 
-    with pytest.raises(APIResponseError, match="Failed to validate"):
+    with pytest.raises(APIResponseError, match="Failed to decode"):
         await collect(parse(Delta, response_format, [body]))
 
 
@@ -399,6 +399,17 @@ async def test_event_over_the_limit_is_a_response_error() -> None:
     with pytest.raises(APIResponseError, match="Event exceeds 100"):
         await collect(
             parser.parse(method, response, loads, BaseErrorResolver())
+        )
+
+
+def test_bad_charset_fails_when_the_stream_opens() -> None:
+    # As the Content-Type check of SSE: before the first item is awaited.
+    method = make_method(BaseStreamMethod[str])()
+    response = FakeStreamResponse([b"a"], charset="no-such-charset")
+
+    with pytest.raises(APIResponseError, match="Unknown response charset"):
+        StreamResponseParser().parse(
+            method, response, loads, BaseErrorResolver()
         )
 
 

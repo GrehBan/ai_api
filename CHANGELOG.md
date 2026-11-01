@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `IValueFormatter` and `BaseValueFormatter` (`ai_api`,
+  `ai_api.serialization`): a method's `__value_formatter__` (property
+  `value_formatter`, also on `IBaseMethod`) writes dates, times and
+  durations in every part of the request. The default is ISO 8601; an API
+  that wants another format overrides it on its base method, and one field
+  can use Pydantic's `PlainSerializer`.
+- `BaseProviderClient[AdapterT]` (`ai_api`, `ai_api.client`): what a
+  provider client shares, from its `provider`, `session_factory`,
+  `api_key_env`, `auth_headers` and `adapter_type`; `OpenAIClient` and
+  `AnthropicClient` are built on it. The client, its resolver and its
+  adapter must name one provider (`check_same_provider`), checked when
+  the class is defined. `ISessionFactory` is exported from `ai_api.client`
+  and has `error_resolver`.
+- `BaseErrorResolver.error_statuses` and `classify_status`: a provider
+  sets its table of in-band codes and types and overrides the
+  classification of a status; `classify` keeps an in-band failure
+  non-transient for every resolver.
+- `ContentTooLargeError` for HTTP 413 (Anthropic's `request_too_large`
+  was a plain `APIStatusError`).
+- `CompletedEvent.provider`, as on `GenerationResponse`; every adapter has
+  a `provider` (`PROVIDER` of its package, `Provider.GENERIC` outside the
+  library).
+- `Stream.items_received`: how many items a stream has given.
+  `transform_stream(..., stream_type=...)` yields a `Stream` subclass built
+  on the transformed items, which `GenerationResource` uses for its
+  `GenerationStream`.
+
 - Conversions: `ai_api.adapters.IConversion[SourceT, TargetT]` (a protocol
   of `__call__(source, /)`, so a plain function fits) and its ABC
   `BaseConversion`, for pure value conversions between a provider's types
@@ -43,6 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AiohttpSession` to the session built from the token, typed by
   `ai_api.session.aiohttp.AiohttpSessionOptions`; with `session=` they raise
   `ValueError`.
+- `BaseAPIType.__upstream_schema__`: the name of the upstream schema
+  definition a provider model mirrors (several names, or `()` for none).
+  `tests/providers/test_wire_contracts.py` requires it on every provider
+  model and checks each modeled field against that definition: it exists
+  upstream, accepts `null` where upstream does and is optional where
+  upstream is.
 - The root package re-exports the shared generation layer:
   `GenerationRequest`, `Turn`, `GenerationResponse`, `TokenUsage`,
   `TextDeltaEvent`, `CompletedEvent`, `OtherEvent`, `GenerationEvent`,
@@ -50,6 +83,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** a concrete adapter must set `provider`, and
+  `CompletedEvent` requires it.
+- **Breaking:** OpenAI's `ERROR_EVENTS` is `RESPONSE_ERROR_EVENTS`, so it
+  is not mistaken for the parser's default of the same name; the
+  module-level `warn_about_session` functions are now the classmethod
+  `BaseProviderClient.warn_about_session`, whose second warning names the
+  headers the provider takes.
+- Leaving a client's `async with` calls the session's `__aexit__`, as
+  entering calls its `__aenter__`, instead of `close()`.
+- **Breaking:** 529 is no longer transient in `BaseErrorResolver`: it is
+  Anthropic's own status, and `AnthropicErrorResolver` keeps classifying it
+  as a transient `ServiceUnavailableError`.
+- **Breaking:** only a certificate that fails verification
+  (`ClientConnectorCertificateError`, `ServerFingerprintMismatch`) raises
+  `APITLSError`; another SSL error, such as a handshake that breaks off, is
+  a transient `APIConnectionError`, retried as the official SDKs do.
+- **Breaking:** `Retry-After` is read as RFC 9110 defines it, whole seconds
+  in ASCII digits or an HTTP date. `1.5`, `-5` (which meant an immediate
+  retry) or `1e3` count as no header.
+- **Breaking:** `APIStatusError.provider` is a `Provider`,
+  `Provider.GENERIC` by default (it was typed `str | None` while the
+  resolvers passed the enum).
+- The session no longer turns a parser's `ValueError` into
+  `APIResponseError`: parsers raise `APIResponseError` themselves, so a
+  custom decoder's failure is `Failed to decode JSON response` and other
+  parser errors surface as they are. Invalid JSON is `Failed to decode`,
+  a body that does not match the model `Failed to validate`, in buffered
+  and streamed responses alike.
+- `RequestValidationError` lists every failing field of the provider's
+  method under its shared name (`max_output_tokens`, not `max_tokens`);
+  `field` stays the first one.
+- When a stream use case's source method declares `__stream_terminal__`
+  and the adapter gives no final event, the error is a `RuntimeError`
+  naming the adapter instead of `APIStreamInterruptedError`: the parser
+  proved the stream complete, so it was not cut.
+- `APIRedirectError`'s default message is `Redirect was not followed.`,
+  since it is also raised when redirects are off or lead to another origin.
+- **Breaking:** a datetime in a JSON or form body is sent in ISO 8601
+  (`"2026-01-02T03:04:05Z"`) instead of a Unix timestamp string, and a
+  timedelta as an ISO 8601 duration (`"PT30S"`) instead of the timestamp of
+  now plus the delta. Query and path values were already ISO 8601; a date
+  or time in the body goes through the same formatter. To keep Unix
+  seconds, set a `BaseValueFormatter` subclass as `__value_formatter__`.
+- **Breaking:** `IBodyBuilder.build` and `BodyNormalizer.normalize` /
+  `normalize_mapping` take the method's formatter; `AiohttpSession` passes
+  `method.value_formatter`.
+- Query, path and form values follow one rule (`scalar_text`): enums as
+  their values, booleans as `true`/`false`, dates through the formatter.
+  A naive datetime now raises `ValueError` in a query or path too, and a
+  value with no text form (such as a class) raises `TypeError`.
+- `BodyNormalizer.MAX_DEPTH` is 253, orjson's limit for a body field: a
+  field nested 254 to 256 levels deep raised the encoder's `TypeError`
+  instead of the documented `ValueError`.
+- A method without a body (`BodyFormat.NONE`, the default) whose field is
+  neither a path nor a query parameter raises `TypeError` at class
+  definition, instead of dropping the field from every request; the aiohttp
+  body builder refuses a non-empty body for `NONE` with `ValueError`.
+- OpenAI's `CreateResponse` and `StreamResponse` and Anthropic's
+  `CreateMessage` and `StreamMessage` set `__retryable__ = True`: transient
+  failures are retried (a stream only while it opens), as in the official
+  SDKs. Before, `client.generation` never retried.
+- `OpenAIErrorResolver` and `AnthropicErrorResolver`: a failure reported
+  after a 200 (OpenAI's `failed` response, `response.failed` or `error`
+  stream event, Anthropic's `error` stream event) is never transient; its
+  class is still picked by its code or type.
+- Values the request cannot express raise instead of being dropped or
+  mangled: `None` in a query list (`ValueError`), `None` in a form list
+  (`ValueError`) and a list inside a form list (`TypeError`, it was
+  flattened); a path parameter annotated as a list, set, dict or model
+  raises `TypeError` at class definition, and such a value in an `Any`
+  field when the request is built (it was sent as its Python `repr`).
+- Checks moved to class definition: a buffered method whose generic
+  argument is not a class (`list[Model]`, a union) and a `BYTES`/`TEXT`
+  stream with `__stream_terminal__` raise `TypeError` unless the method
+  sets its own parser. Before, the first failed after the request was sent
+  and the second was ignored. A `TEXT` stream checks its charset when it
+  opens, like the `Content-Type` of SSE, instead of on the first item.
+- `IOFile` over a non-blocking stream with no data ready raises
+  `BlockingIOError` (sent as `APIRequestError`) instead of sending a
+  truncated file.
+- `AiohttpSession` builds the session's headers for every request instead
+  of copying them into the connection pool once, so a header added after
+  the first request is sent.
 - `generation.stream(...)` yields a `GenerationStream`, a `Stream` subclass,
   instead of a plain `Stream`.
 - `CompletedEvent.model` is required: an adapter that builds the event
@@ -59,6 +175,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cumulative `message_delta` counts) and `MessageDelta` for the final
   `CompletedEvent`. A stream without `message_start`, or with counts before
   it, now raises `APIResponseError` instead of reporting partial counts.
+
+### Fixed
+
+- An OpenAI quota error reported inside a stream (`insufficient_quota`
+  and the other quota codes) is a `QuotaExceededError`, as over HTTP 429,
+  instead of a plain `APIStatusError`.
+- `OpenAIErrorResolver` recognizes a failed `Response` by its status
+  alone, as the parser does, so one without `object` keeps its error.
+- After a failed read, `GenerationStream.final()` raises the original
+  error again instead of `APIStreamInterruptedError: ended without a
+  CompletedEvent`; later reads and `text()` do the same instead of ending
+  quietly.
+- NaN and infinity raise `ValueError` in every part of the request: a
+  `float` path parameter was sent as `nan`, a NaN in an `Any` query field
+  as the string `None`, and a form field as `nan`.
+- A nested model passed to the normalizer is dumped by alias, so its wire
+  names are kept, and enum dict keys are sent as their values (orjson
+  rejected them). Keys that give the same value raise `ValueError`.
+- A text stream in a body raises a clear `TypeError` in the normalizer
+  instead of a message about binary data from the body builder.
+- `OutputText.logprobs` accepts `null`, which OpenAI sends when log
+  probabilities were not requested; such a response failed validation.
 
 ### Removed
 

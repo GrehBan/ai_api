@@ -36,6 +36,12 @@ class IResponseParser(Protocol):
 
         Returns:
             The parsed result.
+
+        Raises:
+            APIResponseError: If the body cannot be decoded or validated.
+                The session does not wrap other errors, so a parser
+                reports a bad body this way itself.
+            APIStatusError: If the result reports a failure.
         """
         ...
 
@@ -61,6 +67,8 @@ class IStreamParser(Protocol):
                 reported inside the stream.
 
         Returns:
-            An iterator over the stream's items.
+            An iterator over the stream's items. It raises
+            ``APIResponseError`` for an item that cannot be decoded or
+            validated, and ``APIStatusError`` for an error event.
         """
         ...

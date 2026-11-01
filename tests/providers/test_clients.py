@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from types import TracebackType
 from typing import Any
 
 import pytest
@@ -195,6 +196,34 @@ def test_other_sessions_are_not_checked() -> None:
     assert client.session is session
 
 
+class ContextSession(FakeTransport):
+    """Records what its ``__aexit__`` was given."""
+
+    exited: tuple[Any, ...] | None = None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.exited = (exc_type, exc_value, traceback)
+        await self.close()
+
+
+async def test_leaving_the_client_leaves_the_session() -> None:
+    session = ContextSession()
+    client = BaseClient(session)
+    error = ValueError("in the block")
+
+    with pytest.raises(ValueError, match="in the block"):
+        async with client:
+            raise error
+
+    assert session.exited is not None
+    assert session.exited[1] is error
+
+
 def test_openai_quota_error_is_not_retried() -> None:
     error = OpenAIErrorResolver().resolve(
         status=429,
@@ -205,6 +234,24 @@ def test_openai_quota_error_is_not_retried() -> None:
     assert type(error) is QuotaExceededError
     assert error.transient is False
     assert error.provider is Provider.OPENAI
+
+
+def test_openai_failed_response_is_read_without_its_object_field() -> None:
+    # The same rule as the parser's FAILED_RESPONSE: status alone.
+    error = OpenAIErrorResolver().resolve(
+        status=200,
+        body={
+            "id": "resp_1",
+            "status": "failed",
+            "error": {"code": "server_error", "message": "Boom"},
+        },
+        headers={},
+    )
+
+    assert type(error) is InternalServerError
+    assert error.code == "server_error"
+    assert "Boom" in str(error)
+    assert error.transient is False
 
 
 def test_openai_rate_limit_falls_back_to_the_default() -> None:
@@ -243,33 +290,32 @@ def test_openai_exhausted_limits_are_quota_errors(
 
 
 @pytest.mark.parametrize(
-    ("body", "error_class", "transient"),
+    ("body", "error_class"),
     [
         (
             {"type": "error", "code": "server_is_overloaded"},
             ServiceUnavailableError,
-            True,
         ),
-        ({"type": "error", "code": "server_error"}, InternalServerError, True),
+        ({"type": "error", "code": "server_error"}, InternalServerError),
         (
             {"error": {"type": "invalid_request_error", "code": None}},
             BadRequestError,
-            False,
         ),
-        ({"type": "error", "code": "ERR_SOMETHING"}, APIStatusError, False),
+        ({"type": "error", "code": "ERR_SOMETHING"}, APIStatusError),
     ],
     ids=["overloaded", "server", "type", "unknown"],
 )
 def test_openai_stream_error_is_classified_by_code_or_type(
     body: dict[str, Any],
     error_class: type[APIStatusError],
-    transient: bool,
 ) -> None:
     resolved = OpenAIErrorResolver().resolve(status=200, body=body, headers={})
 
     assert type(resolved) is error_class
     assert resolved.status == 200
-    assert resolved.transient is transient
+    # The generation ran and failed: running it again is the caller's
+    # choice, so an in-band failure is never transient.
+    assert resolved.transient is False
 
 
 def test_factory_turns_a_token_into_auth_and_forwards_arguments() -> None:

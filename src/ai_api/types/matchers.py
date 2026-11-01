@@ -293,10 +293,12 @@ class _Done(BaseMatcher):
 
 
 DONE: Final = _Done()
-"""Matches ``data: [DONE]``: the terminal of OpenAI Chat Completions.
+"""Matches ``data: [DONE]``, the SSE convention for the end of a stream.
 
-There a usage chunk may follow the chunk with ``finish_reason``, so only
-``[DONE]`` ends the stream.
+Some streaming APIs send a ``[DONE]`` line instead of a typed last event;
+declaring ``DONE`` as ``__stream_terminal__`` makes a stream that ends
+without it an interrupted one. Neither the Responses nor the Messages API
+uses it.
 """
 
 

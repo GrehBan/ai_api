@@ -62,12 +62,14 @@ class BufferedResponseParser:
 
         Raises:
             APIStatusError: If ``error_responses`` matches the result.
-            APIResponseError: If the body is not valid JSON or fails
-                validation, fails decoding, or is not empty when NONE is
-                expected.
+            APIResponseError: If the body is not valid JSON (also for a
+                custom decoder), fails validation, cannot be decoded as
+                text, or is not empty when NONE is expected. The parser
+                raises it itself, so the session passes any other error
+                on as the bug it is.
             TypeError: If a JSON method has no model response type.
-            ValueError: If a custom decoder rejects the body or the format
-                is not supported for buffered responses.
+            ValueError: If the format is not supported for buffered
+                responses.
         """
         raw = response.body
 
@@ -82,16 +84,12 @@ class BufferedResponseParser:
                 # Python mode rejects for strict fields (dates, UUIDs and
                 # enums as strings), so it is used whenever the decoder is
                 # the default one. A custom decoder needs Python mode.
-                try:
-                    if json_loads is loads:
-                        result = model_type.model_validate_json(raw)
-                    else:
-                        result = model_type.model_validate(json_loads(raw))
-                except ValidationError as exc:
-                    raise APIResponseError(
-                        "Failed to validate JSON response",
-                        status=response.status,
-                    ) from exc
+                if json_loads is loads:
+                    result = _validate_json(model_type, response)
+                else:
+                    result = _validate_python(
+                        model_type, _decode(response, json_loads), response
+                    )
 
                 if self._error_responses is not None and (
                     self._error_responses.matches(result)
@@ -160,3 +158,83 @@ class BufferedResponseParser:
         )
         error.raw = result
         return error
+
+
+def _validate_json[M: BaseModel](
+    model_type: type[M],
+    response: BufferedResponse,
+) -> M:
+    """Validate the body as JSON with Pydantic's own decoder.
+
+    Args:
+        model_type: The model of the response.
+        response: The successful response.
+
+    Returns:
+        The validated model.
+
+    Raises:
+        APIResponseError: If the body is not valid JSON (``Failed to
+            decode``) or does not match the model (``Failed to
+            validate``).
+    """
+    try:
+        return model_type.model_validate_json(response.body)
+    except ValidationError as exc:
+        invalid_json = any(
+            error["type"] == "json_invalid" for error in exc.errors()
+        )
+        action = "decode" if invalid_json else "validate"
+        raise APIResponseError(
+            f"Failed to {action} JSON response",
+            status=response.status,
+        ) from exc
+
+
+def _decode(response: BufferedResponse, json_loads: JsonLoads) -> Any:
+    """Decode the body with a custom decoder.
+
+    Args:
+        response: The successful response.
+        json_loads: The session's decoder.
+
+    Returns:
+        The decoded JSON.
+
+    Raises:
+        APIResponseError: If the decoder rejects the body.
+    """
+    try:
+        return json_loads(response.body)
+    except ValueError as exc:  # UnicodeError included
+        raise APIResponseError(
+            "Failed to decode JSON response",
+            status=response.status,
+        ) from exc
+
+
+def _validate_python[M: BaseModel](
+    model_type: type[M],
+    body: Any,
+    response: BufferedResponse,
+) -> M:
+    """Validate a decoded body in Python mode.
+
+    Args:
+        model_type: The model of the response.
+        body: The decoded JSON.
+        response: The successful response.
+
+    Returns:
+        The validated model.
+
+    Raises:
+        APIResponseError: If the body does not match the model.
+    """
+    try:
+        return model_type.model_validate(body)
+    except ValidationError as exc:
+        raise APIResponseError(
+            "Failed to validate JSON response",
+            status=response.status,
+        ) from exc

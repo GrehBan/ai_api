@@ -68,6 +68,7 @@ Server tool use, service tier, speed and inference region (Anthropic) and tool u
 | --- | --- | --- | --- |
 | `CompletedEvent.type` | `GenerationEventType.COMPLETED` | `GenerationEventType.COMPLETED` | — |
 | `CompletedEvent.id` | `response.id` of the terminal event | `message.id` of `message_start` | — |
+| `CompletedEvent.provider` | `Provider.OPENAI` | `Provider.ANTHROPIC` | The adapter's `provider`, as for `GenerationResponse.provider`. |
 | `CompletedEvent.model` | `response.model` of the terminal event | `message.model` of `message_start` | A stream without `message_start` raises `APIResponseError`. |
 | `CompletedEvent.text` | As `GenerationResponse.text`, from the event's `response` | The `text_delta`s joined | `None` without text. |
 | `CompletedEvent.usage` | As `GenerationResponse.usage`, from the event's `response` | As `GenerationResponse.usage` | — |

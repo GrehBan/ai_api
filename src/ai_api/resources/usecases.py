@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager
+from typing import Any
 
 from ai_api.adapters.protocols import (
     IAdapter,
@@ -109,6 +110,9 @@ async def _respond[ReqT: BaseRequest, RawT, RespT: BaseResponse](
 async def _terminated[EventT](
     events: AsyncIterator[EventT],
     terminal: IEventMatcher,
+    *,
+    source_checked: bool,
+    adapter: object,
 ) -> AsyncGenerator[EventT]:
     """Enforce the shared contract of a converted stream.
 
@@ -119,13 +123,22 @@ async def _terminated[EventT](
     Args:
         events: The converted events.
         terminal: Recognizes the final event.
+        source_checked: Whether the provider's method declares a
+            ``__stream_terminal__``: its parser then proved the source
+            complete, so a missing final event is the adapter's fault.
+        adapter: The adapter that converted the events, named in the
+            error.
 
     Yields:
         The events, unchanged.
 
     Raises:
         APIResponseError: If an event comes after the final one.
-        APIStreamInterruptedError: If the events end without it.
+        RuntimeError: If the events end without it although the source
+            was complete: the adapter lost it.
+        APIStreamInterruptedError: If the events end without it and the
+            source has no terminal to prove it complete, so it may have
+            been cut.
     """
     ended = False
     received = 0
@@ -141,6 +154,11 @@ async def _terminated[EventT](
             received += 1
             yield event
 
+        if not ended and source_checked:
+            name = type(adapter).__name__
+            message = f"{name} ended a complete stream without its final event"
+            raise RuntimeError(message)
+
         if not ended:
             raise APIStreamInterruptedError(
                 "Stream ended before its final event",
@@ -152,13 +170,22 @@ async def _terminated[EventT](
             await events.aclose()
 
 
-def _open[ReqT: BaseRequest, RawItemT, EventT: BaseResponseEvent](
+def open_adapted_stream[
+    ReqT: BaseRequest,
+    RawItemT,
+    EventT: BaseResponseEvent,
+    S: Stream[Any],
+](
     session: ISession,
     adapter: IStreamAdapter[ReqT, RawItemT, EventT],
     request: ReqT,
     terminal: IEventMatcher | None,
-) -> AbstractAsyncContextManager[Stream[EventT]]:
+    stream_type: Callable[[AsyncIterator[EventT]], S],
+) -> AbstractAsyncContextManager[S]:
     """Open the adapted stream method and convert its items.
+
+    The stream use cases open their streams with it, and so does
+    ``GenerationResource``, which asks for a ``GenerationStream``.
 
     Args:
         session: The session that sends the method.
@@ -166,11 +193,13 @@ def _open[ReqT: BaseRequest, RawItemT, EventT: BaseResponseEvent](
         request: The request in shared types.
         terminal: Recognizes the final event of the converted stream;
             ``None`` checks nothing.
+        stream_type: The ``Stream`` class of the converted events.
 
     Returns:
         A context manager that yields the events and closes both streams
         on exit.
     """
+    method = adapter.to_stream_method(request)
 
     def events(items: AsyncIterator[RawItemT]) -> AsyncIterator[EventT]:
         """Convert the items of this request's stream.
@@ -186,11 +215,17 @@ def _open[ReqT: BaseRequest, RawItemT, EventT: BaseResponseEvent](
         if terminal is None:
             return converted
 
-        return _terminated(converted, terminal)
+        return _terminated(
+            converted,
+            terminal,
+            source_checked=method.stream_terminal is not None,
+            adapter=adapter,
+        )
 
     return transform_stream(
-        session.stream(adapter.to_stream_method(request)),
+        session.stream(method),
         events,
+        stream_type=stream_type,
     )
 
 
@@ -288,7 +323,9 @@ class AdapterStreamUseCase[
             A context manager that yields the events and closes the
             converted and the provider's stream on exit.
         """
-        return _open(self.session, self.adapter, request, self.terminal)
+        return open_adapted_stream(
+            self.session, self.adapter, request, self.terminal, Stream
+        )
 
 
 class AdapterCompositeUseCase[
@@ -300,6 +337,13 @@ class AdapterCompositeUseCase[
     SessionT: ISession = ISession,
 ](BaseCompositeUseCase[ReqT, RespT, EventT, SessionT]):
     """A use case that orchestrates one adapter both ways.
+
+    It repeats the constructor and the delegation of ``AdapterUseCase``
+    and ``AdapterStreamUseCase`` on purpose: the logic is already shared
+    in ``_respond`` and ``open_adapted_stream``, and inheriting from both
+    would tie two generic signatures with different type parameters
+    together, which type checkers and readers follow worse than a few
+    repeated lines.
 
     Attributes:
         adapter: Converts the request, the response and the stream items.
@@ -351,4 +395,6 @@ class AdapterCompositeUseCase[
             A context manager that yields the events and closes the
             converted and the provider's stream on exit.
         """
-        return _open(self.session, self.adapter, request, self.terminal)
+        return open_adapted_stream(
+            self.session, self.adapter, request, self.terminal, Stream
+        )

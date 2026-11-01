@@ -6,7 +6,7 @@ from typing import Annotated, Final, Literal
 
 from pydantic import Field
 
-from ai_api.enums import GenerationEventType, IncompleteReason
+from ai_api.enums import GenerationEventType, IncompleteReason, Provider
 from ai_api.types.base import BaseAPIType
 from ai_api.types.matchers import EventTypes
 from ai_api.types.responses.generation import TokenUsage
@@ -54,6 +54,8 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
     Attributes:
         type: Always ``GenerationEventType.COMPLETED``.
         id: The provider's id of the response, if it has one.
+        provider: Provider that generated the response, as on
+            ``GenerationResponse``.
         model: The model that generated the response.
         text: The whole generated text, or ``None`` without text.
         usage: Token counts, if reported.
@@ -70,6 +72,7 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
         GenerationEventType.COMPLETED
     )
     id: str | None = None
+    provider: Provider
     model: str
     text: str | None = None
     usage: TokenUsage | None = None

@@ -22,10 +22,13 @@ TRANSIENT_STATUSES: Final[frozenset[int]] = frozenset(
         HTTPStatus.BAD_GATEWAY,
         HTTPStatus.SERVICE_UNAVAILABLE,
         HTTPStatus.GATEWAY_TIMEOUT,
-        529,  # Overloaded (Anthropic).
     }
 )
-"""Statuses whose errors are worth retrying."""
+"""Statuses whose errors are worth retrying.
+
+Only standard statuses; a provider's own, such as Anthropic's 529
+(overloaded), is classified by its resolver.
+"""
 
 
 def _optional_str(value: Any) -> str | None:
@@ -45,14 +48,25 @@ class BaseErrorResolver:
 
     The body is expected in the common ``{"error": {"code", "type",
     "message"}}`` shape; a string ``error`` (as Ollama sends) is taken as
-    the message. Provider-specific resolvers subclass this and override
-    ``provider``, ``get_error_code`` or ``classify``.
+    the message. Provider-specific resolvers subclass this and set
+    ``provider`` and ``error_statuses``, and override ``get_error_code``
+    or ``classify_status`` where the provider differs.
+
+    A failure reported with a status below 400 (a stream's error event,
+    a result that says it failed) is in-band: it is classified by the
+    status ``error_statuses`` gives its code, else its type, and it is
+    never transient, whatever its class. The generation ran and failed;
+    running it again is the caller's choice, as in the official SDKs,
+    which retry by the HTTP status only.
 
     Attributes:
         provider: Provider recorded on the created errors.
+        error_statuses: HTTP status that each in-band error code or type
+            stands for; empty by default.
     """
 
     provider: ClassVar[Provider] = Provider.GENERIC
+    error_statuses: ClassVar[Mapping[str, int]] = {}
 
     def resolve(
         self,
@@ -138,12 +152,57 @@ class BaseErrorResolver:
     ) -> tuple[type[APIStatusError], bool]:
         """Choose the error class and whether the error is transient.
 
-        The default maps the status through ``HTTP_ERRORS`` and treats
-        timeouts, server errors and 529 (overloaded) as transient, and
-        429 (rate limit) when the API said when to retry.
+        An in-band failure (a status below 400) is first given the status
+        ``error_statuses`` lists for its code, else for its type, and is
+        never transient; then ``classify_status`` decides.
 
         Args:
             status: HTTP status code of the response.
+            code: Provider error code.
+            error_type: Provider error type.
+            message: Provider error message.
+            retry_after: Seconds from the ``Retry-After`` header.
+
+        Returns:
+            The ``APIStatusError`` subclass to instantiate and the
+            transient flag.
+        """
+        in_band = status < HTTPStatus.BAD_REQUEST
+
+        if in_band:
+            status = self.error_statuses.get(
+                code or "", self.error_statuses.get(error_type or "", status)
+            )
+
+        error_class, transient = self.classify_status(
+            status=status,
+            code=code,
+            error_type=error_type,
+            message=message,
+            retry_after=retry_after,
+        )
+        return error_class, transient and not in_band
+
+    def classify_status(
+        self,
+        *,
+        status: int,
+        code: str | None,
+        error_type: str | None,
+        message: str | None,
+        retry_after: float | None,
+    ) -> tuple[type[APIStatusError], bool]:
+        """Choose the error class and transience of an HTTP status.
+
+        The default maps the status through ``HTTP_ERRORS`` and treats
+        timeouts and server errors (``TRANSIENT_STATUSES``) as transient,
+        and 429 (rate limit) when the API said when to retry. A provider
+        overrides it for its own codes; ``classify`` keeps an in-band
+        failure non-transient whatever it returns.
+
+        Args:
+            status: HTTP status code, for an in-band failure the one its
+                code or type stands for.
             code: Provider error code.
             error_type: Provider error type.
             message: Provider error message.

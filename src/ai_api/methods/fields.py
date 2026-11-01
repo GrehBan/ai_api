@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import io
 import types
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import (
+    TYPE_CHECKING,
     Any,
+    Final,
     Union,
     get_args,
     get_origin,
@@ -14,7 +16,14 @@ from typing import (
 
 from pydantic import BaseModel
 
+from ai_api.serialization.values import scalar_text
 from ai_api.types.files import InputFile, IOFile
+
+if TYPE_CHECKING:
+    from ai_api.serialization.protocols import IValueFormatter
+
+_SEQUENCES: Final = (list, tuple, set, frozenset)
+"""Values sent as a repeated query key."""
 
 
 def is_mapping_type(annotation: Any) -> bool:
@@ -39,45 +48,88 @@ def is_mapping_type(annotation: Any) -> bool:
     )
 
 
-def _query_item(name: str, value: Any) -> str:
+def is_container_type(annotation: Any) -> bool:
+    """Check whether a field annotation allows containers.
+
+    Args:
+        annotation: The annotation of a field, unions included.
+
+    Returns:
+        ``True`` if the annotation or a member of its union is a mapping,
+        a Pydantic model or a collection such as ``list`` or ``set``;
+        strings and bytes are scalars.
+    """
+    origin = get_origin(annotation)
+
+    if origin in {Union, types.UnionType}:
+        return any(is_container_type(arg) for arg in get_args(annotation))
+
+    if is_mapping_type(annotation):
+        return True
+
+    target = origin or annotation
+
+    return (
+        isinstance(target, type)
+        and issubclass(target, Collection)
+        and not issubclass(target, (str, bytes, bytearray))
+    )
+
+
+def _query_item(name: str, value: Any, formatter: IValueFormatter) -> str:
     """Convert one dumped query value to a string.
 
     Args:
         name: The parameter name, for error messages.
-        value: A JSON-mode dump of the value.
+        value: A Python-mode dump of the value.
+        formatter: Writes the dates, times and durations.
 
     Returns:
-        The value as a string; booleans as ``"true"``/``"false"``.
+        The value as a string, by the rule of ``scalar_text``.
 
     Raises:
         TypeError: If the value is an object or a nested list.
+        ValueError: If the value is NaN or infinite, or the formatter
+            rejects it.
     """
-    if isinstance(value, (dict, list)):
+    if isinstance(value, (Mapping, *_SEQUENCES)):
         raise TypeError(
             f"Query parameter {name!r} must be a scalar or a list of scalars"
         )
 
-    return str(value).lower() if isinstance(value, bool) else str(value)
+    return scalar_text(value, formatter, label=f"Query parameter {name!r}")
 
 
-def query_value(name: str, value: Any) -> str | list[str]:
+def query_value(
+    name: str,
+    value: Any,
+    formatter: IValueFormatter,
+) -> str | list[str]:
     """Convert a dumped query field to a string or a list of strings.
 
     Args:
         name: The parameter name, for error messages.
-        value: A JSON-mode dump of the field.
+        value: A Python-mode dump of the field.
+        formatter: Writes the dates, times and durations.
 
     Returns:
-        A string, or a list of strings sent as repeated keys; ``None``
-        items are dropped.
+        A string, or a list of strings sent as repeated keys.
 
     Raises:
         TypeError: If the value is an object or contains one.
+        ValueError: If a list contains ``None``, which a repeated key
+            cannot express (dropping it would shift the other items), a
+            value is NaN or infinite, or the formatter rejects one.
     """
-    if isinstance(value, list):
-        return [_query_item(name, item) for item in value if item is not None]
+    if isinstance(value, _SEQUENCES):
+        if any(item is None for item in value):
+            raise ValueError(
+                f"Query parameter {name!r} cannot send None in a list"
+            )
 
-    return _query_item(name, value)
+        return [_query_item(name, item, formatter) for item in value]
+
+    return _query_item(name, value, formatter)
 
 
 def wrap_streams(value: Any) -> Any:

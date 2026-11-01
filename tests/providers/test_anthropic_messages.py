@@ -348,7 +348,7 @@ async def test_error_event_raises_by_its_type() -> None:
                 pass
 
     assert caught.value.error_type == "overloaded_error"
-    assert caught.value.transient is True
+    assert caught.value.transient is False
     assert "Overloaded" in str(caught.value)
 
 

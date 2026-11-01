@@ -9,7 +9,9 @@ import sys
 from typing import Any, ClassVar
 
 import pytest
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from ai_api.adapters.validation import request_errors
 from ai_api.enums import Provider
 from ai_api.exceptions import AIAPIError, RequestValidationError
 from ai_api.http.exceptions import status as http_errors
@@ -74,7 +76,7 @@ def test_api_error_keeps_all_attributes() -> None:
         message="teapot",
         code="tea",
         error_type="kitchen",
-        provider="openai",
+        provider=Provider.OPENAI,
         request_id="req-1",
         retry_after=1.5,
         transient=True,
@@ -83,7 +85,7 @@ def test_api_error_keeps_all_attributes() -> None:
     assert error.status == 418
     assert error.code == "tea"
     assert error.error_type == "kitchen"
-    assert error.provider == "openai"
+    assert error.provider is Provider.OPENAI
     assert error.request_id == "req-1"
     assert error.retry_after == 1.5
     assert error.transient is True
@@ -96,7 +98,7 @@ def test_api_error_defaults() -> None:
     assert error.transient is False
     assert error.code is None
     assert error.error_type is None
-    assert error.provider is None
+    assert error.provider is Provider.GENERIC
     assert error.request_id is None
     assert error.retry_after is None
     assert error.message == ""
@@ -110,6 +112,7 @@ EXPECTED_HTTP_ERRORS = {
     404: http_errors.NotFoundError,
     408: http_errors.RequestTimeoutError,
     409: http_errors.ConflictError,
+    413: http_errors.ContentTooLargeError,
     422: http_errors.UnprocessableEntityError,
     429: http_errors.RateLimitError,
     500: http_errors.InternalServerError,
@@ -202,6 +205,44 @@ def test_response_error_keeps_status() -> None:
 def test_response_error_is_not_a_transport_error() -> None:
     assert not issubclass(APIResponseError, APITransportError)
     assert issubclass(APIResponseError, AIAPIError)
+
+
+class Limited(BaseModel):
+    max_tokens: int = Field(gt=0)
+    note: str = ""
+
+    @model_validator(mode="after")
+    def check(self) -> Limited:
+        if self.note == "whole":
+            raise ValueError("the method as a whole is wrong")
+        return self
+
+
+def test_request_errors_use_the_shared_names() -> None:
+    with (
+        pytest.raises(RequestValidationError) as caught,
+        request_errors(Provider.OPENAI, {"max_tokens": "max_output_tokens"}),
+    ):
+        Limited(max_tokens=0, note=5)  # type: ignore[arg-type]
+
+    message = str(caught.value)
+    assert caught.value.field == "max_output_tokens"
+    assert "max_output_tokens: Input should be greater than 0" in message
+    assert "note: Input should be a valid string" in message
+    assert isinstance(caught.value.__cause__, ValidationError)
+
+
+def test_request_error_of_the_whole_method_has_no_location() -> None:
+    with (
+        pytest.raises(RequestValidationError) as caught,
+        request_errors(Provider.ANTHROPIC),
+    ):
+        Limited(max_tokens=1, note="whole")
+
+    assert caught.value.field == ""
+    assert str(caught.value).endswith(
+        "detail: Value error, the method as a whole is wrong"
+    )
 
 
 def test_request_validation_error_names_provider_and_field() -> None:
@@ -315,7 +356,7 @@ def test_errors_survive_pickle_and_copy(error: Any, clone: Any) -> None:
 @pytest.mark.parametrize(
     ("error", "message"),
     [
-        (APIRedirectError(), "Too many redirects."),
+        (APIRedirectError(), "Redirect was not followed."),
         (APIRequestError(), "Failed to send the request."),
     ],
     ids=["redirect", "request"],

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         IResponseParser,
         IStreamParser,
     )
+    from ai_api.serialization.protocols import IValueFormatter
     from ai_api.types.protocols import IEventMatcher
 
 
@@ -45,6 +46,11 @@ class IBaseMethod[ResponseT](Protocol):
     @property
     def request_body_format(self) -> BodyFormat:
         """Encoding of the request body."""
+        ...
+
+    @property
+    def value_formatter(self) -> IValueFormatter:
+        """Writes the dates, times and durations of the request."""
         ...
 
     @property

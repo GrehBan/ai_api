@@ -14,9 +14,11 @@ from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import (
     HTTP_ERRORS,
     APIStatusError,
+    BadRequestError,
     NotFoundError,
     QuotaExceededError,
     RateLimitError,
+    ServiceUnavailableError,
 )
 from ai_api.http.headers import get_header, parse_retry_after
 from tests.conftest import NOW
@@ -61,9 +63,14 @@ def _http_date(moment: datetime.datetime) -> str:
     ("value", "expected"),
     [
         ("120", 120.0),
-        ("1.5", 1.5),
+        (" 7 ", 7.0),
+        ("1.5", None),
         ("0", 0.0),
-        ("-5", 0.0),
+        ("-5", None),
+        ("+5", None),
+        ("1e3", None),
+        ("1_0", None),
+        ("\u0663", None),
         ("inf", None),
         ("nan", None),
         ("soon", None),
@@ -71,9 +78,14 @@ def _http_date(moment: datetime.datetime) -> str:
     ],
     ids=[
         "seconds",
+        "spaces",
         "fraction",
         "zero",
         "negative",
+        "plus",
+        "exponent",
+        "underscore",
+        "arabic-digit",
         "inf",
         "nan",
         "garbage",
@@ -217,7 +229,7 @@ def test_resolve_request_id_order(
         (502, HTTP_ERRORS[502], True),
         (503, HTTP_ERRORS[503], True),
         (504, HTTP_ERRORS[504], True),
-        (529, APIStatusError, True),
+        (529, APIStatusError, False),
         (418, APIStatusError, False),
         (599, APIStatusError, False),
     ],
@@ -260,18 +272,70 @@ def test_rate_limit_is_transient_with_retry_after(
 
 
 def test_resolve_uses_classification() -> None:
+    error = resolve(503)
+
+    assert type(error) is ServiceUnavailableError
+    assert error.transient is True
+
+
+class TableResolver(BaseErrorResolver):
+    """A provider that only sets its table, as the library's do."""
+
+    error_statuses = {"busy": 503, "slow_down": 429, "bad_input": 400}
+
+
+@pytest.mark.parametrize(
+    ("code", "error_type", "expected"),
+    [
+        ("busy", None, ServiceUnavailableError),
+        (None, "slow_down", RateLimitError),
+        ("busy", "bad_input", ServiceUnavailableError),
+        ("unknown", "bad_input", BadRequestError),
+        ("unknown", None, APIStatusError),
+    ],
+    ids=["code", "type", "code-first", "type-fallback", "unmapped"],
+)
+def test_in_band_failure_takes_the_status_of_its_code_or_type(
+    code: str | None,
+    error_type: str | None,
+    expected: type[APIStatusError],
+) -> None:
+    error = TableResolver().resolve(
+        status=200,
+        body={"error": {"code": code, "type": error_type}},
+        headers={"Retry-After": "1"},
+    )
+
+    assert type(error) is expected
+    assert error.status == 200
+    # The generation ran: never retried, even as a 503 or a 429.
+    assert error.transient is False
+
+
+def test_the_table_is_ignored_for_an_error_status() -> None:
+    error = TableResolver().resolve(
+        status=404, body={"error": {"code": "busy"}}, headers={}
+    )
+
+    assert type(error) is NotFoundError
+
+
+def test_529_is_left_to_the_provider_resolver() -> None:
+    # Not a standard status; Anthropic's resolver classifies it.
     error = resolve(529)
 
     assert type(error) is APIStatusError
-    assert error.transient is True
+    assert error.transient is False
+    assert error.provider is Provider.GENERIC
 
 
 class ExampleErrorResolver(BaseErrorResolver):
     """The subclass from the README's error-handling section."""
 
     provider = Provider.OPENAI
+    error_statuses = {"insufficient_quota": 429}
 
-    def classify(
+    def classify_status(
         self,
         *,
         status: int,
@@ -283,7 +347,7 @@ class ExampleErrorResolver(BaseErrorResolver):
         if status == 429 and code == "insufficient_quota":
             return QuotaExceededError, False
 
-        return super().classify(
+        return super().classify_status(
             status=status,
             code=code,
             error_type=error_type,

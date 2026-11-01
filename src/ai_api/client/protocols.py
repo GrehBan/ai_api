@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Protocol, Self
 
+from ai_api.http.exceptions.protocols import IErrorResolver
 from ai_api.http.protocols import IAuth
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
 from ai_api.response.stream import Stream
@@ -95,6 +96,11 @@ class IClient(Protocol):
 
 class ISessionFactory[SessionT: ISession, AuthT: IAuth, **P](Protocol):
     """Builds sessions for one provider."""
+
+    @property
+    def error_resolver(self) -> IErrorResolver:
+        """The provider's error resolver, given to every session."""
+        ...
 
     def __call__(
         self,

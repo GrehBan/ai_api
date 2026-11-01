@@ -20,6 +20,7 @@ from ai_api.http.headers import Headers
 from ai_api.http.protocols import HeadersType, IHeaders, Query
 from ai_api.methods.fields import (
     has_one_shot_file,
+    is_container_type,
     is_mapping_type,
     query_value,
     wrap_streams,
@@ -32,6 +33,8 @@ from ai_api.response.parse.protocols import (
 )
 from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.serialization.protocols import IValueFormatter
+from ai_api.serialization.values import BaseValueFormatter
 from ai_api.types.protocols import IEventMatcher
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
@@ -132,6 +135,10 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         __returning__: Runtime class of the result; inferred from the
             generic argument unless a subclass sets it explicitly.
         __request_body_format__: Encoding of the request body.
+        __value_formatter__: Writes dates, times and durations in every
+            part of the request (body, form, query and path). ISO 8601 by
+            default; a provider whose API wants another format sets its
+            own on its base method.
         __retryable__: Whether transient failures may be retried. Ignored
             when the request carries a file that can be read only once.
         __response_format__: How the response body is parsed.
@@ -151,6 +158,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     __request_query__: ClassVar[AbstractSet[str]] = frozenset()
     __returning__: ClassVar[type[Any] | None] = None
     __request_body_format__: ClassVar[BodyFormat] = BodyFormat.NONE
+    __value_formatter__: ClassVar[IValueFormatter] = BaseValueFormatter()
     __retryable__: ClassVar[bool] = False
     __response_format__: ClassVar[ResponseFormat]
     __request_headers__: ClassVar[HeadersType | None] = None
@@ -165,6 +173,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         super().__pydantic_init_subclass__(**kwargs)
         cls._init_query_params()
         cls._init_path_params()
+        cls._check_body_fields()
         cls._init_response_type()
 
         # A parametrized class such as BaseStreamMethod[Event] is created
@@ -184,7 +193,9 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         Raises:
             TypeError: If the template is malformed, names a missing
-                field, or a placeholder is also a query parameter.
+                field, a placeholder is also a query parameter, or its
+                field is annotated as a mapping, a model or a collection,
+                which has no single path segment.
         """
         template = cls.__dict__.get("__request_path__")
 
@@ -212,6 +223,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                 "path and query parameters"
             )
 
+        for name in sorted(cls.__request_path_params__):
+            if is_container_type(cls.model_fields[name].annotation):
+                raise TypeError(
+                    f"{cls.__name__}: path parameter {name!r} must be a "
+                    "scalar, not a mapping, a model or a collection"
+                )
+
     @classmethod
     def _init_query_params(cls) -> None:
         """Freeze ``__request_query__`` and check every query parameter.
@@ -235,6 +253,41 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     f"{cls.__name__}: query parameter {name!r} cannot be "
                     "a mapping or a model"
                 )
+
+    @classmethod
+    def _check_body_fields(cls) -> None:
+        """Reject fields that a method without a body would never send.
+
+        A field that is neither a path nor a query parameter goes to the
+        body, and ``BodyFormat.NONE`` sends no body, so such a field
+        would be dropped silently (a ``GET`` whose ``__request_query__``
+        was forgotten, for one). Classes without a ``__request_path__``
+        are bases that a subclass completes, so they are not checked.
+
+        Raises:
+            TypeError: If the body format is ``NONE`` and a field, other
+                than one excluded from dumps, is neither a path nor a
+                query parameter.
+        """
+        if (
+            cls.__request_body_format__ is not BodyFormat.NONE
+            or getattr(cls, "__request_path__", None) is None
+        ):
+            return
+
+        params = cls.__request_query__ | cls.__request_path_params__
+
+        if body := sorted(
+            name
+            for name, field in cls.model_fields.items()
+            if name not in params and not field.exclude
+        ):
+            raise TypeError(
+                f"{cls.__name__}: fields {body} would never be sent: they "
+                "are not path or query parameters, and the method has no "
+                "body; add them to __request_query__ or set "
+                "__request_body_format__"
+            )
 
     @classmethod
     def _init_response_type(cls) -> None:
@@ -335,20 +388,23 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     def request_path(self) -> str:
         """Path appended to the API's base URL, placeholders filled in.
 
-        Each parameter is dumped in JSON mode (so enums give their value)
+        Each parameter is written as text (enums as their values,
+        booleans as ``true``/``false``, dates through ``value_formatter``)
         and percent-encoded; only ``__request_path_safe__`` characters are
         kept.
 
         Raises:
-            ValueError: If a parameter is ``None``, empty, or a ``.``/``..``
-                segment.
+            TypeError: If a parameter (of a field typed ``Any``) holds a
+                mapping, a model or a collection.
+            ValueError: If a parameter is ``None``, NaN or infinite,
+                empty, or a ``.``/``..`` segment.
         """
         params = self.__request_path_params__
 
         if not params:
             return self.__request_path__
 
-        values = self.model_dump(include=set(params), mode="json")
+        values = self.model_dump(include=set(params), mode="python")
 
         return self.__request_path__.format_map(
             {
@@ -356,7 +412,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     name,
                     values.get(name),
                     self.__request_path_safe__,
-                    getattr(self, name),
+                    self.value_formatter,
                 )
                 for name in params
             }
@@ -371,6 +427,11 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     def request_body_format(self) -> BodyFormat:
         """Encoding of the request body."""
         return self.__request_body_format__
+
+    @property
+    def value_formatter(self) -> IValueFormatter:
+        """Writes the dates, times and durations of the request."""
+        return self.__value_formatter__
 
     @property
     def retryable(self) -> bool:
@@ -396,12 +457,14 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         Returns:
             Fields listed in ``__request_query__`` converted to strings
-            (booleans as ``"true"``/``"false"``) or, for lists and tuples,
-            to lists of strings; ``None`` if the method has no query
-            parameters.
+            (booleans as ``"true"``/``"false"``, dates through
+            ``value_formatter``) or, for lists, tuples and sets, to lists
+            of strings; ``None`` if the method has no query parameters.
 
         Raises:
             TypeError: If a value is an object or contains one.
+            ValueError: If a list contains ``None``, or a value is NaN or
+                infinite or rejected by the formatter.
         """
         if not self.__request_query__:
             return None
@@ -410,10 +473,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             include=set(self.__request_query__),
             exclude_none=True,
             by_alias=True,
-            mode="json",
+            mode="python",
         )
 
-        return {key: query_value(key, value) for key, value in data.items()}
+        return {
+            key: query_value(key, value, self.value_formatter)
+            for key, value in data.items()
+        }
 
     def get_body_map(self) -> Mapping[str, Any]:
         """Return the body fields.
@@ -436,8 +502,14 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
     ``ResponseT`` is the type of the parsed response: a ``BaseAPIType``
     model (parsed as JSON), ``str``, ``bytes`` or ``None``.
 
+    Other arguments (``list[Model]``, ``dict``, unions, type aliases)
+    raise ``TypeError`` at class definition unless the method sets its
+    own ``__response_parser__``: the default parser could only fail on
+    the response, after the request was sent.
+
     Attributes:
         __response_parser__: Parser of the response.
+        __response_argument__: The generic argument as written.
 
     Example:
         >>> class ListModels(BaseAPIMethod[ModelList]):
@@ -447,6 +519,16 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
 
     __response_format__ = ResponseFormat.JSON
     __response_parser__: ClassVar[IResponseParser] = BufferedResponseParser()
+    __response_argument__: ClassVar[Any] = None
+
+    @classmethod
+    def _init_response_type(cls) -> None:
+        """Infer the response type and keep the argument as written."""
+        super()._init_response_type()
+        args = cls.__pydantic_generic_metadata__["args"]
+
+        if args:
+            cls.__response_argument__ = args[0]
 
     @classmethod
     def _infer_response_format(
@@ -475,15 +557,32 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
         would return a value of another type than the one declared.
 
         Raises:
-            TypeError: If ``__returning__`` is known,
-                ``__response_parser__`` is not set explicitly and the
-                format is a stream format or produces another type.
+            TypeError: If ``__response_parser__`` is not set explicitly
+                and the generic argument is not a class (such as
+                ``list[Model]`` or a union), or the format is a stream
+                format or produces another type.
         """
         returning = cls.__returning__
 
-        # Unknown for type variables and generic aliases, and for
-        # BaseAPIMethod itself, defined before _BASE_METHODS.
-        if returning is None or cls._defines("__response_parser__"):
+        if returning is None:
+            argument = cls.__response_argument__
+
+            # Unset on BaseAPIMethod itself (defined before _BASE_METHODS);
+            # a type variable is filled in by a subclass.
+            if (
+                argument is None
+                or isinstance(argument, TypeVar)
+                or cls._defines("__response_parser__")
+            ):
+                return
+
+            raise TypeError(
+                f"{cls.__name__}: responses of type {_type_name(argument)} "
+                "are not supported by the default parser; use a model, "
+                "str, bytes or None, or set __response_parser__ explicitly"
+            )
+
+        if cls._defines("__response_parser__"):
             return
 
         response_format = cls.__response_format__
@@ -659,13 +758,22 @@ class BaseStreamMethod[ItemT](BaseMethod[ItemT]):
             item: The generic argument as written.
 
         Raises:
-            TypeError: If the format is not a stream format, or BYTES or
-                TEXT is set for another item type.
+            TypeError: If the format is not a stream format, BYTES or
+                TEXT is set for another item type, or a BYTES or TEXT
+                stream sets ``__stream_terminal__``, which only SSE and
+                NDJSON check.
         """
         response_format = cls.__response_format__
 
         if response_format in _EVENT_FORMATS:
             return
+
+        if cls.__stream_terminal__ is not None:
+            raise TypeError(
+                f"{cls.__name__}: __stream_terminal__ is checked only for "
+                f"SSE and NDJSON streams, not {response_format.name}; "
+                "remove it or set __stream_parser__ explicitly"
+            )
 
         expected = _STREAM_TYPE_BY_FORMAT.get(response_format)
 

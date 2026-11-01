@@ -25,7 +25,9 @@ def request_errors(
 
     A provider method checks the provider's limits when it is built, and
     raises pydantic's ``ValidationError``. The caller gave a shared
-    request, so the error names the shared field instead.
+    request, so the error speaks of the shared fields: ``field`` is the
+    shared name of the first failing field, and the message lists every
+    error, each under its shared name.
 
     Args:
         provider: Provider of the method built inside.
@@ -43,15 +45,44 @@ def request_errors(
         >>> with request_errors(Provider.OPENAI):
         ...     method = CreateResponse(**fields)
     """
+    names = fields or {}
+
+    def shared(location: tuple[int | str, ...]) -> str:
+        """Write an error location with the shared name of its field.
+
+        Args:
+            location: The location pydantic gives, field first.
+
+        Returns:
+            The dotted location, such as ``max_output_tokens`` or
+            ``input.0.content``; empty for an error of the whole method.
+        """
+        parts = [str(part) for part in location]
+        if not parts:
+            return ""
+        parts[0] = names.get(parts[0], parts[0])
+        return ".".join(parts)
+
+    def line(location: tuple[int | str, ...], text: str) -> str:
+        """Write one error, after its location when it has one.
+
+        Args:
+            location: The location pydantic gives.
+            text: The error message.
+
+        Returns:
+            ``"<location>: <message>"``, or the message alone.
+        """
+        where = shared(location)
+        return f"{where}: {text}" if where else text
+
     try:
         yield
     except ValidationError as error:
         details = error.errors()
-        name = "".join(str(part) for part in details[0]["loc"][:1])
-        field = (fields or {}).get(name, name)
+        field = shared(details[0]["loc"][:1])
         message = "; ".join(
-            f"{'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}"
-            for detail in details
+            line(detail["loc"], detail["msg"]) for detail in details
         )
         raise RequestValidationError(
             message, provider=provider, field=field

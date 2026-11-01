@@ -7,6 +7,7 @@ import re
 import sys
 import types
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
 (
     QUICK_START,
     INHERITANCE,
+    DATES,
     QUERY,
     ALIASES,
     PATH_PARAMS,
@@ -56,7 +58,7 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
     ANTHROPIC_MESSAGES,
     SHARED_GENERATION,
     RESOURCES,
-) = range(18)
+) = range(19)
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -157,7 +159,7 @@ def examples(
 
 def test_every_example_is_tested() -> None:
     # A new ```python block needs a test here.
-    assert len(BLOCKS) == 18
+    assert len(BLOCKS) == 19
 
 
 def test_quick_start_ends_with_asyncio_run() -> None:
@@ -203,6 +205,29 @@ async def test_inherited_attributes(
     assert recorder.last.method == "POST"
     assert recorder.last.raw_path == "/v1/summaries"
     assert recorder.last.body == b'{"text":"Long."}'
+
+
+async def test_dates_and_their_formatter(
+    examples: Examples,
+    recorder: Recorder,
+    session: AiohttpSession,
+) -> None:
+    await examples.run(QUICK_START, DATES)
+    recorder.reply(Reply(json={"id": "job-1"}))
+    at = examples.datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+    result = await session.send_request(
+        examples.CreateJob(
+            run_at=at,
+            timeout=examples.datetime.timedelta(seconds=30),
+            expires_at=at,
+        )
+    )
+
+    assert result == Model(id="job-1")
+    assert recorder.last.body == (
+        b'{"run_at":"1767323045","timeout":"PT30S","expires_at":1767323045}'
+    )
 
 
 async def test_query_parameters(

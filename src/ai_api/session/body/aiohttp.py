@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import math
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import BytesPayload, FormData
 
@@ -14,7 +14,11 @@ from ai_api.http.exceptions.transport import APIRequestError
 from ai_api.http.headers import JSON_CONTENT_TYPE
 from ai_api.serialization.json import JsonDumps, dumps
 from ai_api.serialization.normalize import BodyNormalizer
+from ai_api.serialization.values import scalar_text
 from ai_api.types.files import BytesFile, InputFile
+
+if TYPE_CHECKING:
+    from ai_api.serialization.protocols import IValueFormatter
 
 
 async def _read_source(file: InputFile) -> AsyncIterator[bytes]:
@@ -70,12 +74,15 @@ class AiohttpBodyBuilder:
         self,
         body: Mapping[str, Any],
         body_format: BodyFormat,
+        formatter: IValueFormatter,
     ) -> dict[str, Any]:
         """Encode the body.
 
         Args:
             body: Body fields of the method.
             body_format: How the body must be encoded.
+            formatter: The method's ``value_formatter``, which writes the
+                dates, times and durations.
 
         Returns:
             Keyword arguments for ``ClientSession.request``; empty for
@@ -85,14 +92,20 @@ class AiohttpBodyBuilder:
             TypeError: If files or binary data are sent as JSON or as a
                 URL-encoded form, a text stream is uploaded, or a value
                 cannot be encoded as JSON.
-            ValueError: If the body format is unknown or a JSON value is
-                NaN or infinite.
+            ValueError: If the body format is unknown, a value is NaN or
+                infinite, the formatter rejects a value, or
+                ``BodyFormat.NONE`` is given a non-empty body, which would
+                be dropped.
             APIRequestError: If a file to upload does not exist.
         """
         if body_format is BodyFormat.NONE:
+            if body:
+                names = ", ".join(sorted(body))
+                message = f"A request without a body cannot send: {names}"
+                raise ValueError(message)
             return {}
 
-        normalized = self._normalizer.normalize_mapping(body)
+        normalized = self._normalizer.normalize_mapping(body, formatter)
 
         match body_format:
             case BodyFormat.JSON:
@@ -108,6 +121,7 @@ class AiohttpBodyBuilder:
                 return {
                     "data": self._build_form(
                         normalized,
+                        formatter,
                         multipart=False,
                     )
                 }
@@ -116,6 +130,7 @@ class AiohttpBodyBuilder:
                 return {
                     "data": self._build_form(
                         normalized,
+                        formatter,
                         multipart=True,
                     )
                 }
@@ -181,6 +196,7 @@ class AiohttpBodyBuilder:
     def _build_form(
         self,
         body: Mapping[str, Any],
+        formatter: IValueFormatter,
         *,
         multipart: bool,
     ) -> FormData:
@@ -188,6 +204,7 @@ class AiohttpBodyBuilder:
 
         Args:
             body: Normalized body fields.
+            formatter: The method's ``value_formatter``.
             multipart: Whether to produce ``multipart/form-data``.
 
         Returns:
@@ -198,7 +215,7 @@ class AiohttpBodyBuilder:
         )
 
         for key, value in body.items():
-            self._add_field(form, key, value, multipart)
+            self._add_field(form, key, value, formatter, multipart)
 
         return form
 
@@ -207,25 +224,29 @@ class AiohttpBodyBuilder:
         form: FormData,
         key: str,
         value: Any,
+        formatter: IValueFormatter,
         multipart: bool,
     ) -> None:
         """Add one body field to the form.
 
         Lists add the field once per item, files become file parts,
-        mappings are sent as JSON strings and booleans as
-        ``"true"``/``"false"``.
+        mappings are sent as JSON strings and other values by the rule of
+        ``scalar_text`` (booleans as ``"true"``/``"false"``). A ``None``
+        field is not sent.
 
         Args:
             form: The form being built.
             key: Field name.
             value: Normalized field value.
+            formatter: The method's ``value_formatter``.
             multipart: Whether the form is multipart.
 
         Raises:
-            TypeError: If a file is added to a non-multipart form, a text
-                stream is uploaded, or a mapping cannot be encoded as
-                JSON.
-            ValueError: If a mapping contains NaN or infinity.
+            TypeError: If a file is added to a non-multipart form, a
+                mapping cannot be encoded as JSON, or a list contains a
+                list, which a repeated field would flatten.
+            ValueError: If a value is NaN or infinite, or a list contains
+                ``None``, which a form field cannot express.
             APIRequestError: If a file to upload does not exist.
         """
         if value is None:
@@ -233,7 +254,14 @@ class AiohttpBodyBuilder:
 
         if isinstance(value, (list, tuple)):
             for item in value:
-                self._add_field(form, key, item, multipart)
+                if item is None:
+                    message = f"Form field {key!r} cannot send None in a list"
+                    raise ValueError(message)
+                if isinstance(item, (list, tuple)):
+                    message = f"Form field {key!r} cannot send nested lists"
+                    raise TypeError(message)
+
+                self._add_field(form, key, item, formatter, multipart)
             return
 
         file = InputFile.from_value(value)
@@ -261,18 +289,12 @@ class AiohttpBodyBuilder:
             )
             return
 
-        if isinstance(value, io.IOBase):
-            raise TypeError("Only binary streams can be uploaded")
-
         if isinstance(value, Mapping):
             self._check_json(value)
+            form.add_field(key, self._dumps(value).decode("utf-8"))
+            return
 
-            value = self._dumps(value).decode("utf-8")
-
-        elif isinstance(value, bool):
-            value = str(value).lower()
-
-        else:
-            value = str(value)
-
-        form.add_field(key, value)
+        form.add_field(
+            key,
+            scalar_text(value, formatter, label=f"Form field {key!r}"),
+        )

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 import pytest
 
+from ai_api.enums import Provider
+from ai_api.http.exceptions.status import RateLimitError
 from ai_api.http.exceptions.transport import APIStreamInterruptedError
-from ai_api.resources.stream import GenerationStream, generation_stream
-from ai_api.response.stream import Stream
+from ai_api.resources.stream import GenerationStream
+from ai_api.response.stream import Stream, transform_stream
 from ai_api.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
@@ -18,7 +20,9 @@ from ai_api.types.responses.events import (
     TextDeltaEvent,
 )
 
-COMPLETED = CompletedEvent[Any](id="r-1", model="m", text="Hello!", raw={})
+COMPLETED = CompletedEvent[Any](
+    id="r-1", provider=Provider.GENERIC, model="m", text="Hello!", raw={}
+)
 
 EVENTS: list[GenerationEvent[Any]] = [
     OtherEvent[Any](raw={}),
@@ -35,6 +39,19 @@ async def items(
     """Yield the events one by one."""
     for event in events:
         yield event
+
+
+def generation_stream(
+    source: AbstractAsyncContextManager[Stream[GenerationEvent[Any]]],
+) -> AbstractAsyncContextManager[GenerationStream[Any]]:
+    """Open the source as GenerationResource does: one stream, no wrap."""
+
+    def same(
+        events: AsyncIterator[GenerationEvent[Any]],
+    ) -> AsyncIterator[GenerationEvent[Any]]:
+        return events
+
+    return transform_stream(source, same, stream_type=GenerationStream)
 
 
 @asynccontextmanager
@@ -120,3 +137,52 @@ async def test_closing_closes_the_source() -> None:
 
     with pytest.raises(RuntimeError, match="Stream is closed"):
         await anext(source)
+
+
+async def failing(
+    error: Exception,
+) -> AsyncIterator[GenerationEvent[Any]]:
+    """Two events, then the provider's error."""
+    yield EVENTS[0]
+    yield EVENTS[1]
+    raise error
+
+
+async def test_a_failed_read_is_raised_again_by_final() -> None:
+    # The events behind the error are gone; final() used to report the
+    # quiet end as a cut stream instead of the error itself.
+    error = RateLimitError(status=200, message="slow down")
+    stream = GenerationStream(failing(error))
+
+    with pytest.raises(RateLimitError):
+        _ = [event async for event in stream]
+
+    with pytest.raises(RateLimitError) as caught:
+        await stream.final()
+
+    assert caught.value is error
+
+
+async def test_a_failed_read_is_raised_again_by_text_and_reads() -> None:
+    error = RateLimitError(status=200, message="slow down")
+    stream = GenerationStream(failing(error))
+
+    with pytest.raises(RateLimitError):
+        await stream.final()
+
+    with pytest.raises(RateLimitError) as by_text:
+        await anext(stream.text())
+    with pytest.raises(RateLimitError) as by_read:
+        await anext(stream)
+
+    assert by_text.value is error
+    assert by_read.value is error
+    assert stream.items_received == 2
+
+
+async def test_the_stream_is_built_without_a_second_wrapper() -> None:
+    async with generation_stream(opened(EVENTS)) as events:
+        assert type(events) is GenerationStream
+        await events.final()
+
+    assert events.items_received == len(EVENTS)

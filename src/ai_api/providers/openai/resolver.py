@@ -6,9 +6,18 @@ from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any, Final, cast
 
-from ai_api.enums import Provider
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import APIStatusError, QuotaExceededError
+from ai_api.providers.openai.api import PROVIDER
+from ai_api.types.matchers import FieldValues
+
+FAILED_RESPONSE: Final = FieldValues("status", "failed")
+"""A ``Response`` whose generation failed.
+
+The one test of a failed response: ``CreateResponse``'s parser raises a
+result it matches, and the resolver reads such a body by its
+``error``.
+"""
 
 QUOTA_CODES: Final = frozenset(
     {
@@ -34,11 +43,14 @@ ERROR_STATUSES: Final[Mapping[str, int]] = {
     "service_unavailable_error": HTTPStatus.SERVICE_UNAVAILABLE,
     "server_is_overloaded": HTTPStatus.SERVICE_UNAVAILABLE,
     "server_overloaded": HTTPStatus.SERVICE_UNAVAILABLE,
+    **dict.fromkeys(QUOTA_CODES, HTTPStatus.TOO_MANY_REQUESTS),
 }
 """HTTP status of each documented error code or type.
 
 The ``error`` event of a stream arrives after the 200 status, so its
-code, or else its type, tells which error it is.
+code, or else its type, tells which error it is. The quota codes stand
+for 429, so a quota reported inside a stream is a ``QuotaExceededError``
+as it is over HTTP.
 """
 
 
@@ -69,16 +81,19 @@ class OpenAIErrorResolver(BaseErrorResolver):
 
     A 429 whose code or type is in ``QUOTA_CODES`` (no credit left, a
     spend or usage limit reached) is a ``QuotaExceededError`` and is not
-    retried. The ``error`` event of a response stream is flat
+    retried, also when a stream reports it. The ``error`` event of a
+    response stream is flat
     (``{"type": "error", "code", "message", "param"}``) and is read like
     an ``error`` object; a ``response.failed`` event and a ``Response``
     with status ``failed`` are read by their ``response.error``. They
     come with a 200 status, so their class is picked by their code or
     type through ``ERROR_STATUSES``; a code it does not list, such as
-    ``invalid_prompt``, gives ``APIStatusError`` itself, not transient.
+    ``invalid_prompt``, gives ``APIStatusError`` itself. As for every
+    resolver, such an in-band failure is never transient.
     """
 
-    provider = Provider.OPENAI
+    provider = PROVIDER
+    error_statuses = ERROR_STATUSES
 
     def resolve(
         self,
@@ -107,15 +122,12 @@ class OpenAIErrorResolver(BaseErrorResolver):
                 body = {"error": fields}
             elif kind == "response.failed" and isinstance(response, Mapping):
                 body = _failed_response(cast(Mapping[str, Any], response))
-            elif (
-                event.get("object") == "response"
-                and event.get("status") == "failed"
-            ):
+            elif FAILED_RESPONSE.matches(event):
                 body = _failed_response(event)
 
         return super().resolve(status=status, body=body, headers=headers)
 
-    def classify(
+    def classify_status(
         self,
         *,
         status: int,
@@ -124,28 +136,25 @@ class OpenAIErrorResolver(BaseErrorResolver):
         message: str | None,
         retry_after: float | None,
     ) -> tuple[type[APIStatusError], bool]:
-        """Pick the error class and whether the error is transient.
+        """Pick the error class and transience, quota errors first.
 
         Args:
-            status: HTTP status of the response.
+            status: HTTP status the error is classified by.
             code: Provider error code, if any.
             error_type: Provider error type, if any.
             message: Error message, if any.
             retry_after: Seconds from ``Retry-After``, if any.
 
         Returns:
-            The error class and the ``transient`` flag.
+            ``QuotaExceededError`` (never transient) for a 429 with a
+            quota code or type, else the default classification.
         """
-        if status < HTTPStatus.BAD_REQUEST:
-            status = ERROR_STATUSES.get(
-                code or "", ERROR_STATUSES.get(error_type or "", status)
-            )
         if status == HTTPStatus.TOO_MANY_REQUESTS and (
             code in QUOTA_CODES or error_type in QUOTA_CODES
         ):
             return QuotaExceededError, False
 
-        return super().classify(
+        return super().classify_status(
             status=status,
             code=code,
             error_type=error_type,

@@ -7,9 +7,9 @@ from contextlib import contextmanager
 
 from aiohttp import (
     ClientConnectionError,
+    ClientConnectorCertificateError,
     ClientPayloadError,
     ClientResponseError,
-    ClientSSLError,
     ServerFingerprintMismatch,
     TooManyRedirects,
 )
@@ -55,10 +55,13 @@ def transport_errors() -> Generator[None]:
 
     Raises:
         APITimeoutError: On any timeout.
-        APITLSError: If TLS verification fails.
+        APITLSError: If the server's certificate fails verification or
+            does not match the pinned fingerprint.
         APIRedirectError: If the API redirects too many times.
         APIRequestError: If an upload source fails while it is sent.
-        APIConnectionError: On other connection failures.
+        APIConnectionError: On other connection failures, including a
+            TLS handshake that breaks off, which another attempt may
+            complete.
         APIResponseError: If the response is not valid HTTP.
         APIRequestError: If aiohttp rejects a header or the URL.
     """
@@ -67,8 +70,11 @@ def transport_errors() -> Generator[None]:
     except TimeoutError as exc:
         raise APITimeoutError() from exc
 
+    # Only a certificate that fails verification is hopeless; another
+    # SSL error (a handshake cut off) is a connection failure, retried
+    # as the official SDKs do.
     except (
-        ClientSSLError,
+        ClientConnectorCertificateError,
         ServerFingerprintMismatch,
     ) as exc:
         raise APITLSError() from exc

@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import datetime
 import enum
 import io
+import math
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
-from pydantic import Field, ValidationError
+from pydantic import Field, PlainSerializer, ValidationError
 
 from ai_api.enums import BodyFormat
 from ai_api.http.headers import Headers
 from ai_api.methods.base import BaseAPIMethod
+from ai_api.serialization.values import BaseValueFormatter
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile, InputFile, IOFile, StreamFile
 from tests.conftest import make_method
@@ -24,7 +27,8 @@ class Order(enum.StrEnum):
 
 class ListItems(BaseAPIMethod[bytes]):
     __request_path__ = "/orgs/{org}/items"
-    __request_method__ = "GET"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
     __request_query__ = {"limit", "page_size", "order", "deleted", "after"}
 
     org: str
@@ -115,8 +119,11 @@ def test_lists_become_repeated_keys() -> None:
     }
 
 
-def test_none_items_of_a_list_are_dropped() -> None:
-    assert Search(raw=[1, None, 2]).get_query_map() == {"raw": ["1", "2"]}
+def test_none_items_of_a_list_are_rejected() -> None:
+    # A repeated key cannot express null; dropping it would shift the
+    # other items, so it fails instead.
+    with pytest.raises(ValueError, match="'raw' cannot send None"):
+        Search(raw=[1, None, 2]).get_query_map()
 
 
 @pytest.mark.parametrize(
@@ -127,6 +134,107 @@ def test_none_items_of_a_list_are_dropped() -> None:
 def test_objects_in_query_are_rejected(raw: Any) -> None:
     with pytest.raises((TypeError, ValueError)):
         Search(raw=raw).get_query_map()
+
+
+AT = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
+
+
+class Dated(BaseAPIMethod[bytes]):
+    __request_path__ = "/events/{day}"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+    __request_query__ = {"since", "ttl", "ratio", "raw"}
+
+    day: datetime.date = datetime.date(2026, 1, 2)
+    since: datetime.datetime | None = None
+    ttl: datetime.timedelta | None = None
+    ratio: float | None = None
+    raw: Any = None
+    at: datetime.datetime | None = None
+
+
+def test_dates_are_written_in_iso_8601_everywhere() -> None:
+    method = Dated(since=AT, ttl=datetime.timedelta(seconds=30), at=AT)
+
+    assert method.request_path == "/events/2026-01-02"
+    assert method.get_query_map() == {
+        "since": "2026-01-02T03:04:05Z",
+        "ttl": "PT30S",
+    }
+    # The body map keeps the datetime: the body builder writes it with
+    # the same formatter (test_json_body_uses_the_method_formatter).
+    assert method.get_body_map() == {"at": AT}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"ratio": math.nan}, {"raw": math.nan}, {"raw": [1.0, math.inf]}],
+    ids=["float", "any", "any-list"],
+)
+def test_non_finite_query_values_are_rejected(fields: dict[str, Any]) -> None:
+    # In an Any field NaN used to be sent as the string "None".
+    with pytest.raises(ValueError, match="cannot send NaN or infinity"):
+        Dated.model_validate(fields).get_query_map()
+
+
+def test_naive_datetime_in_query_is_rejected() -> None:
+    naive = datetime.datetime(2026, 1, 2)  # noqa: DTZ001 - on purpose
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        Dated(since=naive).get_query_map()
+
+
+class Unix(BaseValueFormatter):
+    def format_datetime(self, value: datetime.datetime, /) -> str:
+        return str(round(value.timestamp()))
+
+
+class ProviderMethod(BaseAPIMethod[bytes]):
+    """A provider's base method: its API wants Unix seconds."""
+
+    __value_formatter__ = Unix()
+
+
+class ProviderSearch(ProviderMethod):
+    __request_path__ = "/search/{at}"
+    __request_method__ = "GET"
+    __request_query__ = {"since"}
+
+    at: datetime.datetime
+    since: datetime.datetime
+
+
+def test_provider_base_method_sets_the_formatter() -> None:
+    method = ProviderSearch(at=AT, since=AT)
+
+    assert isinstance(method.value_formatter, Unix)
+    assert method.request_path == "/search/1767323045"
+    assert method.get_query_map() == {"since": "1767323045"}
+
+
+class OneField(BaseAPIMethod[bytes]):
+    __request_path__ = "/one"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+    __request_query__ = {"since"}
+
+    # One field in another format: its serializer runs before the
+    # formatter, so the formatter never sees a datetime.
+    since: Annotated[
+        datetime.datetime,
+        PlainSerializer(lambda value: round(value.timestamp())),
+    ]
+    at: Annotated[
+        datetime.datetime,
+        PlainSerializer(lambda value: round(value.timestamp())),
+    ]
+
+
+def test_a_field_serializer_overrides_the_formatter() -> None:
+    method = OneField(since=AT, at=AT)
+
+    assert method.get_query_map() == {"since": "1767323045"}
+    assert method.get_body_map() == {"at": 1767323045}
 
 
 def test_object_in_query_names_the_parameter() -> None:
@@ -319,3 +427,35 @@ def test_request_headers_accept_a_collection() -> None:
     )
 
     assert method_cls().request_headers.headers["x-trace"] == "on"
+
+
+def test_fields_a_bodiless_method_would_drop_are_rejected() -> None:
+    with pytest.raises(TypeError, match=r"\['limit'\] would never be sent"):
+        make_method(
+            BaseAPIMethod[bytes],
+            path="/models",
+            fields={"limit": (int | None, None)},
+            __request_method__="GET",
+        )
+
+
+def test_bases_without_a_path_are_not_checked() -> None:
+    class Paged(BaseAPIMethod[bytes]):
+        limit: int | None = None
+
+    class ListModels(Paged):
+        __request_path__ = "/models"
+        __request_method__ = "GET"
+        __request_query__ = {"limit"}
+
+    assert ListModels(limit=2).get_query_map() == {"limit": "2"}
+
+
+def test_excluded_fields_are_not_body_fields() -> None:
+    class Ping(BaseAPIMethod[bytes]):
+        __request_path__ = "/ping"
+        __request_method__ = "GET"
+
+        note: str = Field(default="local", exclude=True)
+
+    assert Ping().get_body_map() == {}

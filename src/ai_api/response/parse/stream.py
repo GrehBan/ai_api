@@ -36,6 +36,44 @@ example). An object without a ``type`` is an error if its ``error`` is
 """
 
 
+def _text_decoder(response: IStreamResponse) -> codecs.IncrementalDecoder:
+    """Build the incremental decoder of a text stream's charset.
+
+    Called when the stream is opened, like the ``Content-Type`` check of
+    SSE, so a bad charset fails before the first item is awaited.
+
+    Args:
+        response: The streamed response.
+
+    Returns:
+        A decoder for the response charset, UTF-8 by default.
+
+    Raises:
+        APIResponseError: If the charset is unknown or is not a text
+            encoding.
+    """
+    charset = response.charset or "utf-8"
+
+    try:
+        codec = codecs.lookup(charset)
+    except LookupError as exc:
+        raise APIResponseError(
+            "Unknown response charset",
+            status=response.status,
+        ) from exc
+
+    # The server picks the charset, and codecs such as base64, zlib
+    # or rot13 do not turn bytes into text (bytes.decode rejects them
+    # by this flag too).
+    if not getattr(codec, "_is_text_encoding", True):
+        raise APIResponseError(
+            f"Unknown response charset: {charset} is not a text encoding",
+            status=response.status,
+        )
+
+    return codec.incrementaldecoder()
+
+
 def _check_event_stream(response: IStreamResponse) -> None:
     """Ensure an SSE response is an event stream.
 
@@ -127,7 +165,10 @@ class StreamResponseParser:
                 return cast(AsyncIterator[T], response.iter_chunks())
 
             case ResponseFormat.TEXT:
-                return cast(AsyncIterator[T], self._iter_text(response))
+                decoder = _text_decoder(response)
+                return cast(
+                    AsyncIterator[T], self._iter_text(response, decoder)
+                )
 
             case ResponseFormat.SSE | ResponseFormat.NDJSON:
                 events = _EventReader(
@@ -158,6 +199,7 @@ class StreamResponseParser:
     async def _iter_text(
         self,
         response: IStreamResponse,
+        decoder: codecs.IncrementalDecoder,
     ) -> AsyncIterator[str]:
         """Decode the body incrementally.
 
@@ -166,35 +208,14 @@ class StreamResponseParser:
 
         Args:
             response: The streamed response.
+            decoder: The decoder of its charset.
 
         Yields:
             Non-empty pieces of decoded text.
 
         Raises:
-            APIResponseError: If the charset is unknown, is not a text
-                encoding, or the body is not valid in it.
+            APIResponseError: If the body is not valid in its charset.
         """
-        charset = response.charset or "utf-8"
-
-        try:
-            codec = codecs.lookup(charset)
-        except LookupError as exc:
-            raise APIResponseError(
-                "Unknown response charset",
-                status=response.status,
-            ) from exc
-
-        # The server picks the charset, and codecs such as base64, zlib
-        # or rot13 do not turn bytes into text (bytes.decode rejects them
-        # by this flag too).
-        if not getattr(codec, "_is_text_encoding", True):
-            raise APIResponseError(
-                f"Unknown response charset: {charset} is not a text encoding",
-                status=response.status,
-            )
-
-        decoder = codec.incrementaldecoder()
-
         try:
             async for chunk in response.iter_chunks():
                 if text := decoder.decode(chunk):
@@ -463,7 +484,7 @@ class _EventReader[T]:
             body = self._json_loads(data)
         except ValueError as exc:
             raise APIResponseError(
-                "Failed to validate stream event",
+                "Failed to decode stream event",
                 status=self._response.status,
             ) from exc
 

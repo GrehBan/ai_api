@@ -17,13 +17,15 @@ class OutputText(BaseAPIType):
         type: Always ``"output_text"``.
         text: The text.
         annotations: Citations and file paths in the text, as sent.
-        logprobs: Token log probabilities, if requested.
+        logprobs: Token log probabilities; ``None`` when not requested.
     """
+
+    __upstream_schema__ = "ResponseOutputText"
 
     type: Literal["output_text"] = "output_text"
     text: str
     annotations: list[dict[str, Any]] = Field(default_factory=list)
-    logprobs: list[dict[str, Any]] = Field(default_factory=list)
+    logprobs: list[dict[str, Any]] | None = None
 
 
 class OutputRefusal(BaseAPIType):
@@ -33,6 +35,8 @@ class OutputRefusal(BaseAPIType):
         type: Always ``"refusal"``.
         refusal: The explanation of the refusal.
     """
+
+    __upstream_schema__ = "ResponseOutputRefusal"
 
     type: Literal["refusal"] = "refusal"
     refusal: str
@@ -64,6 +68,8 @@ class OutputMessage(BaseAPIType):
         content: Text and refusal parts.
         phase: ``"commentary"`` or ``"final_answer"``, if set.
     """
+
+    __upstream_schema__ = "ResponseOutputMessage"
 
     type: Literal["message"] = "message"
     id: str
@@ -97,6 +103,8 @@ class InputTokensDetails(BaseAPIType):
         cache_write_tokens: Tokens written to the prompt cache.
     """
 
+    __upstream_schema__ = "InputTokensDetails"
+
     cached_tokens: int | None = None
     cache_write_tokens: int | None = None
 
@@ -107,6 +115,8 @@ class OutputTokensDetails(BaseAPIType):
     Attributes:
         reasoning_tokens: Tokens spent on reasoning.
     """
+
+    __upstream_schema__ = "OutputTokensDetails"
 
     reasoning_tokens: int | None = None
 
@@ -121,6 +131,8 @@ class ResponseUsage(BaseAPIType):
         output_tokens_details: Breakdown of the output tokens.
         total_tokens: Input and output together.
     """
+
+    __upstream_schema__ = "ResponseUsage"
 
     input_tokens: int
     input_tokens_details: InputTokensDetails | None = None
@@ -142,6 +154,8 @@ class ResponseError(BaseAPIType):
         type: Error type, if any.
     """
 
+    __upstream_schema__ = "ResponseError"
+
     code: str
     message: str
     param: str | None = None
@@ -154,6 +168,8 @@ class IncompleteDetails(BaseAPIType):
     Attributes:
         reason: Such as ``"max_output_tokens"`` or ``"content_filter"``.
     """
+
+    __upstream_schema__ = "IncompleteDetails"
 
     reason: str | None = None
 
@@ -182,6 +198,8 @@ class Response(BaseAPIType):
         metadata: Metadata given with the request.
         previous_response_id: Response this one continues, if any.
     """
+
+    __upstream_schema__ = "Response"
 
     id: str
     object: Literal["response"] = "response"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Self
+from typing import Any, Self, overload
 
 import aiofiles
 
@@ -41,6 +41,11 @@ class Stream[T]:
         self._items = items
         self._closed = False
         self._received = 0
+
+    @property
+    def items_received(self) -> int:
+        """How many items the stream has given so far."""
+        return self._received
 
     def __aiter__(self) -> Self:
         """Return the stream itself.
@@ -138,11 +143,28 @@ class Stream[T]:
         return written
 
 
-@asynccontextmanager
-async def transform_stream[T, R](
+@overload
+def transform_stream[T, R](
     source: AbstractAsyncContextManager[Stream[T]],
     transform: Callable[[AsyncIterator[T]], AsyncIterator[R]],
-) -> AsyncGenerator[Stream[R]]:
+) -> AbstractAsyncContextManager[Stream[R]]: ...
+
+
+@overload
+def transform_stream[T, R, S: Stream[Any]](
+    source: AbstractAsyncContextManager[Stream[T]],
+    transform: Callable[[AsyncIterator[T]], AsyncIterator[R]],
+    *,
+    stream_type: Callable[[AsyncIterator[R]], S],
+) -> AbstractAsyncContextManager[S]: ...
+
+
+def transform_stream[T, R](
+    source: AbstractAsyncContextManager[Stream[T]],
+    transform: Callable[[AsyncIterator[T]], AsyncIterator[R]],
+    *,
+    stream_type: Callable[[AsyncIterator[R]], Stream[Any]] = Stream,
+) -> AbstractAsyncContextManager[Stream[Any]]:
     """Open a stream and pass its items through ``transform``.
 
     ``transform`` sees the whole source, so it can keep state between
@@ -156,9 +178,12 @@ async def transform_stream[T, R](
         source: The stream to open, e.g. ``session.stream(method)``.
         transform: Turns the source items into result items; usually an
             async generator function.
+        stream_type: The ``Stream`` class to yield, such as
+            ``GenerationStream``; built on the transformed items once,
+            with no second wrapper.
 
-    Yields:
-        A stream of transformed items.
+    Returns:
+        A context manager that yields a stream of transformed items.
 
     Example:
         >>> async def texts(events):
@@ -169,8 +194,27 @@ async def transform_stream[T, R](
         ...     async for text in s:
         ...         handle(text)
     """
+    return _transformed(source, transform, stream_type)
+
+
+@asynccontextmanager
+async def _transformed[T, R](
+    source: AbstractAsyncContextManager[Stream[T]],
+    transform: Callable[[AsyncIterator[T]], AsyncIterator[R]],
+    stream_type: Callable[[AsyncIterator[R]], Stream[Any]],
+) -> AsyncGenerator[Stream[Any]]:
+    """Open the source and yield its transformed stream.
+
+    Args:
+        source: The stream to open.
+        transform: Turns the source items into result items.
+        stream_type: The class of the yielded stream.
+
+    Yields:
+        The transformed stream; closed before the source on exit.
+    """
     async with source as stream:
-        transformed = Stream(transform(stream))
+        transformed = stream_type(transform(stream))
 
         try:
             yield transformed

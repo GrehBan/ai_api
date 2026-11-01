@@ -123,8 +123,8 @@ class _FrozenDatetime(datetime.datetime, metaclass=_FrozenDatetimeMeta):
 def frozen_now(mocker: MockerFixture) -> datetime.datetime:
     """Fix the current time at ``NOW`` for the library's clock reads.
 
-    Covers ``Retry-After`` dates in the error resolver and ``timedelta``
-    values in ``BodyNormalizer``.
+    Covers ``Retry-After`` dates in the error resolver, the only place
+    the library reads the clock.
 
     Returns:
         ``NOW``.
@@ -132,14 +132,6 @@ def frozen_now(mocker: MockerFixture) -> datetime.datetime:
     mocker.patch(
         "ai_api.http.headers.datetime",
         _FrozenDatetime,
-    )
-    mocker.patch(
-        "ai_api.serialization.normalize.datetime",
-        SimpleNamespace(
-            datetime=_FrozenDatetime,
-            timedelta=datetime.timedelta,
-            UTC=datetime.UTC,
-        ),
     )
     return NOW
 

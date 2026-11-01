@@ -18,6 +18,7 @@ from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import (
     APIStatusError,
     BadRequestError,
+    ContentTooLargeError,
     InternalServerError,
     NotFoundError,
     QuotaExceededError,
@@ -156,7 +157,7 @@ def test_other_auth_header_is_warned_about() -> None:
         error_resolver=AnthropicErrorResolver(),
     )
 
-    with pytest.warns(UserWarning, match="x-api-key"):
+    with pytest.warns(UserWarning, match="(?i)x-api-key"):
         AnthropicClient(session=session)
 
 
@@ -189,7 +190,7 @@ def test_overloaded_is_a_transient_unavailable_error() -> None:
     assert error.transient is True
 
 
-def test_rate_limit_with_retry_after_is_retried() -> None:
+def test_rate_limit_with_retry_after_is_transient() -> None:
     error = resolve(429, body("rate_limit_error"), {"retry-after": "3"})
 
     assert type(error) is RateLimitError
@@ -207,11 +208,36 @@ def test_spend_cap_is_a_quota_error() -> None:
     assert error.transient is False
 
 
-def test_own_spend_limit_is_a_quota_error() -> None:
-    error = resolve(400, body("invalid_request_error", SPEND_LIMIT_MESSAGE))
+@pytest.mark.parametrize(
+    "message",
+    [
+        SPEND_LIMIT_MESSAGE,
+        "You have reached your specified workspace API usage limits. You "
+        "will regain access on 2026-11-01 at 00:00 UTC.",
+    ],
+    ids=["organization", "workspace"],
+)
+def test_own_spend_limit_is_a_quota_error(message: str) -> None:
+    # Both starts that api/rate-limits documents: this 400 has no code of
+    # its own, so the prefix is all there is to recognize it by.
+    error = resolve(400, body("invalid_request_error", message))
 
     assert type(error) is QuotaExceededError
     assert error.transient is False
+
+
+def test_too_large_request_is_a_content_too_large_error() -> None:
+    error = resolve(413, body("request_too_large", "Request too large"))
+
+    assert type(error) is ContentTooLargeError
+    assert error.transient is False
+
+
+def test_too_large_request_inside_a_stream_keeps_its_class() -> None:
+    error = resolve(200, body("request_too_large", "Request too large"))
+
+    assert type(error) is ContentTooLargeError
+    assert error.status == 200
 
 
 @pytest.mark.parametrize(
@@ -234,24 +260,25 @@ def test_non_string_error_code_is_ignored_as_a_code() -> None:
 
 
 @pytest.mark.parametrize(
-    ("error_type", "error_class", "transient"),
+    ("error_type", "error_class"),
     [
-        ("overloaded_error", ServiceUnavailableError, True),
-        ("api_error", InternalServerError, True),
-        ("invalid_request_error", BadRequestError, False),
-        ("brand_new_error", APIStatusError, False),
+        ("overloaded_error", ServiceUnavailableError),
+        ("api_error", InternalServerError),
+        ("invalid_request_error", BadRequestError),
+        ("brand_new_error", APIStatusError),
     ],
 )
 def test_stream_error_event_is_classified_by_its_type(
     error_type: str,
     error_class: type[APIStatusError],
-    transient: bool,
 ) -> None:
     error = resolve(200, body(error_type))
 
     assert type(error) is error_class
     assert error.status == 200
-    assert error.transient is transient
+    # The generation ran and failed: running it again is the caller's
+    # choice, so an in-band failure is never transient.
+    assert error.transient is False
 
 
 async def test_client_sends_bearer_auth_and_maps_errors(

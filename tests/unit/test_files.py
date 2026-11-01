@@ -207,6 +207,28 @@ async def test_non_seekable_io_file_reads_once() -> None:
         await read_all(file)
 
 
+class NonBlockingStream(io.RawIOBase):
+    """A raw stream whose data is not ready: ``read()`` gives ``None``."""
+
+    def __init__(self, reads: list[bytes | None]) -> None:
+        self._reads = reads
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1) -> bytes | None:
+        return self._reads.pop(0)
+
+
+async def test_non_blocking_stream_without_data_raises() -> None:
+    # None means "no data yet", not the end: reading on would send an
+    # empty or truncated file without an error.
+    file = IOFile(NonBlockingStream([b"he", None, b"llo", b""]))
+
+    with pytest.raises(BlockingIOError, match="non-blocking"):
+        await read_all(file)
+
+
 def test_closed_stream_is_rejected() -> None:
     stream = io.BytesIO(b"x")
     stream.close()

@@ -82,7 +82,7 @@ class APIRedirectError(APITransportError):
 
     def __init__(
         self,
-        message: str = "Too many redirects.",
+        message: str = "Redirect was not followed.",
     ) -> None:
         """Create a non-retryable redirect error.
 

@@ -147,7 +147,26 @@ def test_method_fields_are_reported_by_their_shared_name() -> None:
         adapter.to_stream_method(request)
 
     assert caught.value.field == "max_output_tokens"
-    assert "max_tokens: Input should be greater" in str(caught.value)
+    assert "max_output_tokens: Input should be greater" in str(caught.value)
+    assert "max_tokens" not in str(caught.value)
+
+
+def test_every_error_is_listed_under_its_shared_name() -> None:
+    # field names the first error; the message names all of them, by
+    # the names the caller used.
+    request = REQUEST.model_copy(
+        update={"max_output_tokens": -1, "instructions": 5}
+    )
+
+    with pytest.raises(RequestValidationError) as caught:
+        adapter.to_method(request)
+
+    message = str(caught.value)
+    assert caught.value.field == "max_output_tokens"
+    assert "max_output_tokens: Input should be greater" in message
+    # system is a str or a list of blocks: pydantic names the member.
+    assert "instructions.str: Input should be a valid string" in message
+    assert "system" not in message
 
 
 def test_turns_are_sent_as_messages() -> None:
