@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, ClassVar, Literal, TypeVar
 
 import pytest
@@ -88,16 +89,42 @@ def test_format_from_intermediate_generic_base_is_inherited() -> None:
     assert Leaf.__returning__ is bytes
 
 
-@pytest.mark.parametrize(
-    "argument",
-    [list[int], int | str, T],
-    ids=["generic-alias", "union", "typevar"],
-)
-def test_non_class_argument_keeps_defaults(argument: Any) -> None:
+def test_type_variable_keeps_defaults() -> None:
+    argument: Any = T
     method_cls = make_method(BaseAPIMethod[argument])
 
     assert method_cls.__returning__ is None
     assert method_cls.__response_format__ is ResponseFormat.JSON
+    assert method_cls().response_type is None
+
+
+@pytest.mark.parametrize(
+    ("argument", "name"),
+    [(list[int], "list[int]"), (int | str, "int | str")],
+    ids=["generic-alias", "union"],
+)
+def test_non_class_argument_is_rejected(argument: Any, name: str) -> None:
+    # The default parser could only fail on the response, after the
+    # request was sent and paid for.
+    with pytest.raises(TypeError, match=rf"type {re.escape(name)} are not"):
+        make_method(BaseAPIMethod[argument])
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [list[int], int | str],
+    ids=["generic-alias", "union"],
+)
+def test_non_class_argument_with_own_parser_keeps_defaults(
+    argument: Any,
+) -> None:
+    method_cls = make_method(
+        BaseAPIMethod[argument],
+        __response_parser__=BufferedResponseParser(),
+    )
+
+    assert method_cls.__returning__ is None
+    assert method_cls.__response_argument__ == argument
     assert method_cls().response_type is None
 
 
@@ -456,3 +483,14 @@ def test_adapter_from_own_generic_base() -> None:
     assert NdjsonBase.__response_adapter__ is None
     assert adapter is not None
     assert adapter.validate_python({"type": "start"}) == Start(type="start")
+
+
+def test_non_class_argument_of_a_generic_base_is_rejected() -> None:
+    class Paged[ItemT](BaseAPIMethod[ItemT]):
+        pass
+
+    with pytest.raises(TypeError, match=r"type list\[int\] are not"):
+
+        class ListItems(Paged[list[int]]):  # pyright: ignore[reportUnusedClass]
+            __request_path__ = "/items"
+            __request_method__ = "GET"

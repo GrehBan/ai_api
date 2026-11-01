@@ -402,6 +402,17 @@ async def test_event_over_the_limit_is_a_response_error() -> None:
         )
 
 
+def test_bad_charset_fails_when_the_stream_opens() -> None:
+    # As the Content-Type check of SSE: before the first item is awaited.
+    method = make_method(BaseStreamMethod[str])()
+    response = FakeStreamResponse([b"a"], charset="no-such-charset")
+
+    with pytest.raises(APIResponseError, match="Unknown response charset"):
+        StreamResponseParser().parse(
+            method, response, loads, BaseErrorResolver()
+        )
+
+
 @pytest.mark.parametrize("charset", ["base64", "zlib_codec", "rot13"])
 async def test_text_stream_rejects_non_text_charsets(charset: str) -> None:
     method = make_method(BaseStreamMethod[str])()

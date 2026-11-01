@@ -8,9 +8,9 @@ import io
 import mimetypes
 import os
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, Final, Self
+from typing import Any, Final, Self, cast
 
 import aiofiles
 from pydantic import GetCoreSchemaHandler
@@ -333,6 +333,9 @@ class IOFile(InputFile):
 
         Raises:
             RuntimeError: If a non-seekable stream is read a second time.
+            BlockingIOError: If the stream is non-blocking and has no data
+                ready: its ``read()`` returns ``None``, which is not the
+                end of the stream, so the upload would be cut short.
         """
         if self._start is not None:
             await asyncio.to_thread(self.file.seek, self._start)
@@ -341,9 +344,21 @@ class IOFile(InputFile):
 
         self._opened = True
 
-        while chunk := await asyncio.to_thread(
-            self.file.read, self.chunk_size
-        ):
+        # A raw stream in non-blocking mode returns None, not b"".
+        read = cast("Callable[[int], bytes | None]", self.file.read)
+
+        while True:
+            chunk = await asyncio.to_thread(read, self.chunk_size)
+
+            if chunk is None:
+                raise BlockingIOError(
+                    errno.EAGAIN,
+                    "The stream is non-blocking and has no data ready; "
+                    "IOFile needs a blocking stream",
+                )
+            if not chunk:
+                return
+
             yield chunk
 
 

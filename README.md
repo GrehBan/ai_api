@@ -223,7 +223,7 @@ The generic argument sets both the result type and the response format:
 | `BaseAPIMethod[bytes]` | `bytes` | Raw body |
 | `BaseAPIMethod[None]` | `None` | Empty body expected |
 
-Setting `__response_format__` explicitly, in the method or in an intermediate base class, overrides the inferred value. It must still produce the declared type: `TEXT` gives `str`, `BYTES` gives `bytes`, `NONE` gives `None` and `JSON` gives a model, while `SSE` and `NDJSON` are for stream methods only. A format that contradicts the generic argument, such as `BaseAPIMethod[SomeModel]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__response_parser__`. The check exists because the parser casts its result to the declared type: without it, a contradicting format would make the static type lie.
+Setting `__response_format__` explicitly, in the method or in an intermediate base class, overrides the inferred value. It must still produce the declared type: `TEXT` gives `str`, `BYTES` gives `bytes`, `NONE` gives `None` and `JSON` gives a model, while `SSE` and `NDJSON` are for stream methods only. A format that contradicts the generic argument, such as `BaseAPIMethod[SomeModel]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__response_parser__`. The check exists because the parser casts its result to the declared type: without it, a contradicting format would make the static type lie. For the same reason a generic argument that is not a class, such as `list[Model]`, `dict[str, Any]` or a union, raises `TypeError` at class definition unless the method sets its own `__response_parser__`: the default parser could only fail on the response, after the request was sent.
 
 How `BufferedResponseParser` reads each format:
 
@@ -256,7 +256,7 @@ Before encoding, the values are normalized:
 - **Timedeltas** become the timestamp of now plus the delta, for parameters such as an expiry time.
 - **Circular references** and nesting deeper than 256 levels raise `ValueError` instead of hitting Python's recursion limit.
 
-In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`.
+In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`. A repeated field can express neither `null` nor nesting, so `None` in a list raises `ValueError` and a list inside a list raises `TypeError`.
 
 ### Query parameters
 
@@ -271,7 +271,7 @@ class ListModels(BaseAPIMethod[ModelList]):
     limit: int | None = None          # sent as ?limit=...
 ```
 
-A list or tuple is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`. Booleans become `true` and `false`, and enums their values. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
+A list or tuple is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`; `None` in the list raises `ValueError`, since a repeated key has no `null` and dropping it would shift the other items. Booleans become `true` and `false`, and enums their values. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
 
 To send a field under another name, use `validation_alias` and `serialization_alias` rather than `alias`. The constructor then takes the field name in both mypy and pyright; with `alias`, mypy wants the field name and pyright the alias. At runtime both names are accepted.
 
@@ -313,7 +313,7 @@ RetrieveModel(model_id="example-1").request_path   # "/models/example-1"
 - **`build_url` gets an encoded path.** Join it without encoding it again, e.g. with `URL.joinpath(..., encoded=True)` as `BaseAPI` does. yarl's `/` operator would turn `%2F` into `%252F`, and the server would see a different identifier.
 - **Rejected values.** `None`, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
 - **Identifiers with slashes.** For values such as `meta-llama/Llama-3`, set `__request_path_safe__ = "/"` on that method. Each segment is still checked for `.` and `..`.
-- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`) and a field that is also in `__request_query__` raise `TypeError` when the class is defined, not when the request is sent. Write literal braces as `{{` and `}}`.
+- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__` and a field annotated as a list, set, dict or model (it has no single segment) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
 
 ## Uploading files
 
@@ -353,7 +353,7 @@ How files behave on retry, and why:
 
 - **Every attempt opens the file again.** `InputFile.open()` returns a fresh iterator each time, so a retry sends the whole content, not the rest of a half-read stream.
 - **A one-shot source disables retries.** A request whose files can be read only once (`StreamFile`, a non-seekable `IOFile`) is never retried, even if `__retryable__` is set: a retry would send an empty or truncated file.
-- **A failing source is not a network error.** A missing `PathFile` (or one that points to a directory), or a source that fails while it is sent, raises `APIRequestError`, which is not retried. Retrying would fail the same way.
+- **A failing source is not a network error.** A missing `PathFile` (or one that points to a directory), or a source that fails while it is sent, raises `APIRequestError`, which is not retried. Retrying would fail the same way. So does an `IOFile` over a non-blocking stream that has no data ready: its `read()` returns `None`, which is not the end, and reading on would send a truncated file.
 
 Text streams are rejected when the method is created, and files in a JSON or URL-encoded body raise `TypeError`.
 
@@ -453,7 +453,7 @@ async with session.stream(StreamMessage(prompt="Hi")) as events:
 - **Format.** It must be set for models and unions: the item type alone doesn't tell SSE from NDJSON. Without it the class definition raises `TypeError`. `ServerSentEvent` items imply SSE.
 - **Parsing.** SSE follows the HTML standard: multi-line `data`, comments, `event`, `id` and `retry`, and `\n`, `\r\n` or `\r` line endings. An event split across chunks is held back until it is complete, and an unfinished event at the end of the body is dropped. NDJSON skips blank lines.
 - **Validation.** Each event is validated through a `TypeAdapter` built once, when the class is defined, from the generic argument as written. That is why discriminated unions and `type` aliases work as item types. An event that doesn't match raises `APIResponseError`.
-- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that). Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
+- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that). Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. Only SSE and NDJSON have events to check, so a terminal on a `BYTES` or `TEXT` stream raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
 - **Errors inside the stream.** An SSE event of type `error` (Anthropic) raises the `APIStatusError` built by the session's error resolver, so a provider's `classify` can mark it transient. So does decoded data that the parser's `error_events` matcher accepts. The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
 - **Raw events.** `BaseStreamMethod[ServerSentEvent]` yields events as they are, with their `data`, `event`, `id` and `retry`. `[DONE]` and error events are handled the same way.
 - **Limits.** `StreamResponseParser(max_line_size=...)` limits one SSE or NDJSON line and `max_event_size=...` the data of one SSE event, in characters. Both are off by default; set them for an untrusted server, since a line without an end would otherwise grow in memory.
@@ -708,7 +708,7 @@ Any object with a `header_name` and an `encode()` method is an `IAuth`; it does 
 AiohttpSession(api, auth, resolver, headers=Headers({"anthropic-version": "2023-06-01"}))
 ```
 
-They are copied into the connection pool when it is created, so set them before the first request; changes made after that are not sent until the session is closed and opened again. For a header that changes, use a method's `__request_headers__` or a call's `headers=` instead.
+They are read on every request, so a header added later with `session.headers.add(...)` is sent from the next request on.
 
 A request gets headers from four places. Names are case-insensitive, and a later place replaces a header of an earlier one:
 

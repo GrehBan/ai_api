@@ -304,6 +304,29 @@ def test_custom_json_dumps_for_form_mappings() -> None:
     assert urlencoded(form) == [("meta", "<json>")]
 
 
+@pytest.mark.parametrize(
+    ("value", "error", "match"),
+    [
+        (["a", None], ValueError, "'tags' cannot send None"),
+        ([["a", "b"], ["c"]], TypeError, "'tags' cannot send nested lists"),
+    ],
+    ids=["none", "nested"],
+)
+@pytest.mark.parametrize(
+    "body_format", [BodyFormat.FORM, BodyFormat.MULTIPART]
+)
+def test_form_lists_it_cannot_express_are_rejected(
+    builder: AiohttpBodyBuilder,
+    body_format: BodyFormat,
+    value: list[Any],
+    error: type[Exception],
+    match: str,
+) -> None:
+    # A repeated field has no null, and nested lists would be flattened.
+    with pytest.raises(error, match=match):
+        builder.build({"tags": value}, body_format)
+
+
 def test_none_fields_are_skipped() -> None:
     builder = AiohttpBodyBuilder(normalizer=KeepNone())
 

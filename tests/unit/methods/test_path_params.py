@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 import math
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -54,6 +54,55 @@ def test_several_params() -> None:
 )
 def test_value_conversion(value: Any, expected: str) -> None:
     assert build_path("/x/{value}", {"value": value}) == f"/x/{expected}"
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [list[str], tuple[int, ...], set[str], dict[str, int], Region | list[str]],
+    ids=["list", "tuple", "set", "dict", "union-with-list"],
+)
+def test_container_path_field_is_rejected(annotation: Any) -> None:
+    # It has no single path segment; str() would send its Python repr.
+    with pytest.raises(TypeError, match="'ids' must be a scalar"):
+        make_method(
+            BaseAPIMethod[bytes],
+            path="/items/{ids}",
+            fields={"ids": annotation},
+        )
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [str, int, float, bool, Region, str | None, bytes, Literal["a", "b"]],
+    ids=[
+        "str",
+        "int",
+        "float",
+        "bool",
+        "enum",
+        "optional",
+        "bytes",
+        "literal",
+    ],
+)
+def test_scalar_path_field_is_accepted(annotation: Any) -> None:
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        path="/items/{item}",
+        fields={"item": annotation},
+    )
+
+    assert method_cls.__request_path_params__ == {"item"}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [["a", "b"], {"a": 1}],
+    ids=["list", "dict"],
+)
+def test_container_in_an_any_path_field_is_rejected(value: Any) -> None:
+    with pytest.raises(TypeError, match="'ids' must be a scalar"):
+        build_path("/items/{ids}", {"ids": value})
 
 
 def test_literal_braces() -> None:

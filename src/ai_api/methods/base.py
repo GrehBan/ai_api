@@ -20,6 +20,7 @@ from ai_api.http.headers import Headers
 from ai_api.http.protocols import HeadersType, IHeaders, Query
 from ai_api.methods.fields import (
     has_one_shot_file,
+    is_container_type,
     is_mapping_type,
     query_value,
     wrap_streams,
@@ -185,7 +186,9 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         Raises:
             TypeError: If the template is malformed, names a missing
-                field, or a placeholder is also a query parameter.
+                field, a placeholder is also a query parameter, or its
+                field is annotated as a mapping, a model or a collection,
+                which has no single path segment.
         """
         template = cls.__dict__.get("__request_path__")
 
@@ -212,6 +215,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                 f"{cls.__name__}: fields {sorted(overlap)} cannot be both "
                 "path and query parameters"
             )
+
+        for name in sorted(cls.__request_path_params__):
+            if is_container_type(cls.model_fields[name].annotation):
+                raise TypeError(
+                    f"{cls.__name__}: path parameter {name!r} must be a "
+                    "scalar, not a mapping, a model or a collection"
+                )
 
     @classmethod
     def _init_query_params(cls) -> None:
@@ -376,6 +386,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         kept.
 
         Raises:
+            TypeError: If a parameter (of a field typed ``Any``) holds a
+                mapping, a model or a list.
             ValueError: If a parameter is ``None``, empty, or a ``.``/``..``
                 segment.
         """
@@ -472,8 +484,14 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
     ``ResponseT`` is the type of the parsed response: a ``BaseAPIType``
     model (parsed as JSON), ``str``, ``bytes`` or ``None``.
 
+    Other arguments (``list[Model]``, ``dict``, unions, type aliases)
+    raise ``TypeError`` at class definition unless the method sets its
+    own ``__response_parser__``: the default parser could only fail on
+    the response, after the request was sent.
+
     Attributes:
         __response_parser__: Parser of the response.
+        __response_argument__: The generic argument as written.
 
     Example:
         >>> class ListModels(BaseAPIMethod[ModelList]):
@@ -483,6 +501,16 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
 
     __response_format__ = ResponseFormat.JSON
     __response_parser__: ClassVar[IResponseParser] = BufferedResponseParser()
+    __response_argument__: ClassVar[Any] = None
+
+    @classmethod
+    def _init_response_type(cls) -> None:
+        """Infer the response type and keep the argument as written."""
+        super()._init_response_type()
+        args = cls.__pydantic_generic_metadata__["args"]
+
+        if args:
+            cls.__response_argument__ = args[0]
 
     @classmethod
     def _infer_response_format(
@@ -511,15 +539,32 @@ class BaseAPIMethod[ResponseT](BaseMethod[ResponseT]):
         would return a value of another type than the one declared.
 
         Raises:
-            TypeError: If ``__returning__`` is known,
-                ``__response_parser__`` is not set explicitly and the
-                format is a stream format or produces another type.
+            TypeError: If ``__response_parser__`` is not set explicitly
+                and the generic argument is not a class (such as
+                ``list[Model]`` or a union), or the format is a stream
+                format or produces another type.
         """
         returning = cls.__returning__
 
-        # Unknown for type variables and generic aliases, and for
-        # BaseAPIMethod itself, defined before _BASE_METHODS.
-        if returning is None or cls._defines("__response_parser__"):
+        if returning is None:
+            argument = cls.__response_argument__
+
+            # Unset on BaseAPIMethod itself (defined before _BASE_METHODS);
+            # a type variable is filled in by a subclass.
+            if (
+                argument is None
+                or isinstance(argument, TypeVar)
+                or cls._defines("__response_parser__")
+            ):
+                return
+
+            raise TypeError(
+                f"{cls.__name__}: responses of type {_type_name(argument)} "
+                "are not supported by the default parser; use a model, "
+                "str, bytes or None, or set __response_parser__ explicitly"
+            )
+
+        if cls._defines("__response_parser__"):
             return
 
         response_format = cls.__response_format__
@@ -695,13 +740,22 @@ class BaseStreamMethod[ItemT](BaseMethod[ItemT]):
             item: The generic argument as written.
 
         Raises:
-            TypeError: If the format is not a stream format, or BYTES or
-                TEXT is set for another item type.
+            TypeError: If the format is not a stream format, BYTES or
+                TEXT is set for another item type, or a BYTES or TEXT
+                stream sets ``__stream_terminal__``, which only SSE and
+                NDJSON check.
         """
         response_format = cls.__response_format__
 
         if response_format in _EVENT_FORMATS:
             return
+
+        if cls.__stream_terminal__ is not None:
+            raise TypeError(
+                f"{cls.__name__}: __stream_terminal__ is checked only for "
+                f"SSE and NDJSON streams, not {response_format.name}; "
+                "remove it or set __stream_parser__ explicitly"
+            )
 
         expected = _STREAM_TYPE_BY_FORMAT.get(response_format)
 

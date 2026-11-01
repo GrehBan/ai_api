@@ -68,6 +68,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after a 200 (OpenAI's `failed` response, `response.failed` or `error`
   stream event, Anthropic's `error` stream event) is never transient; its
   class is still picked by its code or type.
+- Values the request cannot express raise instead of being dropped or
+  mangled: `None` in a query list (`ValueError`), `None` in a form list
+  (`ValueError`) and a list inside a form list (`TypeError`, it was
+  flattened); a path parameter annotated as a list, set, dict or model
+  raises `TypeError` at class definition, and such a value in an `Any`
+  field when the request is built (it was sent as its Python `repr`).
+- Checks moved to class definition: a buffered method whose generic
+  argument is not a class (`list[Model]`, a union) and a `BYTES`/`TEXT`
+  stream with `__stream_terminal__` raise `TypeError` unless the method
+  sets its own parser. Before, the first failed after the request was sent
+  and the second was ignored. A `TEXT` stream checks its charset when it
+  opens, like the `Content-Type` of SSE, instead of on the first item.
+- `IOFile` over a non-blocking stream with no data ready raises
+  `BlockingIOError` (sent as `APIRequestError`) instead of sending a
+  truncated file.
+- `AiohttpSession` builds the session's headers for every request instead
+  of copying them into the connection pool once, so a header added after
+  the first request is sent.
 - `generation.stream(...)` yields a `GenerationStream`, a `Stream` subclass,
   instead of a plain `Stream`.
 - `CompletedEvent.model` is required: an adapter that builds the event

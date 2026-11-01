@@ -116,8 +116,11 @@ def test_lists_become_repeated_keys() -> None:
     }
 
 
-def test_none_items_of_a_list_are_dropped() -> None:
-    assert Search(raw=[1, None, 2]).get_query_map() == {"raw": ["1", "2"]}
+def test_none_items_of_a_list_are_rejected() -> None:
+    # A repeated key cannot express null; dropping it would shift the
+    # other items, so it fails instead.
+    with pytest.raises(ValueError, match="'raw' cannot send None"):
+        Search(raw=[1, None, 2]).get_query_map()
 
 
 @pytest.mark.parametrize(

@@ -125,6 +125,19 @@ async def test_extra_headers(api: LocalAPI, recorder: Recorder) -> None:
     assert headers["User-Agent"] == SERVER_SOFTWARE
 
 
+async def test_headers_added_after_the_first_request_are_sent(
+    api: LocalAPI,
+    recorder: Recorder,
+) -> None:
+    async with make_session(api) as session:
+        await session.send_request(Ping())
+        session.headers.add({"X-Added": "later"})
+        await session.send_request(Ping())
+
+    assert "X-Added" not in recorder.requests[0].headers
+    assert recorder.last.headers["X-Added"] == "later"
+
+
 class TracedPing(Ping):
     __request_headers__ = {"X-Level": "method", "X-Method": "m"}
 

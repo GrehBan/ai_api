@@ -309,3 +309,30 @@ async def test_an_error_event_that_does_not_fit_has_no_raw() -> None:
         await collect(parse([body]))
 
     assert info.value.raw is None
+
+
+@pytest.mark.parametrize(
+    ("item", "response_format"),
+    [(bytes, ResponseFormat.BYTES), (str, ResponseFormat.TEXT)],
+    ids=["bytes", "text"],
+)
+def test_terminal_of_a_raw_stream_is_rejected(
+    item: type[Any], response_format: ResponseFormat
+) -> None:
+    # Only SSE and NDJSON read the terminal; a raw stream would ignore it.
+    with pytest.raises(TypeError, match="checked only for SSE and NDJSON"):
+        make_method(
+            BaseStreamMethod[item],
+            __response_format__=response_format,
+            __stream_terminal__=STOPS,
+        )
+
+
+def test_terminal_with_own_parser_is_kept() -> None:
+    method_cls = make_method(
+        BaseStreamMethod[bytes],
+        __stream_terminal__=STOPS,
+        __stream_parser__=StreamResponseParser(),
+    )
+
+    assert method_cls().stream_terminal is STOPS

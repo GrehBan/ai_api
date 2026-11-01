@@ -53,10 +53,17 @@ def encode_path_value(name: str, value: Any, safe: str, raw: Any) -> str:
         The percent-encoded value.
 
     Raises:
+        TypeError: If the value dumps to an object or a list, which has
+            no single path segment.
         ValueError: If the value is ``None``, dumps to ``null`` (such as
             NaN), is empty, or is a ``.``/``..`` segment, which would
             change the request path.
     """
+    if isinstance(value, (dict, list)):
+        raise TypeError(
+            f"Path parameter {name!r} must be a scalar, not {raw!r}"
+        )
+
     if value is None:
         if raw is not None:
             raise ValueError(

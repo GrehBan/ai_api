@@ -301,7 +301,8 @@ class AiohttpSession(BaseSession):
         """Return the ``ClientSession``, creating it if needed.
 
         Returns:
-            An open ``ClientSession`` with the default headers set.
+            An open ``ClientSession``. It holds no headers: they are
+            built for every request, so later changes take effect.
 
         Raises:
             RuntimeError: If called from another event loop.
@@ -315,7 +316,6 @@ class AiohttpSession(BaseSession):
                 connector=TCPConnector(**self._connector_kwargs),
                 json_serialize_bytes=self.json_dumps,
                 timeout=self._timeout,
-                headers=self.headers.build({USER_AGENT: SERVER_SOFTWARE}),
                 trust_env=self._trust_env,
                 loop=self._loop,
             )
@@ -409,7 +409,8 @@ class AiohttpSession(BaseSession):
     ) -> ClientResponse:
         """Send the HTTP request for a method.
 
-        The session's default headers are set on the ``ClientSession``;
+        Every request gets the session's headers as they are now (with
+        the library's ``User-Agent``), so a header added later is sent;
         the method's headers override them, the headers of the call
         override those, and the authentication header, produced for every
         request so that an ``IAuth`` that rotates its token takes effect
@@ -448,7 +449,8 @@ class AiohttpSession(BaseSession):
             else {"allow_redirects": False}
         )
 
-        request_headers = method.request_headers.build(headers)
+        request_headers = self.headers.build({USER_AGENT: SERVER_SOFTWARE})
+        request_headers.update(method.request_headers.build(headers))
         request_headers[self.auth.header_name] = self.auth.encode()
 
         try:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import types
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import (
     Any,
     Union,
@@ -39,6 +39,34 @@ def is_mapping_type(annotation: Any) -> bool:
     )
 
 
+def is_container_type(annotation: Any) -> bool:
+    """Check whether a field annotation allows containers.
+
+    Args:
+        annotation: The annotation of a field, unions included.
+
+    Returns:
+        ``True`` if the annotation or a member of its union is a mapping,
+        a Pydantic model or a collection such as ``list`` or ``set``;
+        strings and bytes are scalars.
+    """
+    origin = get_origin(annotation)
+
+    if origin in {Union, types.UnionType}:
+        return any(is_container_type(arg) for arg in get_args(annotation))
+
+    if is_mapping_type(annotation):
+        return True
+
+    target = origin or annotation
+
+    return (
+        isinstance(target, type)
+        and issubclass(target, Collection)
+        and not issubclass(target, (str, bytes, bytearray))
+    )
+
+
 def _query_item(name: str, value: Any) -> str:
     """Convert one dumped query value to a string.
 
@@ -68,14 +96,20 @@ def query_value(name: str, value: Any) -> str | list[str]:
         value: A JSON-mode dump of the field.
 
     Returns:
-        A string, or a list of strings sent as repeated keys; ``None``
-        items are dropped.
+        A string, or a list of strings sent as repeated keys.
 
     Raises:
         TypeError: If the value is an object or contains one.
+        ValueError: If a list contains ``None``, which a repeated key
+            cannot express; dropping it would shift the other items.
     """
     if isinstance(value, list):
-        return [_query_item(name, item) for item in value if item is not None]
+        if any(item is None for item in value):
+            raise ValueError(
+                f"Query parameter {name!r} cannot send None in a list"
+            )
+
+        return [_query_item(name, item) for item in value]
 
     return _query_item(name, value)
 
