@@ -85,11 +85,16 @@ class AiohttpBodyBuilder:
             TypeError: If files or binary data are sent as JSON or as a
                 URL-encoded form, a text stream is uploaded, or a value
                 cannot be encoded as JSON.
-            ValueError: If the body format is unknown or a JSON value is
-                NaN or infinite.
+            ValueError: If the body format is unknown, a JSON value is NaN
+                or infinite, or ``BodyFormat.NONE`` is given a non-empty
+                body, which would be dropped.
             APIRequestError: If a file to upload does not exist.
         """
         if body_format is BodyFormat.NONE:
+            if body:
+                names = ", ".join(sorted(body))
+                message = f"A request without a body cannot send: {names}"
+                raise ValueError(message)
             return {}
 
         normalized = self._normalizer.normalize_mapping(body)

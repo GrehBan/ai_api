@@ -245,6 +245,8 @@ A body that cannot be decoded or validated raises `APIResponseError`, which is n
 | `FORM` | `application/x-www-form-urlencoded` | files raise `TypeError` |
 | `MULTIPART` | `multipart/form-data` | the only format that carries files |
 
+A method without a body sends every field as a path or query parameter. A field that is neither raises `TypeError` when the class is defined, since it would never be sent: list it in `__request_query__` or set a body format. Fields with `exclude=True` are never sent, so they are allowed, and classes without `__request_path__` (bases of other methods) are not checked.
+
 Before encoding, the values are normalized:
 
 - **`None`** fields are dropped, at the top level and in nested models, but kept as `null` inside lists and dicts, where the position or key matters.
@@ -600,7 +602,7 @@ Waits use random exponential backoff of up to 30 s, but never less than `Retry-A
 
 The reasons behind these rules:
 
-- **Retries are opt-in per method.** Most AI endpoints are `POST`s that are not idempotent. A request that timed out may still have run on the server, and sending it again can start a second billed generation. The author of a method knows whether that is acceptable; the library does not.
+- **Retries are opt-in per method.** Most AI endpoints are `POST`s that are not idempotent. A request that timed out may still have run on the server, and sending it again can start a second billed generation. The author of a method knows whether that is acceptable; the library does not. The library's provider methods opt in, as the official SDKs do, and accept the same risk.
 - **A 429 is retried only with `Retry-After`.** Without it there is no telling a short rate limit from an exhausted quota, and retrying a quota error only delays the failure. With it, the server has said when to come back.
 - **`Retry-After` is capped.** A server that asks for ten minutes would otherwise block the caller silently. Raising the error lets the caller decide, for example to queue the work.
 - **The deadline bounds the total time.** Four attempts with long waits and long timeouts could otherwise take far longer than any caller expects.
@@ -795,7 +797,7 @@ For a different URL scheme, write your own class with `base_url`, `version` and 
 
 ## Provider clients
 
-`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried. A stream's `error` event comes after a 200, so its class is picked by its code or type, such as a transient `ServiceUnavailableError` for `server_is_overloaded`. The client owns its session, so close it, ideally with `async with`:
+`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried. A stream's `error` event and a `failed` response come after a 200, so their class is picked by the code or type, such as `ServiceUnavailableError` for `server_is_overloaded`. Such a failure is never transient: the generation ran and failed, and running it again is your choice, as in the official SDK, which retries by the HTTP status only. The client owns its session, so close it, ideally with `async with`:
 
 ```python
 from ai_api.providers.openai import OpenAIClient
@@ -842,7 +844,8 @@ async def ask_streamed(client: OpenAIClient) -> str:
 
 - **`output_text` is computed.** The API sends no such field; like the official SDKs, `Response.output_text` joins the `output_text` parts of the `message` items, and is `None` when there are none.
 - **Nothing unknown is dropped or rejected.** Output items, content parts and stream events that the library does not model yet (reasoning, tool calls, new event types) arrive as `UnknownOutputItem`, `UnknownContent` and `UnknownEvent`, with every field the provider sent kept as an extra field.
-- **Failures are raised.** A `failed` response, buffered (`CreateResponse`) or as the stream's `response.failed` event, raises the `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`, with the `Response` or the event in `raw`; so does the separate `error` event. `server_error` is a transient `InternalServerError`, `rate_limit_exceeded` a `RateLimitError`; a code without its own class, such as `invalid_prompt`, gives a plain, non-transient `APIStatusError`. This is stricter than the official SDK, which returns a failed response as a value. `CreateResponse` is not retried by default, because creating a response is not idempotent. `response.incomplete` stays a regular `ResponseStateEvent` with `response.incomplete_details`.
+- **Failures are raised.** A `failed` response, buffered (`CreateResponse`) or as the stream's `response.failed` event, raises the `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`, with the `Response` or the event in `raw`; so does the separate `error` event. `server_error` is an `InternalServerError`, `rate_limit_exceeded` a `RateLimitError`; a code without its own class, such as `invalid_prompt`, gives a plain `APIStatusError`. None of them is transient (see [Provider clients](#provider-clients)). This is stricter than the official SDK, which returns a failed response as a value.
+- **Retried like the SDK.** `CreateResponse` and `StreamResponse` set `__retryable__ = True`: a lost connection, a timeout, a 5xx or a 429 with `Retry-After` is retried, a stream only while it opens. `response.incomplete` stays a regular `ResponseStateEvent` with `response.incomplete_details`.
 - **Checked before sending.** `max_output_tokens` of at least 16, `temperature` from 0 to 2, and metadata of up to 16 pairs with keys up to 64 and values up to 512 characters, as OpenAI documents them.
 
 ### Anthropic Messages API
@@ -885,6 +888,7 @@ async def ask_claude_streamed(client: AnthropicClient) -> str:
     return text
 ```
 
+- **Retried like the SDK.** `CreateMessage` and `StreamMessage` set `__retryable__ = True`: a lost connection, a timeout, a 5xx, the 529 `overloaded_error` or a 429 with `Retry-After` is retried, a stream only while it opens.
 - **The version is part of the method.** Both methods send `anthropic-version: 2026-10-21` (`VERSION_HEADERS`), the version their types follow, whatever session sends them. A method of your own for Anthropic sets `__request_headers__ = VERSION_HEADERS` too.
 - **`text` is computed.** `Message.text` joins the `text` blocks of the content, and is `None` when there are none.
 - **Nothing unknown is dropped or rejected.** Content blocks, deltas and stream events the library does not model yet (thinking, tool use, new event types) arrive as `UnknownBlock`, `UnknownDelta` and `UnknownEvent`, with every field kept. The `error` event is raised as an `APIStatusError` chosen by its type, such as a transient `ServiceUnavailableError` for `overloaded_error`.

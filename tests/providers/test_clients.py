@@ -243,33 +243,32 @@ def test_openai_exhausted_limits_are_quota_errors(
 
 
 @pytest.mark.parametrize(
-    ("body", "error_class", "transient"),
+    ("body", "error_class"),
     [
         (
             {"type": "error", "code": "server_is_overloaded"},
             ServiceUnavailableError,
-            True,
         ),
-        ({"type": "error", "code": "server_error"}, InternalServerError, True),
+        ({"type": "error", "code": "server_error"}, InternalServerError),
         (
             {"error": {"type": "invalid_request_error", "code": None}},
             BadRequestError,
-            False,
         ),
-        ({"type": "error", "code": "ERR_SOMETHING"}, APIStatusError, False),
+        ({"type": "error", "code": "ERR_SOMETHING"}, APIStatusError),
     ],
     ids=["overloaded", "server", "type", "unknown"],
 )
 def test_openai_stream_error_is_classified_by_code_or_type(
     body: dict[str, Any],
     error_class: type[APIStatusError],
-    transient: bool,
 ) -> None:
     resolved = OpenAIErrorResolver().resolve(status=200, body=body, headers={})
 
     assert type(resolved) is error_class
     assert resolved.status == 200
-    assert resolved.transient is transient
+    # The generation ran and failed: running it again is the caller's
+    # choice, so an in-band failure is never transient.
+    assert resolved.transient is False
 
 
 def test_factory_turns_a_token_into_auth_and_forwards_arguments() -> None:

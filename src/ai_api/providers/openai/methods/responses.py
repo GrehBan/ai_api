@@ -34,7 +34,10 @@ class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
     ``Response`` as the error's ``raw``. This is stricter than the
     official SDK, which returns it as data, and matches its
     ``get_final_response()`` and Anthropic, where a failure is always an
-    error.
+    error. A transient failure (a lost connection, a timeout, a 5xx, a
+    429 with ``Retry-After``) is retried, as the official SDKs do. A
+    timeout or a lost connection may hide a generation that ran on the
+    server, a risk the SDKs accept too.
 
     Example:
         >>> response = await client.send_request(
@@ -46,6 +49,7 @@ class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
     __request_path__ = "/responses"
     __request_method__ = "POST"
     __request_body_format__ = BodyFormat.JSON
+    __retryable__ = True
     __response_parser__ = BufferedResponseParser(
         error_responses=FAILED_RESPONSE
     )
@@ -54,12 +58,13 @@ class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
 class StreamResponse(ResponseParams, BaseStreamMethod[ResponseStreamEvent]):
     """Create a response and stream its events.
 
-    The stream ends with ``response.completed`` or
-    ``response.incomplete``; a body that ends before one of them raises
-    ``APIStreamInterruptedError``. An ``error`` event and
-    ``response.failed`` are raised as the ``APIStatusError`` that
-    ``OpenAIErrorResolver`` picks from their code; for
-    ``response.failed`` the event is the error's ``raw``.
+    Only opening the stream is retried, on a transient failure; once
+    events arrive, a failure reaches the caller. The stream ends with
+    ``response.completed`` or ``response.incomplete``; a body that ends
+    before one of them raises ``APIStreamInterruptedError``. An
+    ``error`` event and ``response.failed`` are raised as the
+    ``APIStatusError`` that ``OpenAIErrorResolver`` picks from their
+    code; for ``response.failed`` the event is the error's ``raw``.
 
     Attributes:
         stream: Always ``True``; asks OpenAI for server-sent events.
@@ -75,6 +80,7 @@ class StreamResponse(ResponseParams, BaseStreamMethod[ResponseStreamEvent]):
     __request_path__ = "/responses"
     __request_method__ = "POST"
     __request_body_format__ = BodyFormat.JSON
+    __retryable__ = True
     __response_format__ = ResponseFormat.SSE
     __stream_terminal__ = TERMINAL_EVENTS
     __stream_parser__ = StreamResponseParser(error_events=ERROR_EVENTS)

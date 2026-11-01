@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from tenacity import RetryCallState
 
-from ai_api.enums import ResponseFormat
+from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.http.exceptions.protocols import (
     IErrorResolver,
 )
@@ -355,6 +355,7 @@ async def test_one_shot_file_disables_retries() -> None:
         BaseAPIMethod[bytes],
         fields={"file": (Any, None)},
         __retryable__=True,
+        __request_body_format__=BodyFormat.MULTIPART,
     )
     upload = method_cls.model_validate({"file": StreamFile(produce())})
     transport = FakeTransport([failed(503), ok()])

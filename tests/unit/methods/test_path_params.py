@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from ai_api.enums import BodyFormat
 from ai_api.methods.base import BaseAPIMethod
 from tests.conftest import make_method
 
@@ -186,7 +187,12 @@ def test_path_and_query_overlap_in_subclass() -> None:
 
 def test_subclass_inherits_path_params() -> None:
     base = make_method(BaseAPIMethod[bytes], path="/m/{a}", fields={"a": str})
-    sub = make_method(base, path=None, fields={"b": (int, 0)})
+    sub = make_method(
+        base,
+        path=None,
+        fields={"b": (int, 0)},
+        __request_body_format__=BodyFormat.JSON,
+    )
 
     assert sub.__request_path_params__ == frozenset({"a"})
     assert sub.model_validate({"a": "x/y"}).request_path == "/m/x%2Fy"
@@ -194,6 +200,9 @@ def test_subclass_inherits_path_params() -> None:
 
 def test_subclass_with_own_path_replaces_params() -> None:
     base = make_method(BaseAPIMethod[bytes], path="/m/{a}", fields={"a": str})
-    sub = make_method(base, path="/static")
+    # Without its placeholder, "a" is a body field of the subclass.
+    sub = make_method(
+        base, path="/static", __request_body_format__=BodyFormat.JSON
+    )
 
     assert sub.__request_path_params__ == frozenset()

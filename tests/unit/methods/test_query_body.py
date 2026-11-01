@@ -24,7 +24,8 @@ class Order(enum.StrEnum):
 
 class ListItems(BaseAPIMethod[bytes]):
     __request_path__ = "/orgs/{org}/items"
-    __request_method__ = "GET"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
     __request_query__ = {"limit", "page_size", "order", "deleted", "after"}
 
     org: str
@@ -319,3 +320,35 @@ def test_request_headers_accept_a_collection() -> None:
     )
 
     assert method_cls().request_headers.headers["x-trace"] == "on"
+
+
+def test_fields_a_bodiless_method_would_drop_are_rejected() -> None:
+    with pytest.raises(TypeError, match=r"\['limit'\] would never be sent"):
+        make_method(
+            BaseAPIMethod[bytes],
+            path="/models",
+            fields={"limit": (int | None, None)},
+            __request_method__="GET",
+        )
+
+
+def test_bases_without_a_path_are_not_checked() -> None:
+    class Paged(BaseAPIMethod[bytes]):
+        limit: int | None = None
+
+    class ListModels(Paged):
+        __request_path__ = "/models"
+        __request_method__ = "GET"
+        __request_query__ = {"limit"}
+
+    assert ListModels(limit=2).get_query_map() == {"limit": "2"}
+
+
+def test_excluded_fields_are_not_body_fields() -> None:
+    class Ping(BaseAPIMethod[bytes]):
+        __request_path__ = "/ping"
+        __request_method__ = "GET"
+
+        note: str = Field(default="local", exclude=True)
+
+    assert Ping().get_body_map() == {}

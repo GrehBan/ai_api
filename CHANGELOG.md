@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AiohttpSession` to the session built from the token, typed by
   `ai_api.session.aiohttp.AiohttpSessionOptions`; with `session=` they raise
   `ValueError`.
+- `BaseAPIType.__upstream_schema__`: the name of the upstream schema
+  definition a provider model mirrors (several names, or `()` for none).
+  `tests/providers/test_wire_contracts.py` requires it on every provider
+  model and checks each modeled field against that definition: it exists
+  upstream, accepts `null` where upstream does and is optional where
+  upstream is.
 - The root package re-exports the shared generation layer:
   `GenerationRequest`, `Turn`, `GenerationResponse`, `TokenUsage`,
   `TextDeltaEvent`, `CompletedEvent`, `OtherEvent`, `GenerationEvent`,
@@ -50,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A method without a body (`BodyFormat.NONE`, the default) whose field is
+  neither a path nor a query parameter raises `TypeError` at class
+  definition, instead of dropping the field from every request; the aiohttp
+  body builder refuses a non-empty body for `NONE` with `ValueError`.
+- OpenAI's `CreateResponse` and `StreamResponse` and Anthropic's
+  `CreateMessage` and `StreamMessage` set `__retryable__ = True`: transient
+  failures are retried (a stream only while it opens), as in the official
+  SDKs. Before, `client.generation` never retried.
+- `OpenAIErrorResolver`: a failure reported after a 200 (a `failed`
+  response, a `response.failed` or `error` stream event) is never
+  transient; its class is still picked by its code or type.
 - `generation.stream(...)` yields a `GenerationStream`, a `Stream` subclass,
   instead of a plain `Stream`.
 - `CompletedEvent.model` is required: an adapter that builds the event
@@ -59,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cumulative `message_delta` counts) and `MessageDelta` for the final
   `CompletedEvent`. A stream without `message_start`, or with counts before
   it, now raises `APIResponseError` instead of reporting partial counts.
+
+### Fixed
+
+- `OutputText.logprobs` accepts `null`, which OpenAI sends when log
+  probabilities were not requested; such a response failed validation.
 
 ### Removed
 

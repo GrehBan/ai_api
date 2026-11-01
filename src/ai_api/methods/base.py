@@ -165,6 +165,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         super().__pydantic_init_subclass__(**kwargs)
         cls._init_query_params()
         cls._init_path_params()
+        cls._check_body_fields()
         cls._init_response_type()
 
         # A parametrized class such as BaseStreamMethod[Event] is created
@@ -235,6 +236,41 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     f"{cls.__name__}: query parameter {name!r} cannot be "
                     "a mapping or a model"
                 )
+
+    @classmethod
+    def _check_body_fields(cls) -> None:
+        """Reject fields that a method without a body would never send.
+
+        A field that is neither a path nor a query parameter goes to the
+        body, and ``BodyFormat.NONE`` sends no body, so such a field
+        would be dropped silently (a ``GET`` whose ``__request_query__``
+        was forgotten, for one). Classes without a ``__request_path__``
+        are bases that a subclass completes, so they are not checked.
+
+        Raises:
+            TypeError: If the body format is ``NONE`` and a field, other
+                than one excluded from dumps, is neither a path nor a
+                query parameter.
+        """
+        if (
+            cls.__request_body_format__ is not BodyFormat.NONE
+            or getattr(cls, "__request_path__", None) is None
+        ):
+            return
+
+        params = cls.__request_query__ | cls.__request_path_params__
+
+        if body := sorted(
+            name
+            for name, field in cls.model_fields.items()
+            if name not in params and not field.exclude
+        ):
+            raise TypeError(
+                f"{cls.__name__}: fields {body} would never be sent: they "
+                "are not path or query parameters, and the method has no "
+                "body; add them to __request_query__ or set "
+                "__request_body_format__"
+            )
 
     @classmethod
     def _init_response_type(cls) -> None:

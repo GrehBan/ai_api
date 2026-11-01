@@ -368,6 +368,8 @@ async def test_stream_error_event_raises_overloaded(
 
     assert caught.value.provider is case.provider
     assert "Overloaded" in str(caught.value)
+    # Only opening is retried: the events already arrived.
+    assert len(recorder.requests) == 1
 
 
 async def test_stream_cut_before_its_end_raises(
@@ -430,6 +432,29 @@ async def test_error_status_raises_before_streaming(
     assert created.value.provider is case.provider
     assert created.value.transient is False
     assert len(recorder.requests) == 2
+
+
+async def test_transient_failures_are_retried(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    unavailable = Reply(status=503, json={"error": {"message": "Busy"}})
+    recorder.reply(
+        unavailable,
+        Reply(json=case.response),
+        unavailable,
+        events(case.stream),
+    )
+
+    async with client:
+        response = await client.generation.create(REQUEST)
+        async with client.generation.stream(REQUEST) as stream:
+            completed = await stream.final()
+
+    assert response.text == case.text
+    assert completed.usage == case.stream_usage
+    assert len(recorder.requests) == 4
 
 
 def text_of(events: list[Any]) -> list[str]:

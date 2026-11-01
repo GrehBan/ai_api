@@ -75,8 +75,13 @@ def urlencoded(form: FormData) -> list[tuple[str, str]]:
     return parse_qsl(form().decode(), keep_blank_values=True)
 
 
-def test_none_format_ignores_body(builder: AiohttpBodyBuilder) -> None:
-    assert builder.build({"a": 1}, BodyFormat.NONE) == {}
+def test_none_format_sends_nothing(builder: AiohttpBodyBuilder) -> None:
+    assert builder.build({}, BodyFormat.NONE) == {}
+
+
+def test_none_format_refuses_a_body(builder: AiohttpBodyBuilder) -> None:
+    with pytest.raises(ValueError, match="without a body cannot send: a"):
+        builder.build({"a": 1}, BodyFormat.NONE)
 
 
 def test_json_is_normalized(builder: AiohttpBodyBuilder) -> None:

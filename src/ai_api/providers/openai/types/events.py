@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Final, Literal
+from typing import Annotated, ClassVar, Final, Literal
 
 from pydantic import Discriminator, Tag
 
@@ -23,6 +23,9 @@ class BaseResponseStreamEvent(BaseAPIType):
         sequence_number: Position of the event in the stream.
     """
 
+    # A base: its fields are checked through its subclasses.
+    __upstream_schema__: ClassVar[str | tuple[str, ...] | None] = ()
+
     sequence_number: int
 
 
@@ -38,6 +41,15 @@ class ResponseStateEvent(BaseResponseStreamEvent):
         type: The new state.
         response: The response as of this event.
     """
+
+    __upstream_schema__ = (
+        "ResponseCreatedEvent",
+        "ResponseQueuedEvent",
+        "ResponseInProgressEvent",
+        "ResponseCompletedEvent",
+        "ResponseFailedEvent",
+        "ResponseIncompleteEvent",
+    )
 
     type: Literal[
         "response.created",
@@ -59,6 +71,11 @@ class OutputItemEvent(BaseResponseStreamEvent):
         item: The item as of this event.
     """
 
+    __upstream_schema__ = (
+        "ResponseOutputItemAddedEvent",
+        "ResponseOutputItemDoneEvent",
+    )
+
     type: Literal[
         "response.output_item.added",
         "response.output_item.done",
@@ -77,6 +94,11 @@ class ContentPartEvent(BaseResponseStreamEvent):
         content_index: Position of the part in the message.
         part: The part as of this event.
     """
+
+    __upstream_schema__ = (
+        "ResponseContentPartAddedEvent",
+        "ResponseContentPartDoneEvent",
+    )
 
     type: Literal[
         "response.content_part.added",
@@ -97,6 +119,9 @@ class BaseContentEvent(BaseResponseStreamEvent):
         content_index: Position of the part in the message.
     """
 
+    # A base: its fields are checked through its subclasses.
+    __upstream_schema__: ClassVar[str | tuple[str, ...] | None] = ()
+
     item_id: str
     output_index: int
     content_index: int
@@ -110,6 +135,8 @@ class OutputTextDeltaEvent(BaseContentEvent):
         delta: The new text.
     """
 
+    __upstream_schema__ = "ResponseTextDeltaEvent"
+
     type: Literal["response.output_text.delta"] = "response.output_text.delta"
     delta: str
 
@@ -121,6 +148,8 @@ class OutputTextDoneEvent(BaseContentEvent):
         type: Always ``"response.output_text.done"``.
         text: The whole text of the part.
     """
+
+    __upstream_schema__ = "ResponseTextDoneEvent"
 
     type: Literal["response.output_text.done"] = "response.output_text.done"
     text: str
@@ -134,6 +163,8 @@ class RefusalDeltaEvent(BaseContentEvent):
         delta: The new text of the refusal.
     """
 
+    __upstream_schema__ = "ResponseRefusalDeltaEvent"
+
     type: Literal["response.refusal.delta"] = "response.refusal.delta"
     delta: str
 
@@ -145,6 +176,8 @@ class RefusalDoneEvent(BaseContentEvent):
         type: Always ``"response.refusal.done"``.
         refusal: The whole refusal.
     """
+
+    __upstream_schema__ = "ResponseRefusalDoneEvent"
 
     type: Literal["response.refusal.done"] = "response.refusal.done"
     refusal: str

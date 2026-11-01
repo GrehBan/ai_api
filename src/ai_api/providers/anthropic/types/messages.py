@@ -19,6 +19,8 @@ class TextBlock(BaseAPIType):
         citations: Citations supporting the text, as sent, if any.
     """
 
+    __upstream_schema__ = "TextBlock"
+
     type: Literal["text"] = "text"
     text: str
     citations: list[dict[str, Any]] | None = None
@@ -48,6 +50,8 @@ class StopDetails(BaseAPIType):
         explanation: Human-readable explanation, if available.
     """
 
+    __upstream_schema__ = "RefusalStopDetails"
+
     type: str
     category: str | None = None
     explanation: str | None = None
@@ -59,6 +63,8 @@ class OutputTokensDetails(BaseAPIType):
     Attributes:
         thinking_tokens: Output tokens spent on thinking.
     """
+
+    __upstream_schema__ = "OutputTokensDetails"
 
     thinking_tokens: int
 
@@ -75,6 +81,8 @@ class Usage(BaseAPIType):
         cache_read_input_tokens: Input tokens read from the cache.
         output_tokens_details: Breakdown of the output tokens, if sent.
     """
+
+    __upstream_schema__ = "Usage"
 
     input_tokens: int
     output_tokens: int
@@ -102,6 +110,8 @@ class Message(BaseAPIType):
         stop_details: More about the stop, such as a refusal's category.
         usage: Token counts.
     """
+
+    __upstream_schema__ = "Message"
 
     id: str
     type: Literal["message"] = "message"

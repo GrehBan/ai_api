@@ -75,7 +75,10 @@ class OpenAIErrorResolver(BaseErrorResolver):
     with status ``failed`` are read by their ``response.error``. They
     come with a 200 status, so their class is picked by their code or
     type through ``ERROR_STATUSES``; a code it does not list, such as
-    ``invalid_prompt``, gives ``APIStatusError`` itself, not transient.
+    ``invalid_prompt``, gives ``APIStatusError`` itself. Such an in-band
+    failure is never transient, whatever its class: the generation ran
+    and failed, and running it again is the caller's choice, as in the
+    official SDK, which retries by the HTTP status only.
     """
 
     provider = Provider.OPENAI
@@ -134,9 +137,12 @@ class OpenAIErrorResolver(BaseErrorResolver):
             retry_after: Seconds from ``Retry-After``, if any.
 
         Returns:
-            The error class and the ``transient`` flag.
+            The error class and the ``transient`` flag, always ``False``
+            for a failure reported after a status below 400.
         """
-        if status < HTTPStatus.BAD_REQUEST:
+        in_band = status < HTTPStatus.BAD_REQUEST
+
+        if in_band:
             status = ERROR_STATUSES.get(
                 code or "", ERROR_STATUSES.get(error_type or "", status)
             )
@@ -145,10 +151,11 @@ class OpenAIErrorResolver(BaseErrorResolver):
         ):
             return QuotaExceededError, False
 
-        return super().classify(
+        error_class, transient = super().classify(
             status=status,
             code=code,
             error_type=error_type,
             message=message,
             retry_after=retry_after,
         )
+        return error_class, transient and not in_band

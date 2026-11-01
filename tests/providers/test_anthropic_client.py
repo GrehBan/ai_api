@@ -189,7 +189,7 @@ def test_overloaded_is_a_transient_unavailable_error() -> None:
     assert error.transient is True
 
 
-def test_rate_limit_with_retry_after_is_retried() -> None:
+def test_rate_limit_with_retry_after_is_transient() -> None:
     error = resolve(429, body("rate_limit_error"), {"retry-after": "3"})
 
     assert type(error) is RateLimitError

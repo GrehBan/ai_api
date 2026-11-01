@@ -184,7 +184,9 @@ def test_response_reads_the_reference_example() -> None:
         OutputMessage(
             id=MESSAGE["id"],
             status="completed",
-            content=[OutputText(text=MESSAGE["content"][0]["text"])],
+            content=[
+                OutputText(text=MESSAGE["content"][0]["text"], logprobs=[])
+            ],
         )
     ]
     assert response.output_text == MESSAGE["content"][0]["text"]
@@ -225,6 +227,17 @@ def test_response_keeps_unknown_items_and_parts_whole() -> None:
 def test_an_item_without_a_type_is_rejected() -> None:
     with pytest.raises(ValidationError, match="type"):
         Response.model_validate(RESPONSE | {"output": [{"id": "x"}]})
+
+
+def test_text_without_logprobs_is_read() -> None:
+    # The schema allows null; the documentation examples always send [].
+    message = MESSAGE | {
+        "content": [{**MESSAGE["content"][0], "logprobs": None}]
+    }
+
+    response = Response.model_validate(RESPONSE | {"output": [message]})
+
+    assert response.output_text == MESSAGE["content"][0]["text"]
 
 
 def test_response_without_text_has_no_output_text() -> None:
@@ -393,7 +406,7 @@ async def test_failed_event_raises_by_its_code() -> None:
 
     assert len(received) == 1
     assert caught.value.code == "server_error"
-    assert caught.value.transient is True
+    assert caught.value.transient is False
     assert caught.value.provider is Provider.OPENAI
     assert "Failed" in str(caught.value)
     raw = caught.value.raw
@@ -448,28 +461,25 @@ FAILED = RESPONSE | {
 
 
 @pytest.mark.parametrize(
-    ("error", "error_class", "transient", "message"),
+    ("error", "error_class", "message"),
     [
         (
             {"code": "server_error", "message": "The model failed."},
             InternalServerError,
-            True,
             "The model failed.",
         ),
         (
             {"code": "invalid_prompt", "message": "Flagged."},
             APIStatusError,
-            False,
             "Flagged.",
         ),
-        (None, APIStatusError, False, "failed without an error"),
+        (None, APIStatusError, "failed without an error"),
     ],
     ids=["server-error", "unmapped-code", "no-error"],
 )
 async def test_failed_response_raises_with_the_response(
     error: dict[str, Any] | None,
     error_class: type[APIStatusError],
-    transient: bool,
     message: str,
 ) -> None:
     body = json.dumps(FAILED | {"error": error}).encode()
@@ -483,7 +493,7 @@ async def test_failed_response_raises_with_the_response(
 
     assert type(caught.value) is error_class
     assert caught.value.status == 200
-    assert caught.value.transient is transient
+    assert caught.value.transient is False
     assert message in str(caught.value)
     assert isinstance(caught.value.raw, Response)
     assert caught.value.raw.status == "failed"
