@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -66,8 +65,11 @@ def parse_retry_after(
 ) -> float | None:
     """Read the ``Retry-After`` header as a number of seconds.
 
-    Both forms allowed by RFC 9110 are supported: a number of seconds and
-    an HTTP date. Dates in the past yield ``0.0``.
+    Only the two forms of RFC 9110 (section 10.2.3) are read: a whole
+    number of seconds in ASCII digits and an HTTP date. A date in the
+    past yields ``0.0``. Anything else (a fraction, a sign, ``1e3``,
+    non-ASCII digits) is invalid and counts as no header: a negative
+    number, for one, would otherwise mean an immediate retry.
 
     Args:
         headers: Response headers.
@@ -80,23 +82,20 @@ def parse_retry_after(
     if value is None:
         return None
 
+    value = value.strip()
+
+    if value.isascii() and value.isdigit():
+        return float(value)
+
     try:
-        seconds = float(value)
-    except ValueError:
-        try:
-            date = parsedate_to_datetime(value)
-        except (ValueError, TypeError, IndexError):
-            return None
-
-        if date.tzinfo is None:
-            date = date.replace(tzinfo=UTC)
-
-        seconds = (date - datetime.now(UTC)).total_seconds()
-
-    if not math.isfinite(seconds):
+        date = parsedate_to_datetime(value)
+    except (ValueError, TypeError, IndexError):
         return None
 
-    return max(0.0, seconds)
+    if date.tzinfo is None:
+        date = date.replace(tzinfo=UTC)
+
+    return max(0.0, (date - datetime.now(UTC)).total_seconds())
 
 
 def _as_mapping(headers: HeadersType) -> HeadersMapping:

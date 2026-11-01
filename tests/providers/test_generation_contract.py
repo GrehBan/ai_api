@@ -23,6 +23,7 @@ from ai_api.client.factory import SessionFactory
 from ai_api.enums import IncompleteReason, Provider
 from ai_api.http.exceptions.status import (
     BadRequestError,
+    QuotaExceededError,
     ServiceUnavailableError,
 )
 from ai_api.http.exceptions.transport import (
@@ -92,6 +93,7 @@ class Case:
         deltas: Text deltas of that stream.
         stream_usage: Shared token counts of that stream.
         overloaded: An overloaded error, as the stream sends it.
+        quota: An exhausted quota, as the stream sends it.
         bad_request: Body of a 400 response.
         raw_stream: Builds the provider's own stream method.
     """
@@ -110,6 +112,7 @@ class Case:
     deltas: list[str]
     stream_usage: TokenUsage
     overloaded: dict[str, Any]
+    quota: dict[str, Any]
     bad_request: dict[str, Any]
     raw_stream: Callable[[], BaseStreamMethod[Any]]
 
@@ -168,6 +171,12 @@ OPENAI = Case(
         "message": "Overloaded",
         "sequence_number": 1,
     },
+    quota={
+        "type": "error",
+        "code": "insufficient_quota",
+        "message": "You exceeded your current quota",
+        "sequence_number": 1,
+    },
     bad_request={
         "error": {
             "code": "invalid_value",
@@ -204,6 +213,14 @@ ANTHROPIC = Case(
     overloaded={
         "type": "error",
         "error": {"type": "overloaded_error", "message": "Overloaded"},
+    },
+    quota={
+        "type": "error",
+        "error": {
+            "type": "rate_limit_error",
+            "message": "Spend cap reached",
+            "details": {"error_code": "enforced_spend_limit_reached"},
+        },
     },
     bad_request={
         "type": "error",
@@ -369,6 +386,25 @@ async def test_stream_error_event_raises_overloaded(
     assert caught.value.provider is case.provider
     assert "Overloaded" in str(caught.value)
     # Only opening is retried: the events already arrived.
+    assert len(recorder.requests) == 1
+
+
+async def test_stream_quota_error_is_a_quota_error(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    # The same class as over HTTP 429: the stream's 200 does not hide it.
+    recorder.reply(events([case.stream[0], case.quota]))
+
+    async with client, client.generation.stream(REQUEST) as stream:
+        with pytest.raises(QuotaExceededError) as caught:
+            async for _ in stream:
+                pass
+
+    assert caught.value.provider is case.provider
+    assert caught.value.transient is False
+    assert caught.value.status == 200
     assert len(recorder.requests) == 1
 
 

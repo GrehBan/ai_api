@@ -114,22 +114,42 @@ def test_custom_decoder_rejects_strict_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    "body",
-    [b"{", b"", b'{"id": "not-a-uuid"}', b"[]"],
+    ("body", "action"),
+    [
+        (b"{", "decode"),
+        (b"", "decode"),
+        (b'{"id": "not-a-uuid"}', "validate"),
+        (b"[]", "validate"),
+    ],
     ids=["broken", "empty", "schema", "wrong-type"],
 )
-def test_invalid_json_body(body: bytes) -> None:
-    with pytest.raises(APIResponseError, match="Failed to validate") as info:
+def test_invalid_json_body(body: bytes, action: str) -> None:
+    with pytest.raises(
+        APIResponseError, match=f"Failed to {action} JSON response"
+    ) as info:
         parse(Job, body)
 
     assert info.value.status == 201
     assert info.value.__cause__ is not None
 
 
-def test_custom_decoder_errors_propagate() -> None:
-    # The session turns this ValueError into APIResponseError.
-    with pytest.raises(ValueError):
-        parse(Job, b"{", json_loads=MagicMock(wraps=loads))
+@pytest.mark.parametrize(
+    ("body", "action"),
+    [(b"{", "decode"), (b'{"id": "not-a-uuid"}', "validate")],
+    ids=["broken", "schema"],
+)
+def test_custom_decoder_errors_are_response_errors(
+    body: bytes,
+    action: str,
+) -> None:
+    # The parser raises it itself; the session no longer wraps.
+    with pytest.raises(
+        APIResponseError, match=f"Failed to {action} JSON response"
+    ) as info:
+        parse(Job, body, json_loads=MagicMock(wraps=loads))
+
+    assert info.value.status == 201
+    assert isinstance(info.value.__cause__, ValueError)
 
 
 @pytest.mark.parametrize(

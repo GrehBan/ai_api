@@ -7,14 +7,12 @@ from typing import Final, Literal
 from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.providers.openai.methods.base import ResponseParams
+from ai_api.providers.openai.resolver import FAILED_RESPONSE
 from ai_api.providers.openai.types.events import ResponseStreamEvent
 from ai_api.providers.openai.types.responses import Response
 from ai_api.response.parse.buffered import BufferedResponseParser
 from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.types.matchers import EventTypes, FieldValues, TopLevelError
-
-FAILED_RESPONSE: Final = FieldValues("status", "failed")
-"""A ``Response`` whose generation failed; raised, not returned."""
+from ai_api.types.matchers import EventTypes, TopLevelError
 
 TERMINAL_EVENTS: Final = EventTypes(
     "response.completed", "response.incomplete", "response.failed"

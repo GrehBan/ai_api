@@ -193,7 +193,7 @@ async def test_invalid_json_is_a_response_error(
         else b"{oops\n"
     )
 
-    with pytest.raises(APIResponseError, match="Failed to validate"):
+    with pytest.raises(APIResponseError, match="Failed to decode"):
         await collect(parse(Delta, response_format, [body]))
 
 

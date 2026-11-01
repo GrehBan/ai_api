@@ -484,7 +484,7 @@ class _EventReader[T]:
             body = self._json_loads(data)
         except ValueError as exc:
             raise APIResponseError(
-                "Failed to validate stream event",
+                "Failed to decode stream event",
                 status=self._response.status,
             ) from exc
 

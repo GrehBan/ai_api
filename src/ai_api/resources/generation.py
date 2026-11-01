@@ -7,8 +7,11 @@ from typing import TYPE_CHECKING, Any, overload
 
 from ai_api.adapters.protocols import ICompositeAdapter
 from ai_api.resources.base import BaseResource
-from ai_api.resources.stream import GenerationStream, generation_stream
-from ai_api.resources.usecases import AdapterCompositeUseCase
+from ai_api.resources.stream import GenerationStream
+from ai_api.resources.usecases import (
+    AdapterCompositeUseCase,
+    open_adapted_stream,
+)
 from ai_api.session.protocols import ISession
 from ai_api.types.requests.generation import GenerationRequest
 from ai_api.types.responses.events import (
@@ -151,8 +154,14 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
             TypeError: Both a request and fields are given.
             ValidationError: The fields do not make a valid request.
         """
-        return generation_stream(
-            self._generate.stream(_request(request, fields))
+        # The use case's own stream would be a Stream that a
+        # GenerationStream wraps once more; this builds it directly.
+        return open_adapted_stream(
+            self.session,
+            self._generate.adapter,
+            _request(request, fields),
+            self._generate.terminal,
+            GenerationStream,
         )
 
 

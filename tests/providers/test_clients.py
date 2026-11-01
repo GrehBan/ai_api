@@ -207,6 +207,24 @@ def test_openai_quota_error_is_not_retried() -> None:
     assert error.provider is Provider.OPENAI
 
 
+def test_openai_failed_response_is_read_without_its_object_field() -> None:
+    # The same rule as the parser's FAILED_RESPONSE: status alone.
+    error = OpenAIErrorResolver().resolve(
+        status=200,
+        body={
+            "id": "resp_1",
+            "status": "failed",
+            "error": {"code": "server_error", "message": "Boom"},
+        },
+        headers={},
+    )
+
+    assert type(error) is InternalServerError
+    assert error.code == "server_error"
+    assert "Boom" in str(error)
+    assert error.transient is False
+
+
 def test_openai_rate_limit_falls_back_to_the_default() -> None:
     error = OpenAIErrorResolver().resolve(
         status=429,

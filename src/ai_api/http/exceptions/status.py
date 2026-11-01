@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from ai_api.enums import Provider
 from ai_api.exceptions import AIAPIError
 
 
 class APIStatusError(AIAPIError):
-    """The API answered with a status code of 400 or higher.
+    """The API reported a failure: an error status or an in-band error.
 
-    Instances are created by an error resolver from the response status,
-    headers and body; subclasses in ``HTTP_ERRORS`` narrow it down by
-    status code.
+    Raised for a response with a status code of 400 or higher, and also
+    for a failure the API reports after a successful status: an error
+    event of a stream or a result that says it failed, such as OpenAI's
+    ``Response`` with status ``failed``. Instances are created by an
+    error resolver from the response status, headers and body; subclasses
+    in ``HTTP_ERRORS`` narrow it down by status code (for an in-band
+    failure, by the status its code stands for).
 
     Attributes:
-        status: HTTP status code of the response.
+        status: HTTP status code of the response; the successful status
+            of the stream or the response for an in-band failure.
         code: Provider-specific error code, if the body carried one.
         error_type: Provider-specific error type, if the body carried one.
         provider: Provider that produced the error.
@@ -39,7 +45,7 @@ class APIStatusError(AIAPIError):
         message: str | None = None,
         code: str | None = None,
         error_type: str | None = None,
-        provider: str | None = None,
+        provider: Provider = Provider.GENERIC,
         request_id: str | None = None,
         retry_after: float | None = None,
         transient: bool = False,

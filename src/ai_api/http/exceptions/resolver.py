@@ -22,10 +22,13 @@ TRANSIENT_STATUSES: Final[frozenset[int]] = frozenset(
         HTTPStatus.BAD_GATEWAY,
         HTTPStatus.SERVICE_UNAVAILABLE,
         HTTPStatus.GATEWAY_TIMEOUT,
-        529,  # Overloaded (Anthropic).
     }
 )
-"""Statuses whose errors are worth retrying."""
+"""Statuses whose errors are worth retrying.
+
+Only standard statuses; a provider's own, such as Anthropic's 529
+(overloaded), is classified by its resolver.
+"""
 
 
 def _optional_str(value: Any) -> str | None:
@@ -139,8 +142,8 @@ class BaseErrorResolver:
         """Choose the error class and whether the error is transient.
 
         The default maps the status through ``HTTP_ERRORS`` and treats
-        timeouts, server errors and 529 (overloaded) as transient, and
-        429 (rate limit) when the API said when to retry.
+        timeouts and server errors (``TRANSIENT_STATUSES``) as transient,
+        and 429 (rate limit) when the API said when to retry.
 
         Args:
             status: HTTP status code of the response.

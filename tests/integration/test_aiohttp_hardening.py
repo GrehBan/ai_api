@@ -242,7 +242,7 @@ async def test_redirect_loop_is_a_redirect_error(
     recorder.default = Reply(status=302, headers={"Location": "/v1/ping"})
 
     async with make_session(api, follow_redirects=True) as session:
-        with pytest.raises(APIRedirectError, match="Too many") as info:
+        with pytest.raises(APIRedirectError, match="not followed") as info:
             await session.send_request(Ping())
 
     assert info.value.transient is False

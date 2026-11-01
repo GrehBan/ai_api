@@ -9,6 +9,15 @@ from typing import Any, Final, cast
 from ai_api.enums import Provider
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.status import APIStatusError, QuotaExceededError
+from ai_api.types.matchers import FieldValues
+
+FAILED_RESPONSE: Final = FieldValues("status", "failed")
+"""A ``Response`` whose generation failed.
+
+The one test of a failed response: ``CreateResponse``'s parser raises a
+result it matches, and the resolver reads such a body by its
+``error``.
+"""
 
 QUOTA_CODES: Final = frozenset(
     {
@@ -34,11 +43,14 @@ ERROR_STATUSES: Final[Mapping[str, int]] = {
     "service_unavailable_error": HTTPStatus.SERVICE_UNAVAILABLE,
     "server_is_overloaded": HTTPStatus.SERVICE_UNAVAILABLE,
     "server_overloaded": HTTPStatus.SERVICE_UNAVAILABLE,
+    **dict.fromkeys(QUOTA_CODES, HTTPStatus.TOO_MANY_REQUESTS),
 }
 """HTTP status of each documented error code or type.
 
 The ``error`` event of a stream arrives after the 200 status, so its
-code, or else its type, tells which error it is.
+code, or else its type, tells which error it is. The quota codes stand
+for 429, so a quota reported inside a stream is a ``QuotaExceededError``
+as it is over HTTP.
 """
 
 
@@ -69,7 +81,8 @@ class OpenAIErrorResolver(BaseErrorResolver):
 
     A 429 whose code or type is in ``QUOTA_CODES`` (no credit left, a
     spend or usage limit reached) is a ``QuotaExceededError`` and is not
-    retried. The ``error`` event of a response stream is flat
+    retried, also when a stream reports it. The ``error`` event of a
+    response stream is flat
     (``{"type": "error", "code", "message", "param"}``) and is read like
     an ``error`` object; a ``response.failed`` event and a ``Response``
     with status ``failed`` are read by their ``response.error``. They
@@ -110,10 +123,7 @@ class OpenAIErrorResolver(BaseErrorResolver):
                 body = {"error": fields}
             elif kind == "response.failed" and isinstance(response, Mapping):
                 body = _failed_response(cast(Mapping[str, Any], response))
-            elif (
-                event.get("object") == "response"
-                and event.get("status") == "failed"
-            ):
+            elif FAILED_RESPONSE.matches(event):
                 body = _failed_response(event)
 
         return super().resolve(status=status, body=body, headers=headers)

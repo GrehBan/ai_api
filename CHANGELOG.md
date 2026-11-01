@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durations in every part of the request. The default is ISO 8601; an API
   that wants another format overrides it on its base method, and one field
   can use Pydantic's `PlainSerializer`.
+- `Stream.items_received`: how many items a stream has given.
+  `transform_stream(..., stream_type=...)` yields a `Stream` subclass built
+  on the transformed items, which `GenerationResource` uses for its
+  `GenerationStream`.
 
 - Conversions: `ai_api.adapters.IConversion[SourceT, TargetT]` (a protocol
   of `__call__(source, /)`, so a plain function fits) and its ABC
@@ -63,6 +67,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** 529 is no longer transient in `BaseErrorResolver`: it is
+  Anthropic's own status, and `AnthropicErrorResolver` keeps classifying it
+  as a transient `ServiceUnavailableError`.
+- **Breaking:** only a certificate that fails verification
+  (`ClientConnectorCertificateError`, `ServerFingerprintMismatch`) raises
+  `APITLSError`; another SSL error, such as a handshake that breaks off, is
+  a transient `APIConnectionError`, retried as the official SDKs do.
+- **Breaking:** `Retry-After` is read as RFC 9110 defines it, whole seconds
+  in ASCII digits or an HTTP date. `1.5`, `-5` (which meant an immediate
+  retry) or `1e3` count as no header.
+- **Breaking:** `APIStatusError.provider` is a `Provider`,
+  `Provider.GENERIC` by default (it was typed `str | None` while the
+  resolvers passed the enum).
+- The session no longer turns a parser's `ValueError` into
+  `APIResponseError`: parsers raise `APIResponseError` themselves, so a
+  custom decoder's failure is `Failed to decode JSON response` and other
+  parser errors surface as they are. Invalid JSON is `Failed to decode`,
+  a body that does not match the model `Failed to validate`, in buffered
+  and streamed responses alike.
+- `RequestValidationError` lists every failing field of the provider's
+  method under its shared name (`max_output_tokens`, not `max_tokens`);
+  `field` stays the first one.
+- When a stream use case's source method declares `__stream_terminal__`
+  and the adapter gives no final event, the error is a `RuntimeError`
+  naming the adapter instead of `APIStreamInterruptedError`: the parser
+  proved the stream complete, so it was not cut.
+- `APIRedirectError`'s default message is `Redirect was not followed.`,
+  since it is also raised when redirects are off or lead to another origin.
 - **Breaking:** a datetime in a JSON or form body is sent in ISO 8601
   (`"2026-01-02T03:04:05Z"`) instead of a Unix timestamp string, and a
   timedelta as an ISO 8601 duration (`"PT30S"`) instead of the timestamp of
@@ -121,6 +153,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An OpenAI quota error reported inside a stream (`insufficient_quota`
+  and the other quota codes) is a `QuotaExceededError`, as over HTTP 429,
+  instead of a plain `APIStatusError`.
+- `OpenAIErrorResolver` recognizes a failed `Response` by its status
+  alone, as the parser does, so one without `object` keeps its error.
+- After a failed read, `GenerationStream.final()` raises the original
+  error again instead of `APIStreamInterruptedError: ended without a
+  CompletedEvent`; later reads and `text()` do the same instead of ending
+  quietly.
 - NaN and infinity raise `ValueError` in every part of the request: a
   `float` path parameter was sent as `nan`, a NaN in an `Any` query field
   as the string `None`, and a form field as `nan`.

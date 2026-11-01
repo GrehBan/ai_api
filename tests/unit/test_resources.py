@@ -44,6 +44,7 @@ from ai_api.resources.usecases import (
 from ai_api.response.buffered import BufferedResponse
 from ai_api.response.stream import Stream, map_stream
 from ai_api.types.base import BaseAPIType
+from ai_api.types.matchers import EventTypes
 from ai_api.types.requests.generation import GenerationRequest, Turn
 from ai_api.types.responses.events import (
     GENERATION_TERMINAL,
@@ -668,6 +669,46 @@ async def test_use_case_rejects_a_stream_without_its_final_event() -> None:
 
     assert info.value.items_received == 2
     assert info.value.__cause__ is None
+    assert adapter.closed
+
+
+class CreateTerminatedStream(CreateStream):
+    __stream_terminal__ = EventTypes("response.created")
+
+
+class TerminatedAdapter(ScriptedAdapter):
+    """Its method declares a terminal, so the parser proves the end."""
+
+    def to_stream_method(
+        self,
+        request: GenerationRequest,
+    ) -> CreateTerminatedStream:
+        return CreateTerminatedStream(model=request.model, input=request.input)
+
+
+async def test_complete_source_without_the_final_event_is_a_bug() -> None:
+    # The parser saw the provider's terminal, so the stream was not cut:
+    # the adapter lost the final event.
+    transport = FakeTransport(
+        stream_responses=[
+            FakeStreamResponse(
+                sse('{"type": "response.created"}'), headers=SSE
+            )
+        ]
+    )
+    adapter = TerminatedAdapter("other")
+    use_case = AdapterStreamUseCase(
+        transport, adapter, terminal=GENERATION_TERMINAL
+    )
+
+    async with use_case.stream(REQUEST) as events:
+        with pytest.raises(
+            RuntimeError,
+            match="TerminatedAdapter ended a complete stream without",
+        ):
+            async for _ in events:
+                pass
+
     assert adapter.closed
 
 

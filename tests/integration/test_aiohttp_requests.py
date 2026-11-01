@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from aiohttp import (
     ClientConnectorCertificateError,
+    ClientConnectorSSLError,
     ClientSession,
     ClientTimeout,
     ServerFingerprintMismatch,
@@ -493,6 +494,25 @@ async def test_tls_errors_are_mapped(
 
     assert info.value.__cause__ is error
     assert info.value.transient is False
+
+
+async def test_broken_tls_handshake_is_a_connection_error(
+    session: AiohttpSession,
+    mocker: MockerFixture,
+) -> None:
+    # Not a bad certificate: another attempt may complete the handshake.
+    error = ClientConnectorSSLError(
+        None,  # type: ignore[arg-type]
+        ssl.SSLError("EOF occurred in violation of protocol"),
+    )
+    mocker.patch.object(ClientSession, "request", side_effect=error)
+
+    with pytest.raises(APIConnectionError) as info:
+        await session.send_request(Ping())
+
+    assert type(info.value) is APIConnectionError
+    assert info.value.__cause__ is error
+    assert info.value.transient is True
 
 
 async def test_self_signed_certificate_is_rejected(

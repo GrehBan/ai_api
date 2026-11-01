@@ -193,18 +193,25 @@ async def test_undecodable_error_body_reaches_resolver_as_none(
 
 @pytest.mark.parametrize(
     "error",
-    [ValueError("bad value"), UnicodeDecodeError("utf-8", b"\xff", 0, 1, "x")],
-    ids=["value-error", "unicode-error"],
+    [
+        APIResponseError("bad body", status=200),
+        ValueError("bad value"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "x"),
+    ],
+    ids=["response-error", "value-error", "unicode-error"],
 )
-async def test_parser_errors_become_response_errors(error: Exception) -> None:
+async def test_parser_errors_pass_through_as_they_are(
+    error: Exception,
+) -> None:
+    # A parser reports a bad body as APIResponseError itself, as the
+    # stream parser does; the session does not disguise its bugs.
     method = buffered_method(__response_parser__=RaisingParser(error))
     transport = FakeTransport([ok(b"body")])
 
-    with pytest.raises(APIResponseError, match="Failed to parse") as info:
+    with pytest.raises(type(error)) as info:
         await transport.send_request(method)
 
-    assert info.value.status == 200
-    assert info.value.__cause__ is error
+    assert info.value is error
 
 
 async def test_other_parser_errors_propagate() -> None:

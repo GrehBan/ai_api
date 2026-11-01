@@ -17,6 +17,7 @@ from ai_api.http.exceptions.status import (
     NotFoundError,
     QuotaExceededError,
     RateLimitError,
+    ServiceUnavailableError,
 )
 from ai_api.http.headers import get_header, parse_retry_after
 from tests.conftest import NOW
@@ -61,9 +62,14 @@ def _http_date(moment: datetime.datetime) -> str:
     ("value", "expected"),
     [
         ("120", 120.0),
-        ("1.5", 1.5),
+        (" 7 ", 7.0),
+        ("1.5", None),
         ("0", 0.0),
-        ("-5", 0.0),
+        ("-5", None),
+        ("+5", None),
+        ("1e3", None),
+        ("1_0", None),
+        ("\u0663", None),
         ("inf", None),
         ("nan", None),
         ("soon", None),
@@ -71,9 +77,14 @@ def _http_date(moment: datetime.datetime) -> str:
     ],
     ids=[
         "seconds",
+        "spaces",
         "fraction",
         "zero",
         "negative",
+        "plus",
+        "exponent",
+        "underscore",
+        "arabic-digit",
         "inf",
         "nan",
         "garbage",
@@ -217,7 +228,7 @@ def test_resolve_request_id_order(
         (502, HTTP_ERRORS[502], True),
         (503, HTTP_ERRORS[503], True),
         (504, HTTP_ERRORS[504], True),
-        (529, APIStatusError, True),
+        (529, APIStatusError, False),
         (418, APIStatusError, False),
         (599, APIStatusError, False),
     ],
@@ -260,10 +271,19 @@ def test_rate_limit_is_transient_with_retry_after(
 
 
 def test_resolve_uses_classification() -> None:
+    error = resolve(503)
+
+    assert type(error) is ServiceUnavailableError
+    assert error.transient is True
+
+
+def test_529_is_left_to_the_provider_resolver() -> None:
+    # Not a standard status; Anthropic's resolver classifies it.
     error = resolve(529)
 
     assert type(error) is APIStatusError
-    assert error.transient is True
+    assert error.transient is False
+    assert error.provider is Provider.GENERIC
 
 
 class ExampleErrorResolver(BaseErrorResolver):

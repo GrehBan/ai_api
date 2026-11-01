@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.response.stream import Stream
@@ -21,7 +20,13 @@ class GenerationStream[RawItemT](Stream[GenerationEvent[RawItemT]]):
     ``text()`` gives only the text, and ``final()`` reads to the end and
     gives the ``CompletedEvent``. Whatever consumed the events, the
     ``CompletedEvent`` is kept, so ``final()`` after ``text()`` (or after
-    a loop over the events) returns it without reading again.
+    a loop over the events) returns it without reading again. An error
+    raised while reading is kept too: reading again, ``text()`` or
+    ``final()`` raise the same error instead of ending as if the stream
+    were cut.
+
+    ``GenerationResource.stream`` builds it on the converted events
+    through ``transform_stream(..., stream_type=GenerationStream)``.
 
     Example:
         >>> async with client.generation.stream(request) as events:
@@ -37,18 +42,34 @@ class GenerationStream[RawItemT](Stream[GenerationEvent[RawItemT]]):
         """Wrap the shared events.
 
         Args:
-            items: The events, usually a ``Stream`` of a use case.
+            items: The converted events.
         """
         super().__init__(items)
         self._completed: CompletedEvent[RawItemT] | None = None
+        self._failure: Exception | None = None
 
     async def __anext__(self) -> GenerationEvent[RawItemT]:
         """Return the next event, keeping the ``CompletedEvent``.
 
         Returns:
             The next event.
+
+        Raises:
+            Exception: The error a previous read raised, again: the
+                events behind it are gone, so ending quietly would look
+                like a stream that was cut.
         """
-        event = await super().__anext__()
+        if self._failure is not None:
+            raise self._failure
+
+        try:
+            event = await super().__anext__()
+        except StopAsyncIteration:
+            raise
+        except Exception as exc:
+            self._failure = exc
+            raise
+
         if isinstance(event, CompletedEvent):
             self._completed = event
         return event
@@ -81,35 +102,14 @@ class GenerationStream[RawItemT](Stream[GenerationEvent[RawItemT]]):
             APIStreamInterruptedError: The stream ended without a
                 ``CompletedEvent``. Through ``GenerationResource`` this
                 is raised while reading, before ``final()`` gets here.
+            Exception: The error an earlier read raised, such as the
+                provider's error event, again.
         """
         async for _ in self:
             pass
         if self._completed is None:
             message = "Generation stream ended without a CompletedEvent"
             raise APIStreamInterruptedError(
-                message, items_received=self._received
+                message, items_received=self.items_received
             )
         return self._completed
-
-
-@asynccontextmanager
-async def generation_stream[RawItemT](
-    source: AbstractAsyncContextManager[Stream[GenerationEvent[RawItemT]]],
-) -> AsyncGenerator[GenerationStream[RawItemT]]:
-    """Open a stream of shared events as a ``GenerationStream``.
-
-    On exit the ``GenerationStream`` is closed first and the source after
-    it, as ``transform_stream`` does.
-
-    Args:
-        source: The stream to open, e.g. a use case's ``stream(request)``.
-
-    Yields:
-        The events of the source, with the generation helpers.
-    """
-    async with source as events:
-        stream = GenerationStream(events)
-        try:
-            yield stream
-        finally:
-            await stream.aclose()

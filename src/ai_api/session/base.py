@@ -12,7 +12,6 @@ from tenacity import AsyncRetrying, stop_after_attempt, stop_before_delay
 from tenacity.stop import stop_base
 
 from ai_api.http.exceptions.protocols import IErrorResolver
-from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.headers import Headers
 from ai_api.http.protocols import IAPI, HeadersType, IAuth, IHeaders
 from ai_api.methods.protocols import IAPIMethod, IStreamMethod
@@ -293,18 +292,15 @@ class BaseSession(ABC):
         )
         self._raise_for_status(response)
 
-        try:
-            return method.response_parser.parse(
-                method,
-                response,
-                self.json_loads,
-                self.error_resolver,
-            )
-        except (ValueError, UnicodeError) as exc:
-            raise APIResponseError(
-                "Failed to parse API response",
-                status=response.status,
-            ) from exc
+        # The parser raises APIResponseError for a body it cannot read,
+        # as the stream parser does; anything else is a bug of the
+        # parser and is not disguised as a bad response.
+        return method.response_parser.parse(
+            method,
+            response,
+            self.json_loads,
+            self.error_resolver,
+        )
 
     async def _open_stream_once(
         self,

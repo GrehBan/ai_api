@@ -511,7 +511,7 @@ A connection can break at any point of a long generation. What happens depends o
 
 | When | What you get | Retried |
 |---|---|---|
-| Before the response arrives: connection refused, DNS, TLS, connect timeout | `APIConnectionError`, `APITimeoutError` or `APITLSError` on entering the block | yes, if the method is retryable and the error is transient |
+| Before the response arrives: connection refused, DNS, a TLS handshake that breaks off, connect timeout, a certificate that fails verification | `APIConnectionError`, `APITimeoutError` or (for the certificate) `APITLSError` on entering the block | yes, if the method is retryable and the error is transient |
 | The server answers with an error status | the `APIStatusError` for it, on entering the block | yes, if the error is transient |
 | The connection drops after some items | `APIStreamInterruptedError` from `async for`, caused by the `APIConnectionError` | no |
 | No data for 600 s (`sock_read`) | `APIStreamInterruptedError` from `async for`, caused by the `APITimeoutError` | no |
@@ -639,11 +639,11 @@ async def ask(prompt: str) -> str | None:
 
 A request is retried only when the method sets `__retryable__ = True`, does not carry a one-shot file, and the error's `transient` flag is true. By default that flag is true for:
 
-- statuses 408, 500, 502, 503, 504 and 529 (Anthropic's "overloaded");
+- statuses 408, 500, 502, 503, 504, and a provider's own transient statuses, which its resolver classifies (Anthropic's 529 "overloaded");
 - status 429 when the response has `Retry-After`;
 - connection errors, including a body cut off before its end, and timeouts.
 
-It is false for TLS errors, redirects that are not followed, invalid requests and failing upload sources, since repeating them gives the same result, and `APIResponseError` is never retried.
+It is false for certificate errors, redirects that are not followed, invalid requests and failing upload sources, since repeating them gives the same result, and `APIResponseError` is never retried.
 
 Waits use random exponential backoff of up to 30 s, but never less than `Retry-After`. When the API asks to wait longer than `max_retry_after` (60 s by default), the error is raised at once instead. No retry starts after `retry_deadline` (15 minutes from the first attempt by default), and a wait that would end later is not started; an attempt in progress is limited by its own timeout.
 
@@ -661,7 +661,7 @@ Error responses are mapped by an error resolver. `BaseErrorResolver` reads:
 
 - the common `{"error": {"code", "type", "message"}}` body shape, and a string `error` (`{"error": "model not found"}`, as Ollama sends) as the message;
 - the request id from the `X-Request-Id` or `Request-Id` header, or from a `request_id` field of the body;
-- `Retry-After`, in seconds or as an HTTP date.
+- `Retry-After`, in the two forms of RFC 9110: whole seconds in ASCII digits or an HTTP date. Any other form (`1.5`, `-5`, `1e3`) counts as no header, so a negative number cannot mean an immediate retry.
 
 A body that is not JSON gives an error without a code or message, so an HTML error page from a proxy still becomes the right `APIStatusError` for its status. Subclass the resolver to handle a provider's specifics, overriding `provider`, `get_error_code` or `classify`:
 
@@ -844,7 +844,7 @@ For a different URL scheme, write your own class with `base_url`, `version` and 
 
 ## Provider clients
 
-`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried. A stream's `error` event and a `failed` response come after a 200, so their class is picked by the code or type, such as `ServiceUnavailableError` for `server_is_overloaded`. Such a failure is never transient: the generation ran and failed, and running it again is your choice, as in the official SDK, which retries by the HTTP status only. The client owns its session, so close it, ideally with `async with`:
+`OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried, also when a stream's `error` event reports it. A stream's `error` event and a `failed` response come after a 200, so their class is picked by the code or type, such as `ServiceUnavailableError` for `server_is_overloaded` and `QuotaExceededError` for `insufficient_quota`. Such a failure is never transient: the generation ran and failed, and running it again is your choice, as in the official SDK, which retries by the HTTP status only. The client owns its session, so close it, ideally with `async with`:
 
 ```python
 from ai_api.providers.openai import OpenAIClient
@@ -992,7 +992,7 @@ async def chat(client: IGenerationClient) -> GenerationResponse[Any]:
 What each shared field becomes for each provider, what is lost and when a request raises is listed in [docs/unification.md](docs/unification.md).
 
 - **Keyword arguments or a request.** `create(model=..., input=...)` and `stream(...)` take exactly the fields of `GenerationRequest`; a misspelled field is a type error and, at run time, a pydantic `ValidationError`. Passing a `GenerationRequest` and fields together raises `TypeError`.
-- **Stream helpers.** `stream(...)` yields a `GenerationStream`: iterate it for every shared event, or use `events.text()` for the text deltas only and `await events.final()` for the `CompletedEvent`, which carries the response's `id`, `model`, whole `text`, `usage` and why it stopped. `final()` reads the rest of the stream, and after `text()` or a loop it returns the `CompletedEvent` already read.
+- **Stream helpers.** `stream(...)` yields a `GenerationStream`: iterate it for every shared event, or use `events.text()` for the text deltas only and `await events.final()` for the `CompletedEvent`, which carries the response's `id`, `model`, whole `text`, `usage` and why it stopped. `final()` reads the rest of the stream, and after `text()` or a loop it returns the `CompletedEvent` already read. When a read failed (a provider's error event, a cut connection), every later read, `text()` and `final()` raise that same error again, never a misleading "ended without a CompletedEvent".
 - **Any provider.** `IGenerationClient[RawT = Any, RawItemT = Any]` (from `ai_api`) is a client with `generation`; every provider client matches it, so code typed with it takes any of them.
 - **A conversation is a list of turns.** `input` is a text, taken as one `user` turn, or a list of `Turn`s (`Turn.user(...)`, `Turn.assistant(...)`, or `response.to_turn()` for an earlier answer); the list must not be empty, and its last turn must be a `user` one. System prompts go in `instructions`, not in turns.
 - **A request a provider cannot take raises `RequestValidationError`** (from `ai_api`, a `ValueError`) before anything is sent, with the `provider` and the shared `field` at fault; a pydantic error behind it is its `__cause__`. Errors of `GenerationRequest` itself stay pydantic `ValidationError`s.
@@ -1002,7 +1002,7 @@ What each shared field becomes for each provider, what is lost and when a reques
 - **OpenAI failures are raised.** A `failed` response raises the `APIStatusError` described under the Responses API, before the adapter sees it, in `create` and in `stream` alike. Any other buffered status that is not `completed` or `incomplete` (`cancelled`, `in_progress`, ...) raises `APIResponseError`, since there is no generated text to return.
 - **Anthropic mapping.** `AnthropicGenerationAdapter` (`ai_api.providers.anthropic.adapters`) sends a text `input` as one `user` turn, a list of turns as `messages`, and `instructions` as `system`. Anthropic requires `max_tokens`, so a request without `max_output_tokens` gets the client's `default_max_tokens` (`AnthropicClient(..., default_max_tokens=1024)`). Metadata other than `user_id` raises `RequestValidationError` instead of being dropped.
 - **Anthropic counts and stops.** `input_tokens` is the sum of the input outside the cache and the input read from and written to it (`cache_read_tokens`, `cache_write_tokens`), and `reasoning_tokens` are the thinking tokens. A `stop_reason` other than `end_turn` or `stop_sequence` stops the generation early, with the text kept: `max_tokens` is `MAX_TOKENS`, `refusal` is `REFUSAL` (with `stop_details.explanation`, else its `category`, in `refusal`) and any other is `OTHER`, with the `stop_reason` in `raw_incomplete_reason`. In a stream, `CompletedEvent` comes on `message_stop`, with the input counts of `message_start` and the last cumulative counts of `message_delta`; a message without a `stop_reason` raises `APIResponseError`. Anthropic reports failures as `error` events, which are raised as `APIStatusError`.
-- **The end is checked for every provider.** `stream` yields exactly one `CompletedEvent`, as the last event: a stream that ends without it raises `APIStreamInterruptedError` (the provider method's terminal check usually raises it first), and an event after it raises `APIResponseError`. A failure is always an exception, never an event.
+- **The end is checked for every provider.** `stream` yields exactly one `CompletedEvent`, as the last event: a stream that ends without it raises `APIStreamInterruptedError` (the provider method's terminal check usually raises it first), and an event after it raises `APIResponseError`. When the provider's terminal proved the stream complete and the adapter still gave no `CompletedEvent`, the adapter lost it: that raises `RuntimeError` naming the adapter, not an interruption. A failure is always an exception, never an event.
 
 ### Adding a provider
 
@@ -1023,7 +1023,7 @@ Methods are specific to one provider. Resources and use cases are the layer abov
 - **Shared responses** (`ai_api.types.responses`): `GenerationResponse[RawT]` with `id`, `provider`, `model`, `text`, `usage` (`TokenUsage`: input, output and total tokens, with the cached and reasoning tokens among them), `incomplete_reason` (why the provider stopped early, an `IncompleteReason`; `None` if it finished), `raw_incomplete_reason`, `refusal` and the provider's own response in `raw`, so nothing the shared type lacks is lost.
 - **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
 - **Adapters** (`ai_api.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`). `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
-- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError`, an event after it `APIResponseError`.
+- **Use cases** (`ai_api.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `ai_api.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError` (or `RuntimeError` when the provider method's `__stream_terminal__` proved the stream complete), an event after it `APIResponseError`.
 - **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(...)` and `stream(...)`, with keyword arguments or a request, typed by the adapter's raw types; `stream` yields a `GenerationStream` with `text()` and `final()`. `BaseResource` groups the use cases of any other area.
 
 ```python
@@ -1138,7 +1138,7 @@ Defaults that protect the API key and the request:
 - **Path injection.** Path parameters are percent-encoded, including `/`, and `.`, `..` and empty segments are rejected, so a parameter value cannot reach another endpoint. `base_url` and `version` are validated for the same reason.
 - **Leaking keys on redirects.** Redirects are off; when enabled, they never leave the origin of the request.
 - **Environment proxies.** Ignored unless `trust_env=True`.
-- **TLS.** Certificates are verified against the `certifi` CA bundle, the same on every operating system. A TLS failure raises `APITLSError`, which is not retried.
+- **TLS.** Certificates are verified against the `certifi` CA bundle, the same on every operating system. A certificate that fails verification raises `APITLSError`, which is not retried; a handshake that breaks off is an `APIConnectionError`, retried like other connection failures.
 - **Secrets in logs.** `BearerAuth` and `APIKeyAuth` keep the token out of `repr`, and reject whitespace that could inject another header.
 - **Untrusted servers.** `max_body_size`, `max_line_size` and `max_event_size` limit what is held in memory, and an SSE stream with another `Content-Type` is rejected instead of being read as empty.
 - **Invalid values.** NaN and infinity are rejected in every part of the request, rather than sent as `null`, `nan` or `None`.

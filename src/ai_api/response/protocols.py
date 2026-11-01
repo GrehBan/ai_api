@@ -35,8 +35,9 @@ class IStreamResponse(Protocol):
             Chunks of the body, of arbitrary size.
 
         Raises:
-            APITransportError: If the connection fails mid-stream.
-            APIResponseError: If the body ends before it is complete.
+            APITransportError: If the connection fails mid-stream or the
+                body ends before it is complete (``APIConnectionError``),
+                which ``Stream`` raises as ``APIStreamInterruptedError``.
         """
         ...
 
