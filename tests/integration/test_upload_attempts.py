@@ -22,9 +22,15 @@ from yarl import URL
 from ai_api.enums import BodyFormat
 from ai_api.http.auth import BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
+from ai_api.http.exceptions.response import APIResponseError
+from ai_api.http.exceptions.status import ServiceUnavailableError
+from ai_api.http.exceptions.transport import (
+    APIConnectionError,
+    APIRequestError,
+)
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.files import IOFile, PathFile
+from ai_api.types.files import IOFile, PathFile, StreamFile
 from tests.conftest import TEST_TOKEN, LocalAPI
 
 pytestmark = pytest.mark.integration
@@ -143,13 +149,6 @@ async def test_the_retry_sends_the_whole_file_again(
     tmp_path: Path,
     make_file: Callable[[Path], Any],
 ) -> None:
-    if flaky.failure == "early" and make_file is make_path_file:
-        pytest.skip(
-            "known bug, also on master: an answer that comes while aiofiles "
-            "opens the file cancels the opening, and the file the worker "
-            "thread opened is never closed"
-        )
-
     file = make_file(tmp_path)
 
     result = await session.send_request(Upload(file=file))
@@ -165,3 +164,103 @@ async def test_the_retry_sends_the_whole_file_again(
         stream.seek(0)
         chunks = [chunk async for chunk in IOFile(stream).open()]
         assert b"".join(chunks) == CONTENT
+
+
+class Produce:
+    """The 8 MiB content in pieces; it records its close."""
+
+    def __init__(self, *, close_fails: bool = False) -> None:
+        self.pieces = [
+            CONTENT[start : start + 64 * 1024]
+            for start in range(0, len(CONTENT), 64 * 1024)
+        ]
+        self.close_fails = close_fails
+        self.closed = 0
+
+    def __aiter__(self) -> Produce:
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self.pieces:
+            raise StopAsyncIteration
+        return self.pieces.pop(0)
+
+    async def aclose(self) -> None:
+        self.closed += 1
+        if self.close_fails:
+            raise OSError("close failed")
+
+
+async def test_a_stream_file_source_is_closed_when_the_attempt_breaks(
+    session: AiohttpSession,
+    flaky: FlakyServer,
+) -> None:
+    # A stream file is never retried: the first attempt is the last.
+    source = Produce()
+
+    with pytest.raises((APIConnectionError, ServiceUnavailableError)):
+        await session.send_request(Upload(file=StreamFile(source)))
+
+    assert flaky.attempts == 1
+    assert source.closed == 1
+
+
+async def answer_before_the_body(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """Answer 200 before reading the body, then hang up."""
+    await reader.readuntil(b"\r\n\r\n")
+    writer.write(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+    )
+    await writer.drain()
+    writer.close()
+
+
+@pytest.fixture
+async def early_url() -> AsyncIterator[URL]:
+    server = await asyncio.start_server(answer_before_the_body, "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()[:2]
+
+    try:
+        yield URL(f"http://{host}:{port}/")
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_a_source_that_fails_to_close_after_an_answer_is_raised(
+    early_url: URL,
+) -> None:
+    # The answer came, but the upload was left unread and its source
+    # could not be closed: that is never dropped.
+    source = Produce(close_fails=True)
+
+    async with AiohttpSession(
+        LocalAPI(early_url), BearerAuth(TEST_TOKEN), BaseErrorResolver()
+    ) as session:
+        with pytest.raises(APIRequestError, match="close failed"):
+            await session.send_request(Upload(file=StreamFile(source)))
+
+    assert source.closed == 1
+
+
+async def test_a_failing_close_is_noted_on_the_attempts_error(
+    early_url: URL,
+) -> None:
+    source = Produce(close_fails=True)
+
+    async with AiohttpSession(
+        LocalAPI(early_url),
+        BearerAuth(TEST_TOKEN),
+        BaseErrorResolver(),
+        max_body_size=1,
+    ) as session:
+        with pytest.raises(APIResponseError) as info:
+            await session.send_request(
+                Upload(file=StreamFile(source, filename="a.bin"))
+            )
+
+    (note,) = info.value.__notes__
+    assert note.startswith("Closing upload 'a.bin' also failed")
+    assert source.closed == 1

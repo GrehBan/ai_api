@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import inspect
 import io
 import mimetypes
 import os
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Callable,
+)
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, Self, cast
+from typing import Any, BinaryIO, Final, Literal, Self, cast
 
-import aiofiles
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
@@ -22,16 +29,217 @@ DEFAULT_CHUNK_SIZE: Final[int] = 64 * 1024
 
 type BinaryStream = io.BufferedIOBase | io.RawIOBase
 
-_READERS: Final[weakref.WeakKeyDictionary[BinaryStream, IOFile]] = (
+
+@asynccontextmanager
+async def closing_source[T](
+    source: AsyncIterator[T],
+) -> AsyncGenerator[AsyncIterator[T]]:
+    """Close an async iterator when the block ends, however it ends.
+
+    The iterator is closed by ``aclose()`` when it has one (a generator,
+    for example), else by ``close()``, whose result is awaited when it is
+    awaitable; never by both, and not at all when it has neither.
+
+    A failing close never hides why the block ended: when the block
+    raised, a cancellation too, that exception goes on with the close
+    error added as a note. Only after a block that ended normally, or was
+    closed as a generator, is the close error itself raised.
+
+    Args:
+        source: The iterator to close.
+
+    Yields:
+        The same iterator.
+    """
+    try:
+        yield source
+    except GeneratorExit:
+        await _close(source)
+        raise
+    except BaseException as exc:
+        try:
+            await _close(source)
+        except Exception as close_error:  # noqa: BLE001 - kept as a note
+            exc.add_note(f"Closing the source also failed: {close_error!r}")
+        raise
+    else:
+        await _close(source)
+
+
+async def _close(source: object) -> None:
+    """Close an iterator by ``aclose()``, else by ``close()``, if it can be.
+
+    Args:
+        source: The iterator to close.
+    """
+    for name in ("aclose", "close"):
+        close = getattr(source, name, None)
+
+        if callable(close):
+            result = close()
+
+            if inspect.isawaitable(result):
+                await result
+
+            return
+
+
+class ThreadWork:
+    """Blocking calls on one resource, run in a worker thread one by one.
+
+    A thread cannot be stopped: when the coroutine awaiting a call is
+    cancelled, the call still runs to its end. ``ThreadWork`` keeps that
+    call, so the resource is released only after it (``finish``) and the
+    next user waits for it (``wait_idle``) instead of using the resource
+    under it.
+    """
+
+    def __init__(self) -> None:
+        """Create the helper with no call running."""
+        self._running: asyncio.Task[Any] | None = None
+
+    @property
+    def busy(self) -> bool:
+        """Whether a call is still running in its thread."""
+        return self._running is not None and not self._running.done()
+
+    async def run[**P, R](
+        self,
+        func: Callable[P, R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Run a blocking call in a worker thread.
+
+        Args:
+            func: The blocking callable.
+            *args: Its positional arguments.
+            **kwargs: Its keyword arguments.
+
+        Returns:
+            What the call returned.
+
+        Raises:
+            RuntimeError: If a call is still running: one resource takes
+                one call at a time.
+        """
+        if self.busy:
+            raise RuntimeError("ThreadWork runs one call at a time")
+
+        task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+        self._running = task
+        # A cancelled caller leaves the call running and kept in _running.
+        return await asyncio.shield(task)
+
+    async def wait_idle(self) -> None:
+        """Wait until no call is running; a failed call does not raise."""
+        if self._running is not None:
+            await asyncio.wait({self._running})
+
+    def finish(
+        self,
+        cleanup: Callable[[], object],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        """Release the resource now, or as soon as the running call ends.
+
+        A cleanup put off until the call ends runs in the event loop,
+        which reports its failure through the loop's exception handler.
+
+        Args:
+            cleanup: Releases the resource, such as a file's ``close``.
+            error: The exception that ends the work, if any; a failing
+                cleanup is added to it as a note instead of hiding it.
+
+        Raises:
+            Exception: Whatever the cleanup raises when it runs now and
+                there is no ``error`` to keep it, or that error is a
+                ``GeneratorExit``, which nobody would see.
+        """
+        running = self._running
+
+        if running is not None and not running.done():
+            running.add_done_callback(lambda _: cleanup())
+            return
+
+        try:
+            cleanup()
+        except Exception as exc:
+            if error is None or isinstance(error, GeneratorExit):
+                raise
+            error.add_note(f"Releasing the resource also failed: {exc!r}")
+
+
+async def open_file(
+    path: str | os.PathLike[str],
+    mode: Literal["rb", "wb"],
+) -> BinaryIO:
+    """Open a binary file without blocking the event loop.
+
+    The opening runs in a worker thread, which goes on when the caller is
+    cancelled; a file it opens after that is closed at once, so a
+    cancelled open leaves no file open.
+
+    Args:
+        path: The file to open.
+        mode: ``"rb"`` to read, ``"wb"`` to create or overwrite.
+
+    Returns:
+        The open file.
+    """
+    opening = asyncio.create_task(
+        asyncio.to_thread(Path(path).open, mode),
+    )
+
+    try:
+        return await asyncio.shield(opening)
+    except asyncio.CancelledError:
+        opening.add_done_callback(_close_opened)
+        raise
+
+
+def _close_opened(opening: asyncio.Task[BinaryIO]) -> None:
+    """Close the file an abandoned ``open_file`` opened, if it did.
+
+    Args:
+        opening: The task of the opening.
+    """
+    if opening.cancelled() or opening.exception() is not None:
+        return
+
+    opening.result().close()
+
+
+@dataclass(slots=True)
+class _Lease:
+    """One ``IOFile`` read of a stream, kept in ``_READERS``.
+
+    Attributes:
+        reader: The ``repr`` of the reading ``IOFile``; a string, since
+            the ``IOFile`` holds the stream, which would keep its weak key
+            alive.
+        work: The read's calls in the worker thread.
+        ended: Whether the read has ended; its last call may still run.
+    """
+
+    reader: str
+    work: ThreadWork = field(default_factory=ThreadWork)
+    ended: bool = False
+
+
+_READERS: Final[weakref.WeakKeyDictionary[BinaryStream, _Lease]] = (
     weakref.WeakKeyDictionary()
 )
-"""The ``IOFile`` reading each stream now.
+"""The read of each stream now.
 
 A stream has one position, so two reads at once would take chunks from
 under each other and send both uploads cut and mixed. The state belongs
 to the stream, not to the ``IOFile``: one raw stream given to two
-methods becomes two ``IOFile``s. Weak keys keep a stream whose reader
-was never closed from living for ever.
+methods becomes two ``IOFile``s. A read that has ended keeps its entry
+until its last call in the worker thread is over, so the next read waits
+for that call instead of seeking under it.
 """
 
 
@@ -269,7 +477,7 @@ class BytesFile(InputFile):
 
 
 class PathFile(ChunkedFile):
-    """A file on disk, read in chunks with ``aiofiles``.
+    """A file on disk, read in chunks in a worker thread.
 
     Attributes:
         path: Location of the file.
@@ -323,12 +531,23 @@ class PathFile(ChunkedFile):
     async def open(self) -> AsyncIterator[bytes]:
         """Read the file from the beginning.
 
+        The file is closed when the iterator ends or is closed; after a
+        cancellation, once the read running in the worker thread is over.
+
         Yields:
             Chunks of at most ``chunk_size`` bytes.
         """
-        async with aiofiles.open(self.path, "rb") as file:
-            while chunk := await file.read(self.chunk_size):
+        file = await open_file(self.path, "rb")
+        work = ThreadWork()
+
+        try:
+            while chunk := await work.run(file.read, self.chunk_size):
                 yield chunk
+        except BaseException as exc:
+            work.finish(file.close, error=exc)
+            raise
+
+        work.finish(file.close)
 
 
 class IOFile(ChunkedFile):
@@ -383,9 +602,11 @@ class IOFile(ChunkedFile):
     async def open(self) -> AsyncIterator[bytes]:
         """Read the stream from its start position.
 
-        Blocking reads run in a worker thread. The stream counts as being
+        Blocking calls run in a worker thread. The stream counts as being
         read until the iterator ends or is closed; the session closes it
-        after every attempt, so a retry can read it again.
+        after every attempt, so a retry can read it again. A read that was
+        cancelled leaves its last call running in the thread; the next
+        read waits for that call before it seeks.
 
         Yields:
             Chunks of at most ``chunk_size`` bytes.
@@ -397,29 +618,31 @@ class IOFile(ChunkedFile):
                 ready: its ``read()`` returns ``None``, which is not the
                 end of the stream, so the upload would be cut short.
         """
-        reader = _READERS.get(self.file)
+        while (lease := _READERS.get(self.file)) is not None:
+            if not lease.ended:
+                message = (
+                    f"The stream is already being read by {lease.reader}; "
+                    "two uploads cannot read one stream at once"
+                )
+                raise RuntimeError(message)
 
-        if reader is not None:
-            message = (
-                f"The stream is already being read by {reader!r}; "
-                "two uploads cannot read one stream at once"
-            )
-            raise RuntimeError(message)
+            await lease.work.wait_idle()
 
         if self._start is None and self._opened:
             raise RuntimeError("Non-seekable stream can be read only once")
 
-        _READERS[self.file] = self
+        lease = _Lease(repr(self))
+        _READERS[self.file] = lease
         self._opened = True
 
         try:
             if self._start is not None:
-                await asyncio.to_thread(self.file.seek, self._start)
+                await lease.work.run(self.file.seek, self._start)
             # A raw stream in non-blocking mode returns None, not b"".
             read = cast("Callable[[int], bytes | None]", self.file.read)
 
             while True:
-                chunk = await asyncio.to_thread(read, self.chunk_size)
+                chunk = await lease.work.run(read, self.chunk_size)
 
                 if chunk is None:
                     raise BlockingIOError(
@@ -432,13 +655,18 @@ class IOFile(ChunkedFile):
 
                 yield chunk
         finally:
-            del _READERS[self.file]
+            lease.ended = True
+            stream = self.file
+            lease.work.finish(lambda: _READERS.pop(stream))
 
 
 class StreamFile(InputFile):
     """Content produced by an async iterator; it can be read only once.
 
-    A request carrying it is never retried.
+    A request carrying it is never retried. ``StreamFile`` takes ownership
+    of the source: the upload closes it when it ends, however it ends
+    (read to the end, cut short, cancelled or failed), by ``aclose()``,
+    else by ``close()``.
 
     Attributes:
         stream: The source of the content.
@@ -466,11 +694,15 @@ class StreamFile(InputFile):
         """Always ``False``: the iterator cannot be restarted."""
         return False
 
-    async def open(self) -> AsyncIterator[bytes]:
-        """Forward the iterator's chunks.
+    def open(self) -> AsyncIterator[bytes]:
+        """Hand the source over to the upload.
 
-        Yields:
-            Chunks as produced by the source.
+        The returned iterator is not a generator, so closing it closes the
+        source also before the first chunk is read.
+
+        Returns:
+            An iterator over the source's chunks, whose ``aclose()``
+            closes the source.
 
         Raises:
             RuntimeError: If the file is read a second time.
@@ -479,6 +711,28 @@ class StreamFile(InputFile):
             raise RuntimeError("StreamFile can be read only once")
 
         self._opened = True
+        return _OwnedSource(aiter(self.stream))
 
-        async for chunk in self.stream:
-            yield chunk
+
+class _OwnedSource(AsyncIterator[bytes]):
+    """A ``StreamFile`` source handed over to an upload."""
+
+    def __init__(self, source: AsyncIterator[bytes]) -> None:
+        """Take the source.
+
+        Args:
+            source: The iterator over the content.
+        """
+        self._source = source
+
+    async def __anext__(self) -> bytes:
+        """Return the source's next chunk.
+
+        Returns:
+            The chunk.
+        """
+        return await anext(self._source)
+
+    async def aclose(self) -> None:
+        """Close the source by ``aclose()``, else ``close()``, if it can."""
+        await _close(self._source)

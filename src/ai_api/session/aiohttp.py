@@ -414,8 +414,10 @@ class AiohttpSession(BaseSession):
                 ),
                 uploads=uploads,
             )
-        except BaseException:
-            await uploads.aclose()
+        except BaseException as exc:
+            # The readers see why the attempt ended, so a failing close
+            # is noted on that exception instead of replacing it.
+            await uploads.__aexit__(type(exc), exc, exc.__traceback__)
             raise
 
         return AiohttpStreamResponse(

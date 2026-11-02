@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
+import math
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -286,3 +288,114 @@ async def test_a_source_that_fails_to_close_is_a_request_error(
 
     with pytest.raises(APIRequestError, match="disk gone"):
         await session.send_request(method)
+
+
+class FailingRead(Chunks):
+    async def __anext__(self) -> bytes:
+        raise OSError("read failed")
+
+    async def aclose(self) -> None:
+        raise OSError("close failed")
+
+
+class NeverReady(Chunks):
+    """A source whose first chunk never comes; it fails to close."""
+
+    async def __anext__(self) -> bytes:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def aclose(self) -> None:
+        self.calls.append("aclose")
+        raise OSError("close failed")
+
+
+class Unopenable(InputFile):
+    def open(self) -> AsyncIterator[bytes]:
+        raise OSError("cannot open")
+
+
+class UploadWithCount(Upload):
+    count: Any = None
+
+
+async def test_a_stream_file_source_is_closed_after_the_upload(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply())
+    source = SyncClosed(b"a", b"b")
+
+    await session.send_request(Upload(file=StreamFile(source)))
+
+    assert file_part(recorder).data == b"ab"
+    assert source.calls == ["close"]
+
+
+async def test_a_file_that_cannot_be_opened_is_a_request_error(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    with pytest.raises(APIRequestError, match="Cannot open upload 'a.bin'"):
+        await session.send_request(Upload(file=Unopenable("a.bin")))
+
+    assert recorder.requests == []
+
+
+async def test_a_failing_close_never_hides_a_read_error(
+    session: AiohttpSession,
+) -> None:
+    with pytest.raises(APIRequestError, match="read failed") as info:
+        await session.send_request(Upload(file=Source(FailingRead())))
+
+    cause = info.value.__cause__
+    assert isinstance(cause, OSError)
+    assert cause.__notes__ == [
+        "Closing the source also failed: OSError('close failed')"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source", "notes"),
+    [(SyncClosed(b"a"), 0), (FailingClose(b"a"), 1)],
+    ids=["closed", "close-fails"],
+)
+async def test_a_body_that_fails_to_build_closes_its_sources(
+    session: AiohttpSession,
+    recorder: Recorder,
+    source: Chunks,
+    notes: int,
+) -> None:
+    # The file is opened before the next field fails: nothing is sent,
+    # and the source is closed all the same.
+    method = UploadWithCount(
+        file=StreamFile(source, filename="a.bin"), count=math.nan
+    )
+
+    with pytest.raises(ValueError, match="NaN or infinity") as info:
+        await session.send_request(method)
+
+    assert recorder.requests == []
+    if isinstance(source, SyncClosed):
+        assert source.calls == ["close"]
+    found = getattr(info.value, "__notes__", [])
+    assert len(found) == notes
+    assert all(note.startswith("Closing upload 'a.bin'") for note in found)
+
+
+async def test_a_cancelled_upload_stays_cancelled(
+    session: AiohttpSession,
+) -> None:
+    source = NeverReady()
+    task = asyncio.create_task(
+        session.send_request(Upload(file=StreamFile(source)))
+    )
+    await asyncio.sleep(0.2)
+
+    task.cancel()
+
+    async with asyncio.timeout(5):
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert source.calls == ["aclose"]

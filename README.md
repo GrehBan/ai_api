@@ -4,7 +4,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 
 You describe each API call as a small declarative class. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming.
 
-> **Status: pre-alpha (0.4.0).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
+> **Status: pre-alpha (0.4.1).** The core abstractions are in place, but the public API may still change without notice. `OpenAIClient` has OpenAI's Responses API and the shared `client.generation`; `AnthropicClient` has Anthropic's Messages API, and both have the shared `client.generation`. See [Limitations](#limitations-and-roadmap).
 
 ## Contents
 
@@ -65,7 +65,6 @@ Runtime dependencies:
 | `orjson` | the default JSON codec |
 | `tenacity` | the retry loop |
 | `yarl`, `multidict` | URLs and case-insensitive headers |
-| `aiofiles` | reading uploads from disk and `Stream.save` |
 | `certifi` | the CA bundle for TLS |
 
 ## Quick start
@@ -390,16 +389,18 @@ Transcribe(file=StreamFile(chunks(), "s.wav"), model="x") # async iterator
 | Class | Source | Can be resent on retry |
 |---|---|---|
 | `BytesFile` | `bytes` in memory; sent with a known length | yes |
-| `PathFile` | a file on disk, read in chunks with `aiofiles` | yes |
+| `PathFile` | a file on disk, read in chunks in a worker thread | yes |
 | `IOFile` | an open binary stream, read from its position at creation | if the stream is seekable |
-| `StreamFile` | an async iterator of `bytes` | no |
+| `StreamFile` | an async iterator of `bytes`; the upload takes it over and closes it | no |
 
-An `InputFile` field also accepts plain `bytes`, a `Path` or a binary stream and converts it to the matching class. The content type is guessed from the file name when you don't give one. `PathFile` and `IOFile` derive from `ChunkedFile`, the base for a source of your own that is read piece by piece; a `chunk_size` below one raises `ValueError`, since `read(0)` would end the upload before it starts. Your own `InputFile` may return any async iterator from `open()`; it is closed after every attempt, by `aclose()` if it has one, else by `close()`.
+An `InputFile` field also accepts plain `bytes`, a `Path` or a binary stream and converts it to the matching class. The content type is guessed from the file name when you don't give one. `PathFile` and `IOFile` derive from `ChunkedFile`, the base for a source of your own that is read piece by piece; a `chunk_size` below one raises `ValueError`, since `read(0)` would end the upload before it starts. Your own `InputFile` may return any async iterator from `open()`; it is closed after every attempt, by `aclose()` if it has one, else by `close()`. `StreamFile` takes ownership of its source: the upload closes it when it ends, however it ends, also when the request fails before its body is sent.
 
 How files behave on retry, and why:
 
 - **Every attempt opens the file again.** `InputFile.open()` returns a fresh iterator each time, so a retry sends the whole content, not the rest of a half-read stream.
 - **An attempt lets go of its files.** When an attempt ends, also when the connection broke mid-upload or the server answered before it read the body, the session closes what the attempt was reading, so the retry can open the file again.
+- **A cancelled read is waited for, not stepped on.** Files and streams are read in a worker thread, which cannot be stopped: a cancelled read runs on to its end. The file is closed, and a retry seeks the stream, only after that read is over, so a cancelled attempt never leaves a file open or reads under the next one.
+- **A failing close never hides why the upload ended.** If closing a source fails while the upload already fails or is cancelled, the close error is added to that exception as a note; a cancellation stays a cancellation. A close that fails after a clean upload raises `APIRequestError`.
 - **One stream, one upload at a time.** A stream has one position, so two uploads reading it at once (two requests in `asyncio.gather`, say) would take chunks from under each other and both send a mixed file. The second one raises `APIRequestError` instead, also when the stream is wrapped in two `IOFile`s. A stream whose `open()` iterator you took yourself counts as being read until you close that iterator.
 - **A one-shot source disables retries.** A request whose files can be read only once (`StreamFile`, a non-seekable `IOFile`) is never retried, even if `__retryable__` is set: a retry would send an empty or truncated file.
 - **A failing source is not a network error.** A missing `PathFile` (or one that points to a directory), or a source that fails while it is sent, raises `APIRequestError`, which is not retried. Retrying would fail the same way. So does an `IOFile` over a non-blocking stream that has no data ready: its `read()` returns `None`, which is not the end, and reading on would send a truncated file.
@@ -445,7 +446,7 @@ async with session.stream(Generate(prompt="Hi")) as stream:
 - **Retries.** Only opening the stream is retried. A failure while iterating reaches your code, so it never receives duplicated data.
 - **Cleanup.** The connection is released when the block exits, including on `break` or an exception. Iterating the stream after the block, even through an iterator taken inside it, raises `RuntimeError`, instead of quietly yielding nothing from a closed connection.
 - **Text decoding.** It is incremental, so a multi-byte character split between two chunks still decodes correctly. A charset that is not a text encoding (`base64`, `zlib`) raises `APIResponseError`.
-- **Saving to a file.** `Stream.save(path)` writes chunks as they arrive, without holding the body in memory, and returns the number of bytes written.
+- **Saving to a file.** `Stream.save(path)` writes chunks as they arrive, without holding the body in memory, and returns the number of bytes written. It opens, writes and closes the file in a worker thread; a cancelled save closes the file once the write running there is over.
 - **Timeouts.** Streams have no total time limit, only 600 s between two chunks, so a long generation is not cut off. See [Timeouts](#timeouts).
 - **Type safety.** Passing a stream method to `send_request`, or a buffered method to `stream`, is a type error.
 - **Format and item type.** `BYTES` streams yield `bytes` and `TEXT` streams yield `str`, so an explicit `__response_format__` that contradicts the generic argument, such as `BaseStreamMethod[str]` with `BYTES`, raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`.

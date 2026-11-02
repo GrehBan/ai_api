@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-02
+
+### Changed
+
+- `StreamFile` takes ownership of its source: the upload closes it,
+  by `aclose()` else `close()`, when it ends, however it ends (read to
+  the end, cut short, cancelled, failed, or never sent because the
+  request failed first). `StreamFile.open()` now returns an iterator
+  that is not a generator and raises `RuntimeError` on a second call
+  at once.
+- The body builder opens every upload while it builds the body, so an
+  `open()` that raises is an `APIRequestError` before anything is
+  sent.
+
+### Removed
+
+- The `aiofiles` dependency (and the `types-aiofiles` dev stub).
+  `PathFile` and `Stream.save` open, read, write and close files in a
+  worker thread themselves.
+
+### Fixed
+
+- A `PathFile` whose opening was cancelled (an answer that comes
+  before the body is read cancels the upload) left the file the
+  worker thread opened open; it is now closed as soon as it is open,
+  and the retry after such an answer passes.
+- `StreamFile` did not close the source it was given.
+- A cancelled `IOFile` read let go of the stream while its `read()`
+  still ran in the worker thread, so the retry seeked and read under
+  it; the next read now waits for that call. Likewise a cancelled
+  `PathFile` read or `Stream.save` write closes its file only after
+  the call running in the thread is over.
+- A source that failed to close hid the error that ended the upload;
+  the close error is now a note on that error.
+- A source that failed to close while the upload was cancelled turned
+  the cancellation into `APIRequestError`; the cancellation now goes
+  on, with the close error as a note. The same holds for the attempt:
+  a failing close no longer replaces the error that ended it.
+
 ## [0.4.0] - 2026-11-02
 
 ### Added
@@ -643,7 +682,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/GrehBan/ai_api/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/GrehBan/ai_api/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/GrehBan/ai_api/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GrehBan/ai_api/compare/v0.1.0...v0.2.0
