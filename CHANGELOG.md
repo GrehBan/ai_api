@@ -22,7 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once the class is complete (at definition; at the first use of a
   class that names a model declared further down, and then for every
   instance), since it would send `null` for a value nobody set.
-  Recursive type aliases are walked once. Replace `limit: int | None = None` with
+  Dataclasses (standard and Pydantic's), `NamedTuple`s and `NewType`s
+  in a field's type are looked into as models are, and a default
+  factory that gives `None` counts as a `None` default. Recursive type
+  aliases are walked once.
+- **Breaking:** `MISSING` goes in a field's type only together with
+  the `MISSING` default, and the other way round; otherwise the class
+  raises `TypeError`, since a required field that takes `MISSING`
+  could be left out. `Any` takes `MISSING`.
+- `MISSING` as an item of a list or a value of a dict raises
+  `ValueError` when the request is built, instead of an encoder error
+  about an unknown type. Replace `limit: int | None = None` with
   `limit: int | MISSING = MISSING` (`from pydantic import MISSING`),
   and describe nested request data with a `TypedDict` (`NotRequired`
   keys are left out). Fields with `exclude=True` are not checked.

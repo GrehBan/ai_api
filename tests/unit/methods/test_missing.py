@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, NotRequired, TypedDict
+import dataclasses
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    NamedTuple,
+    NewType,
+    NotRequired,
+    TypedDict,
+)
 
 import pytest
 from pydantic import MISSING, BaseModel, Field, PydanticUserError
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from ai_api.enums import BodyFormat
 from ai_api.methods.base import BaseAPIMethod
+from ai_api.methods.fields import names_missing
+from ai_api.serialization.normalize import BodyNormalizer
+from ai_api.serialization.values import BaseValueFormatter
 from ai_api.types.base import BaseAPIType
 from tests.conftest import make_method
 
@@ -153,7 +166,7 @@ def test_an_excluded_none_default_is_never_sent() -> None:
         pytest.param(Loose, id="model"),
         pytest.param(list[Loose], id="list"),
         pytest.param(dict[str, Loose], id="dict"),
-        pytest.param(Loose | int | MISSING, id="union"),
+        pytest.param(Loose | int, id="union"),
         pytest.param(Annotated[Loose, "meta"], id="annotated"),
         pytest.param(Looses, id="type-alias"),
         pytest.param(Many[Loose], id="generic-alias"),
@@ -183,11 +196,11 @@ def test_a_model_with_a_none_default_in_the_type_is_rejected(
         pytest.param(Strict, id="model"),
         pytest.param(Node, id="recursive-model"),
         pytest.param(Tree, id="recursive-typeddict"),
-        pytest.param(list[Tree] | MISSING, id="typeddict-list"),
+        pytest.param(list[Tree], id="typeddict-list"),
         # A cycle is legal in a type: the walk stops at it.
         pytest.param(JSON, id="recursive-alias"),
         pytest.param(Ping, id="mutually-recursive-aliases"),
-        pytest.param(Branches[Strict] | MISSING, id="recursive-generic"),
+        pytest.param(Branches[Strict], id="recursive-generic"),
     ],
 )
 def test_request_data_without_none_defaults_is_accepted(
@@ -296,3 +309,197 @@ def test_an_unresolved_name_does_not_fail_the_definition() -> None:
 
     with pytest.raises(PydanticUserError, match="not fully defined"):
         Pending.model_validate({"data": {"amount": 1}})
+
+
+@dataclasses.dataclass
+class LooseRecord:
+    name: str
+    note: str | None = None
+
+
+@dataclasses.dataclass
+class FactoryRecord:
+    tags: list[str] | None = dataclasses.field(default_factory=lambda: None)
+
+
+@dataclasses.dataclass
+class CleanRecord:
+    name: str
+    tags: list[str] = dataclasses.field(default_factory=list)
+
+
+@pydantic_dataclass
+class LooseData:
+    note: str | None = None
+
+
+class LoosePair(NamedTuple):
+    name: str
+    note: str | None = None
+
+
+class FactoryModel(BaseModel):
+    note: str | None = Field(default_factory=lambda: None)
+
+
+class FromData(BaseModel):
+    name: str
+    # Takes the validated data: it cannot be called without an instance.
+    alias: str | None = Field(default_factory=lambda data: data["name"])
+
+
+class HoldsRecord(BaseModel):
+    record: LooseRecord
+
+
+LooseId = NewType("LooseId", Loose)
+StrictId = NewType("StrictId", Strict)
+type Spin = list[Spun] | MISSING
+type Spun = Spin | int
+type MaybeCount = int | MISSING
+# A cycle through unions only: Python takes it, type checkers do not.
+type Round = Trip | int  # pyright: ignore[reportGeneralTypeIssues]
+type Trip = Round | str
+
+
+@pytest.mark.parametrize(
+    ("annotation", "owner"),
+    [
+        pytest.param(LooseRecord, "LooseRecord", id="dataclass"),
+        pytest.param(FactoryRecord, "FactoryRecord", id="dataclass-factory"),
+        pytest.param(LooseData, "LooseData", id="pydantic-dataclass"),
+        pytest.param(LoosePair, "LoosePair", id="namedtuple"),
+        pytest.param(LooseId, "Loose", id="newtype"),
+        pytest.param(FactoryModel, "FactoryModel", id="model-factory"),
+        pytest.param(HoldsRecord, "LooseRecord", id="dataclass-in-model"),
+    ],
+)
+def test_every_class_of_data_is_looked_into(
+    annotation: Any,
+    owner: str,
+) -> None:
+    # Each of them is dumped with its defaults, so a None default would
+    # send null just as a model's.
+    with pytest.raises(TypeError, match=rf"'data' can hold {owner}, whose"):
+        make_method(
+            BaseAPIMethod[bytes],
+            fields={"data": annotation},
+            __request_body_format__=BodyFormat.JSON,
+        )
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        pytest.param(CleanRecord, id="dataclass"),
+        pytest.param(FromData, id="factory-taking-data"),
+        pytest.param(StrictId, id="newtype"),
+        pytest.param(type[int], id="class"),
+    ],
+)
+def test_classes_without_none_defaults_are_accepted(annotation: Any) -> None:
+    make_method(
+        BaseAPIMethod[bytes],
+        fields={"data": annotation},
+        __request_body_format__=BodyFormat.JSON,
+    )
+
+
+def test_a_default_factory_giving_none_is_a_none_default() -> None:
+    with pytest.raises(TypeError, match="'tags' defaults to None"):
+        make_method(
+            BaseAPIMethod[bytes],
+            fields={
+                "tags": (list[str] | None, Field(default_factory=lambda: None))
+            },
+            __request_body_format__=BodyFormat.JSON,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        pytest.param(
+            (int | MISSING, ...),
+            "takes MISSING but does not default to it",
+            id="required",
+        ),
+        pytest.param(
+            (int | MISSING, 5),
+            "takes MISSING but does not default to it",
+            id="other-default",
+        ),
+        pytest.param(
+            (int, MISSING),
+            "defaults to MISSING, which its type does not take",
+            id="type-without-missing",
+        ),
+    ],
+)
+def test_missing_goes_with_its_default(
+    field: tuple[Any, Any],
+    message: str,
+) -> None:
+    # A required field that takes MISSING could be left out of a request
+    # it is required in; a MISSING default the type does not take is
+    # not a value of the field.
+    with pytest.raises(TypeError, match=rf"'x' {message}"):
+        make_method(
+            BaseAPIMethod[bytes],
+            fields={"x": field},
+            __request_body_format__=BodyFormat.JSON,
+        )
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        pytest.param(Any, id="any"),
+        pytest.param(Annotated[int | MISSING, "meta"], id="annotated"),
+        pytest.param(MaybeCount, id="alias"),
+        pytest.param(Spin, id="recursive-alias"),
+    ],
+)
+def test_types_that_take_missing_default_to_it(annotation: Any) -> None:
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        fields={"x": (annotation, MISSING)},
+        __request_body_format__=BodyFormat.JSON,
+    )
+
+    assert method_cls().get_body_map() == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param([1, MISSING], id="list-item"),
+        pytest.param({"k": MISSING}, id="dict-value"),
+        pytest.param(MISSING, id="field"),
+    ],
+)
+def test_missing_inside_a_value_cannot_be_sent(value: Any) -> None:
+    # It leaves a whole field out; as an item it would reach the encoder
+    # and fail there with a message about an unknown type.
+    with pytest.raises(ValueError, match="MISSING cannot be sent"):
+        BodyNormalizer().normalize_mapping(
+            {"item": value}, BaseValueFormatter()
+        )
+
+
+def test_missing_in_a_query_list_cannot_be_sent() -> None:
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        http_method="GET",
+        fields={"ids": (list[Any] | MISSING, MISSING)},
+        __request_query__={"ids"},
+    )
+
+    with pytest.raises(ValueError, match="'ids' cannot send MISSING"):
+        method_cls.model_validate({"ids": ["a", MISSING]}).get_query_map()
+
+
+def test_a_cycle_of_aliases_ends_the_missing_lookup() -> None:
+    # The lookup stops at an alias it has seen instead of recursing.
+    assert names_missing(Spun)
+    assert not names_missing(Round)

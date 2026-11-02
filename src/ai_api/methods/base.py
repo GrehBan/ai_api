@@ -26,10 +26,13 @@ from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.http.headers import Headers
 from ai_api.http.protocols import HeadersType, IHeaders, Query
 from ai_api.methods.fields import (
+    defaults_to_none,
     has_one_shot_file,
     is_container_type,
     is_mapping_type,
-    nested_models,
+    names_missing,
+    nested_data_classes,
+    none_defaults,
     query_value,
     wrap_streams,
 )
@@ -332,22 +335,27 @@ class BaseMethod[ResponseT](BaseModel, ABC):
 
         Raises:
             TypeError: If a field would send ``null`` for a value nobody
-                gave (see ``_check_none_defaults``).
+                gave, or its type and default disagree on ``MISSING``
+                (see ``_check_defaults``).
         """
         super().__pydantic_on_complete__()
         cls.__definition_error__ = None
-        cls._check_none_defaults()
+        cls._check_defaults()
 
     @classmethod
-    def _check_none_defaults(cls) -> None:
-        """Reject defaults of ``None``, which would be sent as ``null``.
+    def _check_defaults(cls) -> None:
+        """Check that every field is sent as it is declared.
 
-        ``None`` is sent as ``null``, so a field that defaults to it
-        would send ``null`` for a value nobody gave; a field left out
-        until given defaults to ``MISSING``. The models a field's type
-        can hold are checked too, at any depth, since a model's own
-        defaults are dumped with it. Fields excluded from dumps are
-        never sent and not checked.
+        ``None`` is sent as ``null``, so a field that defaults to it,
+        directly or through a default factory, would send ``null`` for
+        a value nobody gave; a field left out until given defaults to
+        ``MISSING``. The classes of data a field's type can hold (models,
+        dataclasses, ``NamedTuple``) are checked too, at any depth, since
+        their defaults are dumped with them. ``MISSING`` goes in a type
+        only together with the ``MISSING`` default: a required field that
+        takes it could be left out of a request, and a ``MISSING``
+        default that the type does not take is not a value of the field.
+        Fields excluded from dumps are never sent and not checked.
 
         The message is kept in ``__definition_error__``: a class that
         completes at its first use stays usable to Pydantic after this
@@ -355,28 +363,43 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         instance.
 
         Raises:
-            TypeError: If a field defaults to ``None``, or its type can
-                hold a model with a field that does.
+            TypeError: If a field defaults to ``None`` or its type can hold
+                a class of data with a field that does, or the field's
+                type and default disagree on ``MISSING``.
         """
         for name, field in cls.model_fields.items():
             if field.exclude:
                 continue
 
-            if field.default is None:
+            if defaults_to_none(field):
                 cls._fail_definition(
                     f"field {name!r} defaults to None, which is sent as "
                     "null; default to MISSING to leave the field out "
                     "until it is given"
                 )
 
-            for model in nested_models(field.annotation):
-                if nulls := sorted(
-                    key
-                    for key, inner in model.model_fields.items()
-                    if inner.default is None and not inner.exclude
-                ):
+            left_out = field.default is MISSING
+
+            if names_missing(field.annotation) and not left_out:
+                cls._fail_definition(
+                    f"field {name!r} takes MISSING but does not default to "
+                    "it, so it could be left out of a request it is "
+                    "required in; default it to MISSING, or take MISSING "
+                    "out of its type"
+                )
+
+            if left_out and not (
+                field.annotation is Any or names_missing(field.annotation)
+            ):
+                cls._fail_definition(
+                    f"field {name!r} defaults to MISSING, which its type "
+                    "does not take; add MISSING to the type"
+                )
+
+            for owner in nested_data_classes(field.annotation):
+                if nulls := none_defaults(owner):
                     cls._fail_definition(
-                        f"field {name!r} can hold {model.__name__}, whose "
+                        f"field {name!r} can hold {owner.__name__}, whose "
                         f"fields {nulls} default to None, which is sent "
                         "as null; describe request data with a TypedDict "
                         "(NotRequired for a key left out)"

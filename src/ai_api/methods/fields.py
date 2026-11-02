@@ -2,29 +2,34 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import types
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
     Final,
+    NewType,
     TypeAliasType,
     Union,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
     is_typeddict,
 )
 
-from pydantic import BaseModel
+from pydantic import MISSING, BaseModel
 
 from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import scalar_text
 from ai_api.types.files import InputFile, IOFile
 
 if TYPE_CHECKING:
+    from pydantic.fields import FieldInfo
+
     from ai_api.serialization.protocols import IValueFormatter
 
 _SEQUENCES: Final = (list, tuple, set, frozenset)
@@ -89,75 +94,230 @@ def is_container_type(annotation: Any) -> bool:
     )
 
 
-def nested_models(annotation: Any) -> Iterator[type[BaseModel]]:
-    """Find the Pydantic models an annotation can hold, at any depth.
+def defaults_to_none(field: FieldInfo) -> bool:
+    """Tell whether a field's default is ``None``.
 
-    Unions, ``Annotated``, generic containers, type aliases, the keys of
-    a ``TypedDict`` and the fields of the models found are looked into.
-    Each model, ``TypedDict`` and type alias is looked into once, so a
-    recursive one (``type JSON = dict[str, JSON] | ...``) ends: a cycle
-    is legal in types, so it stops the walk instead of raising.
+    A default factory is called to see what it gives (factories are
+    expected to be pure, as Pydantic calls them for every instance),
+    except one that takes the validated data, which cannot be called
+    without an instance.
+
+    Args:
+        field: A field of a model or a Pydantic dataclass.
+
+    Returns:
+        ``True`` if the field defaults to ``None``.
+    """
+    if field.default is None:
+        return True
+
+    factory = field.default_factory
+
+    if factory is None or field.default_factory_takes_validated_data:
+        return False
+
+    return cast("Callable[[], Any]", factory)() is None
+
+
+def none_defaults(owner: type[Any]) -> list[str]:
+    """Name the fields of a class of data that default to ``None``.
+
+    Args:
+        owner: A Pydantic model or dataclass, a standard dataclass or a
+            ``NamedTuple`` class, as ``nested_data_classes`` finds them.
+
+    Returns:
+        The names, sorted; fields excluded from dumps are left out.
+    """
+    fields = _pydantic_fields(owner)
+
+    if fields is not None:
+        return sorted(
+            name
+            for name, field in fields.items()
+            if not field.exclude and defaults_to_none(field)
+        )
+
+    if dataclasses.is_dataclass(owner):
+        return sorted(
+            item.name
+            for item in dataclasses.fields(owner)
+            if item.default is None
+            or (
+                item.default_factory is not dataclasses.MISSING
+                and item.default_factory() is None
+            )
+        )
+
+    defaults: dict[str, Any] = getattr(owner, "_field_defaults", {})
+    return sorted(name for name, value in defaults.items() if value is None)
+
+
+def names_missing(annotation: Any) -> bool:
+    """Tell whether a field's type names ``MISSING``.
 
     Args:
         annotation: The annotation of a field.
 
     Returns:
-        An iterator over every model class the annotation names,
+        ``True`` if ``MISSING`` is the type or a member of its union,
+        also through ``Annotated`` and type aliases.
+    """
+    return _names_missing(annotation, set())
+
+
+def _names_missing(annotation: Any, seen: set[int]) -> bool:
+    """Tell whether a type names ``MISSING``.
+
+    Args:
+        annotation: A type or a part of one.
+        seen: Identities of the type aliases already looked into.
+
+    Returns:
+        ``True`` if ``MISSING`` is the type or a member of its union.
+    """
+    if annotation is MISSING:
+        return True
+
+    if isinstance(annotation, TypeAliasType):
+        if id(annotation) in seen:
+            return False
+
+        seen.add(id(annotation))
+        return _names_missing(annotation.__value__, seen)
+
+    origin = get_origin(annotation)
+
+    if origin is Annotated:
+        return _names_missing(get_args(annotation)[0], seen)
+
+    if origin in {Union, types.UnionType}:
+        return any(_names_missing(arg, seen) for arg in get_args(annotation))
+
+    return False
+
+
+def nested_data_classes(annotation: Any) -> Iterator[type[Any]]:
+    """Find the classes of data an annotation can hold, at any depth.
+
+    A class of data has fields with defaults that are dumped with it:
+    a Pydantic model or dataclass, a standard dataclass or a
+    ``NamedTuple``. Unions, ``Annotated``, generic containers, type
+    aliases, ``NewType``, the keys of a ``TypedDict`` and the fields of
+    the classes found are looked into. Each class, ``TypedDict`` and
+    type alias is looked into once, so a recursive one (``type JSON =
+    dict[str, JSON] | ...``) ends: a cycle is legal in types, so it
+    stops the walk instead of raising.
+
+    Args:
+        annotation: The annotation of a field.
+
+    Returns:
+        An iterator over every class of data the annotation names,
         directly or nested.
     """
-    return _nested_models(annotation, set())
+    return _nested_data_classes(annotation, set())
 
 
-def _nested_models(
+def _nested_data_classes(
     annotation: Any,
     seen: set[int],
-) -> Iterator[type[BaseModel]]:
-    """Find the Pydantic models an annotation can hold, at any depth.
+) -> Iterator[type[Any]]:
+    """Find the classes of data an annotation can hold, at any depth.
 
     Args:
         annotation: An annotation or a part of one.
-        seen: Identities of the models, ``TypedDict`` classes and type
+        seen: Identities of the classes, ``TypedDict`` classes and type
             aliases already looked into.
 
     Yields:
-        Every model class not seen before.
+        Every class of data not seen before.
     """
-    named = isinstance(annotation, TypeAliasType) or is_typeddict(annotation)
-    is_model = isinstance(annotation, type) and issubclass(
-        annotation, BaseModel
-    )
+    if isinstance(annotation, NewType):
+        yield from _nested_data_classes(annotation.__supertype__, seen)
+        return
 
-    if named or is_model:
+    if isinstance(annotation, TypeAliasType) or _is_class(annotation):
         if id(annotation) in seen:
             return
 
         seen.add(id(annotation))
 
     if isinstance(annotation, TypeAliasType):
-        yield from _nested_models(annotation.__value__, seen)
+        yield from _nested_data_classes(annotation.__value__, seen)
         return
 
-    if is_typeddict(annotation):
-        hints = get_type_hints(annotation, include_extras=True)
+    members = _member_types(annotation)
 
-        for hint in hints.values():
-            yield from _nested_models(hint, seen)
-        return
+    if members is not None:
+        if not is_typeddict(annotation):
+            yield annotation
 
-    if is_model:
-        yield annotation
-
-        for field in annotation.model_fields.values():
-            yield from _nested_models(field.annotation, seen)
+        for member in members.values():
+            yield from _nested_data_classes(member, seen)
         return
 
     origin = get_origin(annotation)
 
     if isinstance(origin, TypeAliasType):
-        yield from _nested_models(origin, seen)
+        yield from _nested_data_classes(origin, seen)
 
     for arg in get_args(annotation):
-        yield from _nested_models(arg, seen)
+        yield from _nested_data_classes(arg, seen)
+
+
+def _is_class(annotation: Any) -> bool:
+    """Tell whether an annotation is a plain class, not a generic alias.
+
+    Args:
+        annotation: An annotation or a part of one.
+
+    Returns:
+        ``True`` for a class such as ``int`` or a model; ``False`` for
+        ``list[int]`` and anything that is not a class.
+    """
+    return isinstance(annotation, type) and get_origin(annotation) is None
+
+
+def _member_types(annotation: Any) -> dict[str, Any] | None:
+    """Return the field types of a class of data or a ``TypedDict``.
+
+    Args:
+        annotation: An annotation or a part of one.
+
+    Returns:
+        The type of each field or key; ``None`` for anything else.
+    """
+    if is_typeddict(annotation):
+        return get_type_hints(annotation, include_extras=True)
+
+    if not _is_class(annotation):
+        return None
+
+    fields = _pydantic_fields(annotation)
+
+    if fields is not None:
+        return {name: field.annotation for name, field in fields.items()}
+
+    if dataclasses.is_dataclass(annotation) or (
+        issubclass(annotation, tuple) and hasattr(annotation, "_fields")
+    ):
+        return get_type_hints(annotation, include_extras=True)
+
+    return None
+
+
+def _pydantic_fields(owner: type[Any]) -> dict[str, FieldInfo] | None:
+    """Return the fields of a Pydantic model or dataclass.
+
+    Args:
+        owner: A class.
+
+    Returns:
+        The fields by name; ``None`` for a class Pydantic did not build.
+    """
+    fields = getattr(owner, "__pydantic_fields__", None)
+    return fields if isinstance(fields, dict) else None
 
 
 def _query_item(name: str, value: Any, formatter: IValueFormatter) -> str:
@@ -203,8 +363,10 @@ def query_value(
         TypeError: If the value is an object or contains one.
         ValueError: If the value is ``None`` or a list contains it: a
             query has no ``null`` (dropping it would send another
-            request, or shift the other items of a repeated key); also
-            if a value is NaN or infinite, or the formatter rejects one.
+            request, or shift the other items of a repeated key); if a
+            list contains ``MISSING``, which leaves only a whole field
+            out; also if a value is NaN or infinite, or the formatter
+            rejects one.
     """
     if value is None:
         raise ValueError(
@@ -216,6 +378,12 @@ def query_value(
         if any(item is None for item in value):
             raise ValueError(
                 f"Query parameter {name!r} cannot send None in a list"
+            )
+
+        if any(item is MISSING for item in value):
+            raise ValueError(
+                f"Query parameter {name!r} cannot send MISSING in a list: "
+                "MISSING leaves a whole field out"
             )
 
         return [_query_item(name, item, formatter) for item in value]

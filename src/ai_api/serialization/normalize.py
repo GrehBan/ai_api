@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from pydantic import MISSING
+
 from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import TEMPORAL_TYPES, format_temporal
 from ai_api.types.base import REQUEST_CONTEXT, BaseAPIType
@@ -106,9 +108,10 @@ class BodyNormalizer:
         Raises:
             TypeError: If the value is or contains a text stream.
             ValueError: If a stream is closed or unreadable, the formatter
-                rejects a value (a naive datetime, by default), or a
-                container contains itself or is nested deeper than
-                ``MAX_DEPTH``.
+                rejects a value (a naive datetime, by default), a value is
+                ``MISSING`` (it leaves a whole field out, so it cannot be
+                an item of a list or a value of a dict), or a container
+                contains itself or is nested deeper than ``MAX_DEPTH``.
         """
         return self._normalize(value, formatter, set())
 
@@ -131,12 +134,19 @@ class BodyNormalizer:
         Raises:
             TypeError: If the value is or contains a text stream.
             ValueError: If a stream is closed or unreadable, the formatter
-                rejects a value, a container contains itself or is nested
-                deeper than ``MAX_DEPTH``, or two keys of a dict give the
-                same value.
+                rejects a value, a value is ``MISSING``, a container
+                contains itself or is nested deeper than ``MAX_DEPTH``, or
+                two keys of a dict give the same value.
         """
         if value is None:
             return None
+
+        if value is MISSING:
+            raise ValueError(
+                "MISSING cannot be sent: it leaves a whole field out of a "
+                "request, so it cannot be an item of a list or a value of "
+                "a dict"
+            )
 
         if isinstance(value, InputFile):
             return value
