@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import MISSING
+
 from ai_api.adapters.base import BaseCompositeAdapter
 from ai_api.adapters.validation import check_last_turn, request_errors
 from ai_api.exceptions import RequestValidationError
@@ -271,21 +273,27 @@ class AnthropicGenerationAdapter(
                 ``user_id``.
         """
         check_last_turn(request, self.provider)
-        fields: dict[str, Any] = {
+        # Only a dict has keys to check; anything else that slipped past
+        # the request's validation (None through model_copy, say) is left
+        # to the method's, which raises RequestValidationError for it.
+        if isinstance(request.metadata, Mapping) and (
+            unknown := sorted(set(request.metadata) - METADATA_KEYS)
+        ):
+            message = (
+                "Anthropic accepts only 'user_id' as metadata; "
+                f"unsupported keys: {', '.join(unknown)}"
+            )
+            raise RequestValidationError(
+                message, provider=self.provider, field="metadata"
+            )
+        return {
             "model": request.model,
             "messages": self.input_conversion(request.input),
-            "max_tokens": request.max_output_tokens or self.default_max_tokens,
+            "max_tokens": (
+                self.default_max_tokens
+                if request.max_output_tokens is MISSING
+                else request.max_output_tokens
+            ),
             "system": request.instructions,
+            "metadata": request.metadata,
         }
-        if request.metadata is not None:
-            unknown = sorted(set(request.metadata) - METADATA_KEYS)
-            if unknown:
-                message = (
-                    "Anthropic accepts only 'user_id' as metadata; "
-                    f"unsupported keys: {', '.join(unknown)}"
-                )
-                raise RequestValidationError(
-                    message, provider=self.provider, field="metadata"
-                )
-            fields["metadata"] = request.metadata
-        return fields

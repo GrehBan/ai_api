@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
+### Changed
+
+- **Breaking:** a request field that is not given is left out with
+  `MISSING`, and `None` is sent as `null`. Until now `None` meant
+  both, so a request could not send `null`. A field is declared after
+  the API's schema: `x: int | MISSING = MISSING` (left out until
+  given), `x: int | None | MISSING = MISSING` (left out, or `null`),
+  `x: int | None` (required, may be `null`).
+- **Breaking:** a method field that defaults to `None`, or holds a
+  model with such a field anywhere in its type, raises `TypeError`
+  once the class is complete (at definition; at the first use of a
+  class that names a model declared further down, and then for every
+  instance), since it would send `null` for a value nobody set.
+  Dataclasses (standard and Pydantic's), `NamedTuple`s and `NewType`s
+  in a field's type are looked into as models are, and a default
+  factory that gives `None` counts as a `None` default. Recursive type
+  aliases are walked once.
+- **Breaking:** `MISSING` goes in a field's type only together with
+  the `MISSING` default, and the other way round; otherwise the class
+  raises `TypeError`, since a required field that takes `MISSING`
+  could be left out. `Any` takes `MISSING`.
+- `MISSING` as an item of a list or a value of a dict raises
+  `ValueError` when the request is built, instead of an encoder error
+  about an unknown type. Replace `limit: int | None = None` with
+  `limit: int | MISSING = MISSING` (`from pydantic import MISSING`),
+  and describe nested request data with a `TypedDict` (`NotRequired`
+  keys are left out). Fields with `exclude=True` are not checked.
+- **Breaking:** `None` in a query parameter or a form field raises
+  `ValueError` instead of being skipped: neither has a `null`.
+- **Breaking:** `GenerationRequest.instructions`, `max_output_tokens`
+  and `metadata` default to `MISSING` and take no `None`; leave a
+  field out instead. `generation.create()` and `stream()` show
+  `T | MISSING` in their keyword arguments.
+- The OpenAI and Anthropic request fields follow the providers'
+  schemas: OpenAI's optional fields take `None` (sent as `null`),
+  Anthropic's `system`, `metadata` and `stop_sequences` do not.
+- **Breaking:** a model put into a request body at run time, such as
+  a response item sent back, sends its `None` fields as `null`; until
+  now they were dropped. Dump it with
+  `model_dump(by_alias=True, exclude_unset=True)` to send exactly the
+  fields the response had.
+- Shared requests validate assignments: `request.instructions = None`
+  raises `ValidationError`, as the constructor does.
+- A type with a `PlainSerializer` is not looked into for `None`
+  defaults: the serializer decides what is sent.
+
+### Added
+
+- A path parameter that defaults to `MISSING` raises `TypeError` at
+  class definition.
+- The wire-contract tests check every provider method field against
+  the request schema: `None` where `null` is allowed, `MISSING` only
+  where the field is optional.
+
+### Fixed
+
+- `AnthropicGenerationAdapter` given `metadata=None` (through
+  `model_copy`, which validates nothing) raised a bare `TypeError`;
+  it raises `RequestValidationError`, as for the other fields.
+
 ## [0.4.4] - 2026-11-02
 
 ### Added
@@ -762,7 +824,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/GrehBan/ai_api/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/GrehBan/ai_api/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/GrehBan/ai_api/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/GrehBan/ai_api/compare/v0.4.1...v0.4.2

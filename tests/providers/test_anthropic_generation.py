@@ -125,6 +125,21 @@ def test_unsupported_metadata_keys_raise() -> None:
     assert caught.value.__cause__ is None
 
 
+@pytest.mark.parametrize(
+    "field", ["instructions", "max_output_tokens", "metadata"]
+)
+def test_none_past_the_request_is_a_validation_error(field: str) -> None:
+    # model_copy validates nothing, so None can reach the adapter; it is
+    # refused like any value Anthropic cannot take, never a bare
+    # TypeError from looking into it.
+    request = REQUEST.model_copy(update={field: None})
+
+    with pytest.raises(RequestValidationError) as caught:
+        adapter.to_method(request)
+
+    assert caught.value.field == field
+
+
 def test_too_long_user_id_is_rejected() -> None:
     request = REQUEST.model_copy(update={"metadata": {"user_id": "u" * 513}})
 

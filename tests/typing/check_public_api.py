@@ -500,6 +500,8 @@ async def generation_takes_keyword_arguments(client: OpenAIClient) -> None:
         assert_type(completed.text, str | None)
     await client.generation.create(model="m", inputs="x")  # type: ignore[call-overload]
     await client.generation.create(input="x")  # type: ignore[call-overload]
+    # None would mean null: an optional field is left out instead.
+    await client.generation.create(model="m", input="x", instructions=None)  # type: ignore[call-overload]
 
 
 def clients_take_session_arguments() -> None:

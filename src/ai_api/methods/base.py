@@ -9,20 +9,32 @@ from typing import (
     Any,
     ClassVar,
     Final,
+    NoReturn,
     TypeVar,
     cast,
 )
 
-from pydantic import BaseModel, ConfigDict, PydanticUserError, TypeAdapter
+from pydantic import (
+    MISSING,
+    BaseModel,
+    ConfigDict,
+    PydanticUserError,
+    TypeAdapter,
+)
 
 from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.http.headers import Headers
 from ai_api.http.protocols import HeadersType, IHeaders, Query
 from ai_api.methods.fields import (
+    defaults_to_none,
     has_one_shot_file,
     is_container_type,
     is_mapping_type,
+    names_missing,
+    nested_data_classes,
+    none_defaults,
     query_value,
+    serialized_by_hand,
     wrap_streams,
 )
 from ai_api.methods.path import encode_path_value, parse_path_params
@@ -109,6 +121,15 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     and dunder class attributes describe the HTTP request. Subclass
     ``BaseAPIMethod`` or ``BaseStreamMethod`` rather than this class.
 
+    A field is sent as it is declared: one without a default is
+    required, ``None`` is sent as ``null``, and a field that defaults
+    to ``MISSING`` is left out of the request until it is given, so
+    ``x: int | None | MISSING = MISSING`` can be absent, ``null`` or a
+    number. A default of ``None`` is a ``TypeError`` at class definition
+    (it would send ``null`` for a field nobody set), and so is a model
+    with such a field inside a field's type: describe nested request
+    data with a ``TypedDict``, whose ``NotRequired`` keys are left out.
+
     The generic argument determines ``__returning__`` and
     ``__response_format__``, unless a subclass sets them explicitly.
 
@@ -142,6 +163,9 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         __retryable__: Whether transient failures may be retried. Ignored
             when the request carries a file that can be read only once.
         __response_format__: How the response body is parsed.
+        __definition_error__: Set when the class failed a check on
+            completing at its first use (a forward reference); every
+            instance then raises it as ``TypeError``. ``None`` otherwise.
     """
 
     model_config = ConfigDict(
@@ -162,6 +186,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     __retryable__: ClassVar[bool] = False
     __response_format__: ClassVar[ResponseFormat]
     __request_headers__: ClassVar[HeadersType | None] = None
+    __definition_error__: ClassVar[str | None] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -195,7 +220,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             TypeError: If the template is malformed, names a missing
                 field, a placeholder is also a query parameter, or its
                 field is annotated as a mapping, a model or a collection,
-                which has no single path segment.
+                which has no single path segment, or defaults to
+                ``MISSING``: a path has every segment.
         """
         template = cls.__dict__.get("__request_path__")
 
@@ -224,10 +250,18 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             )
 
         for name in sorted(cls.__request_path_params__):
-            if is_container_type(cls.model_fields[name].annotation):
+            field = cls.model_fields[name]
+
+            if is_container_type(field.annotation):
                 raise TypeError(
                     f"{cls.__name__}: path parameter {name!r} must be a "
                     "scalar, not a mapping, a model or a collection"
+                )
+
+            if field.default is MISSING:
+                raise TypeError(
+                    f"{cls.__name__}: path parameter {name!r} cannot "
+                    "default to MISSING: a path cannot leave a segment out"
                 )
 
     @classmethod
@@ -290,6 +324,105 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             )
 
     @classmethod
+    def __pydantic_on_complete__(cls) -> None:
+        """Check the field types once every name in them is resolved.
+
+        Pydantic calls this when the class is complete: at definition,
+        or, for a class that names a type defined further down, when it
+        is first used. A type is looked into only then, so a forward
+        reference is checked too and a name that does not exist yet
+        does not fail the definition.
+
+        Raises:
+            TypeError: If a field would send ``null`` for a value nobody
+                gave, or its type and default disagree on ``MISSING``
+                (see ``_check_defaults``).
+        """
+        super().__pydantic_on_complete__()
+        cls.__definition_error__ = None
+        cls._check_defaults()
+
+    @classmethod
+    def _check_defaults(cls) -> None:
+        """Check that every field is sent as it is declared.
+
+        ``None`` is sent as ``null``, so a field that defaults to it,
+        directly or through a default factory, would send ``null`` for
+        a value nobody gave; a field left out until given defaults to
+        ``MISSING``. The classes of data a field's type can hold (models,
+        dataclasses, ``NamedTuple``) are checked too, at any depth, since
+        their defaults are dumped with them. ``MISSING`` goes in a type
+        only together with the ``MISSING`` default: a required field that
+        takes it could be left out of a request, and a ``MISSING``
+        default that the type does not take is not a value of the field.
+        Fields excluded from dumps are never sent and not checked, nor
+        is a type with a ``PlainSerializer``, which decides what is sent.
+
+        The message is kept in ``__definition_error__``: a class that
+        completes at its first use stays usable to Pydantic after this
+        raised once, and ``model_post_init`` raises it for every
+        instance.
+
+        Raises:
+            TypeError: If a field defaults to ``None`` or its type can hold
+                a class of data with a field that does, or the field's
+                type and default disagree on ``MISSING``.
+        """
+        for name, field in cls.model_fields.items():
+            if field.exclude:
+                continue
+
+            if defaults_to_none(field):
+                cls._fail_definition(
+                    f"field {name!r} defaults to None, which is sent as "
+                    "null; default to MISSING to leave the field out "
+                    "until it is given"
+                )
+
+            left_out = field.default is MISSING
+
+            if names_missing(field.annotation) and not left_out:
+                cls._fail_definition(
+                    f"field {name!r} takes MISSING but does not default to "
+                    "it, so it could be left out of a request it is "
+                    "required in; default it to MISSING, or take MISSING "
+                    "out of its type"
+                )
+
+            if left_out and not (
+                field.annotation is Any or names_missing(field.annotation)
+            ):
+                cls._fail_definition(
+                    f"field {name!r} defaults to MISSING, which its type "
+                    "does not take; add MISSING to the type"
+                )
+
+            if serialized_by_hand(field.metadata):
+                continue
+
+            for owner in nested_data_classes(field.annotation):
+                if nulls := none_defaults(owner):
+                    cls._fail_definition(
+                        f"field {name!r} can hold {owner.__name__}, whose "
+                        f"fields {nulls} default to None, which is sent "
+                        "as null; describe request data with a TypedDict "
+                        "(NotRequired for a key left out)"
+                    )
+
+    @classmethod
+    def _fail_definition(cls, problem: str) -> NoReturn:
+        """Keep a class-definition error and raise it.
+
+        Args:
+            problem: What is wrong with the class.
+
+        Raises:
+            TypeError: Always, naming the class.
+        """
+        cls.__definition_error__ = f"{cls.__name__}: {problem}"
+        raise TypeError(cls.__definition_error__)
+
+    @classmethod
     def _init_response_type(cls) -> None:
         """Infer ``__returning__`` and the response format."""
         args = cls.__pydantic_generic_metadata__["args"]
@@ -337,8 +470,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             context: Pydantic validation context.
 
         Raises:
+            TypeError: If the class failed a check when it completed
+                (``__definition_error__``).
             ValueError: If a field holds a text stream.
         """
+        if error := type(self).__definition_error__:
+            raise TypeError(error)
+
         for name, value in self:
             wrapped = wrap_streams(value)
 
@@ -466,18 +604,19 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             (booleans as ``"true"``/``"false"``, dates through
             ``value_formatter``) or, for lists, tuples and sets, to lists
             of strings; ``None`` if the method has no query parameters.
+            A field left ``MISSING`` is not sent.
 
         Raises:
             TypeError: If a value is an object or contains one.
-            ValueError: If a list contains ``None``, or a value is NaN or
-                infinite or rejected by the formatter.
+            ValueError: If a value is ``None`` or a list contains it (a
+                query has no ``null``), or a value is NaN or infinite or
+                rejected by the formatter.
         """
         if not self.__request_query__:
             return None
 
         data = self.model_dump(
             include=set(self.__request_query__),
-            exclude_none=True,
             by_alias=True,
             mode="python",
         )
@@ -491,12 +630,12 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Return the body fields.
 
         Returns:
-            All fields except path and query parameters and ``None``
-            values, keyed by alias.
+            All fields except path and query parameters, keyed by alias:
+            a field left ``MISSING`` is not sent, and ``None`` is sent as
+            ``null``, also nested, in a model put into the body too.
         """
         return self.model_dump(
             exclude=set(self.__request_query__ | self.__request_path_params__),
-            exclude_none=True,
             by_alias=True,
             mode="python",
         )

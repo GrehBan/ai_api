@@ -17,6 +17,7 @@ from aiohttp import (
     web,
 )
 from aiohttp.test_utils import TestServer
+from pydantic import MISSING
 from pytest_aiohttp import AiohttpServer
 from pytest_mock import MockerFixture
 from yarl import URL
@@ -77,10 +78,10 @@ class UpdateModel(BaseAPIMethod[Model]):
     __request_body_format__ = BodyFormat.JSON
 
     model_id: str
-    limit: int | None = None
-    dry_run: bool | None = None
-    name: str | None = None
-    tags: list[str] | None = None
+    limit: int | MISSING = MISSING
+    dry_run: bool | MISSING = MISSING
+    name: str | MISSING = MISSING
+    tags: list[str] | MISSING = MISSING
 
 
 class SubmitForm(BaseAPIMethod[None]):

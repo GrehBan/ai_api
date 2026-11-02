@@ -303,8 +303,9 @@ class AiohttpBodyBuilder:
 
         Lists add the field once per item, files become file parts,
         mappings are sent as JSON strings and other values by the rule of
-        ``scalar_text`` (booleans as ``"true"``/``"false"``). A ``None``
-        field is not sent.
+        ``scalar_text`` (booleans as ``"true"``/``"false"``). A field the
+        method leaves out is not in the body; ``None`` has no form
+        encoding and is refused.
 
         Args:
             form: The form being built.
@@ -318,12 +319,17 @@ class AiohttpBodyBuilder:
             TypeError: If a file is added to a non-multipart form, a
                 mapping cannot be encoded as JSON, or a list contains a
                 list, which a repeated field would flatten.
-            ValueError: If a value is NaN or infinite, or a list contains
-                ``None``, which a form field cannot express.
+            ValueError: If a value is NaN or infinite, or the value is
+                ``None`` or a list contains it, which a form field cannot
+                express.
             APIRequestError: If a file to upload does not exist.
         """
         if value is None:
-            return
+            message = (
+                f"Form field {key!r} cannot send None: a form has no null; "
+                "leave the field MISSING to leave it out"
+            )
+            raise ValueError(message)
 
         if isinstance(value, (list, tuple)):
             for item in value:

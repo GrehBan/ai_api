@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from annotated_types import MaxLen
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import MISSING, BaseModel, Field, StringConstraints
 
 type Metadata = Annotated[
     dict[
@@ -23,7 +23,9 @@ class ResponseParams(BaseModel):
 
     A mixin of ``CreateResponse`` and ``StreamResponse``: it holds only
     fields, and the method classes add the endpoint. Only the fields
-    needed for text generation are modeled so far.
+    needed for text generation are modeled so far. Every optional field
+    is left out until it is given and takes ``None``, sent as ``null``,
+    as OpenAI's schema allows.
 
     Attributes:
         model: Model identifier, such as ``"gpt-5"``.
@@ -42,10 +44,10 @@ class ResponseParams(BaseModel):
 
     model: str
     input: str | list[dict[str, Any]]
-    instructions: str | None = None
-    max_output_tokens: int | None = Field(default=None, ge=16)
-    metadata: Metadata | None = None
-    previous_response_id: str | None = None
-    store: bool | None = None
-    temperature: float | None = Field(default=None, ge=0, le=2)
-    top_p: float | None = Field(default=None, ge=0, le=1)
+    instructions: str | None | MISSING = MISSING
+    max_output_tokens: int | None | MISSING = Field(default=MISSING, ge=16)
+    metadata: Metadata | None | MISSING = MISSING
+    previous_response_id: str | None | MISSING = MISSING
+    store: bool | None | MISSING = MISSING
+    temperature: float | None | MISSING = Field(default=MISSING, ge=0, le=2)
+    top_p: float | None | MISSING = Field(default=MISSING, ge=0, le=1)

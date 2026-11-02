@@ -84,22 +84,37 @@ def normalizer() -> BodyNormalizer:
     return BodyNormalizer()
 
 
-def test_none_is_dropped_only_from_fields(
-    normalizer: BodyNormalizer,
-) -> None:
+def test_none_is_kept_as_null(normalizer: BodyNormalizer) -> None:
+    # A field the request leaves out is never in the body, so a None
+    # that reaches the normalizer was given and is sent as null.
     body = {
         "a": None,
         "b": {"c": None, "d": 1},
         "e": [None, 2, {"f": None}],
         "g": (None,),
-        "h": Inner(name="n"),
     }
 
     assert normalizer.normalize_mapping(body, ISO) == {
+        "a": None,
         "b": {"c": None, "d": 1},
         "e": [None, 2, {"f": None}],
         "g": [None],
-        "h": {"name": "n"},
+    }
+
+
+def test_a_model_sends_none_as_null(normalizer: BodyNormalizer) -> None:
+    # One rule everywhere: a model in the body is dumped as Pydantic
+    # dumps it, None as null.
+    body = {
+        "plain": Inner(name="n"),
+        "given": Inner(name="m", note="x"),
+        "nested": [{"inner": Inner(name="k")}],
+    }
+
+    assert normalizer.normalize_mapping(body, ISO) == {
+        "plain": {"name": "n", "note": None},
+        "given": {"name": "m", "note": "x"},
+        "nested": [{"inner": {"name": "k", "note": None}}],
     }
 
 
@@ -206,7 +221,11 @@ def test_nested_model_becomes_dict(normalizer: BodyNormalizer) -> None:
     value = Outer(inner=Inner(name="x"), tags=["a"], color=Color.RED)
 
     assert normalizer.normalize_mapping({"model": value}, ISO) == {
-        "model": {"inner": {"name": "x"}, "tags": ["a"], "color": "red"},
+        "model": {
+            "inner": {"name": "x", "note": None},
+            "tags": ["a"],
+            "color": "red",
+        },
     }
 
 

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Final, Literal, TypedDict
 
 from pydantic import (
+    MISSING,
     BaseModel,
     ConfigDict,
     Field,
@@ -64,7 +65,9 @@ class MessageParams(BaseModel):
     fields, and the method classes add the endpoint. Only the fields
     needed for text generation are modeled so far. There are no
     ``temperature``, ``top_p`` and ``top_k``: API version 2026-10-21
-    removed them and answers 400 to a request with any of them.
+    removed them and answers 400 to a request with any of them. The
+    optional fields are left out until they are given; Anthropic's
+    schema takes no ``null`` for them.
 
     Attributes:
         model: Model identifier, such as ``"claude-opus-5-5"``.
@@ -79,6 +82,6 @@ class MessageParams(BaseModel):
     model: str
     messages: list[MessageParam] = Field(min_length=1)
     max_tokens: int = Field(ge=0)
-    system: str | list[dict[str, Any]] | None = None
-    metadata: Metadata | None = None
-    stop_sequences: list[str] | None = None
+    system: str | list[dict[str, Any]] | MISSING = MISSING
+    metadata: Metadata | MISSING = MISSING
+    stop_sequences: list[str] | MISSING = MISSING

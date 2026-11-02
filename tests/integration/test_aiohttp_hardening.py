@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
+from pydantic import MISSING
 from pytest_aiohttp import AiohttpServer
 from pytest_mock import MockerFixture
 from yarl import URL
@@ -49,7 +50,7 @@ class Search(BaseAPIMethod[bytes]):
     __request_query__ = {"ids", "limit"}
 
     ids: list[str]
-    limit: int | None = None
+    limit: int | MISSING = MISSING
 
 
 class Create(BaseAPIMethod[bytes]):
@@ -58,7 +59,7 @@ class Create(BaseAPIMethod[bytes]):
     __request_body_format__ = BodyFormat.JSON
     __retryable__ = True
 
-    payload: Any = None
+    payload: Any = MISSING
 
 
 class Upload(BaseAPIMethod[bytes]):
@@ -67,7 +68,7 @@ class Upload(BaseAPIMethod[bytes]):
     __request_body_format__ = BodyFormat.MULTIPART
     __retryable__ = True
 
-    file: Any = None
+    file: Any = MISSING
 
 
 class Download(BaseStreamMethod[bytes]):

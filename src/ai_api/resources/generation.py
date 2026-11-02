@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, overload
 
+from pydantic import MISSING
+
 from ai_api.adapters.protocols import ICompositeAdapter
 from ai_api.resources.base import BaseResource
 from ai_api.resources.stream import GenerationStream
@@ -76,9 +78,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         *,
         model: str,
         input: str | list[Turn],
-        instructions: str | None = None,
-        max_output_tokens: int | None = None,
-        metadata: dict[str, str] | None = None,
+        instructions: str | MISSING = MISSING,
+        max_output_tokens: int | MISSING = MISSING,
+        metadata: dict[str, str] | MISSING = MISSING,
     ) -> GenerationResponse[RawT]: ...
 
     @overload
@@ -117,9 +119,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         *,
         model: str,
         input: str | list[Turn],
-        instructions: str | None = None,
-        max_output_tokens: int | None = None,
-        metadata: dict[str, str] | None = None,
+        instructions: str | MISSING = MISSING,
+        max_output_tokens: int | MISSING = MISSING,
+        metadata: dict[str, str] | MISSING = MISSING,
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
     @overload

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytest
+from pydantic import MISSING
 from yarl import URL
 
 from ai_api.enums import BodyFormat, ResponseFormat
@@ -48,7 +49,7 @@ class Upload(BaseAPIMethod[bytes]):
     __request_body_format__ = BodyFormat.MULTIPART
     __retryable__ = True
 
-    file: Any = None
+    file: Any = MISSING
 
 
 async def read_chunked(reader: asyncio.StreamReader) -> bytes:
@@ -277,7 +278,7 @@ class StreamUpload(BaseStreamMethod[Event]):
     __request_body_format__ = BodyFormat.MULTIPART
     __response_format__ = ResponseFormat.SSE
 
-    file: Any = None
+    file: Any = MISSING
 
 
 async def stream_before_the_body(

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import MISSING
 
 from ai_api.enums import BodyFormat
 from ai_api.http.exceptions.status import ServiceUnavailableError
@@ -39,7 +40,7 @@ class Upload(BaseAPIMethod[bytes]):
     __request_body_format__ = BodyFormat.MULTIPART
 
     purpose: str = "test"
-    file: Any = None
+    file: Any = MISSING
 
 
 class RetryableUpload(Upload):
@@ -316,7 +317,7 @@ class Unopenable(InputFile):
 
 
 class UploadWithCount(Upload):
-    count: Any = None
+    count: Any = MISSING
 
 
 async def test_a_stream_file_source_is_closed_after_the_upload(

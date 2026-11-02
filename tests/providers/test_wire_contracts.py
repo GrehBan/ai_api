@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -25,7 +25,7 @@ from typing import Any, Final, get_args
 
 import pytest
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, TypeAdapter
+from pydantic import MISSING, BaseModel, TypeAdapter
 
 from ai_api.adapters import ICompositeAdapter
 from ai_api.methods import BaseAPIMethod, BaseStreamMethod
@@ -73,8 +73,8 @@ class Case:
     """
 
     name: str
-    create: Callable[..., BaseAPIMethod[Any]]
-    stream: Callable[..., BaseStreamMethod[Any]]
+    create: type[BaseAPIMethod[Any]]
+    stream: type[BaseStreamMethod[Any]]
     request: dict[str, Any]
     response: type[BaseModel]
     events: TypeAdapter[Any]
@@ -309,6 +309,95 @@ def test_shared_conversation_passes_the_request_schema(case: Case) -> None:
     ):
         body = json.loads(json.dumps(method.get_body_map()))
         assert errors(schema, body) == []
+
+
+def request_definition(
+    case: Case,
+    *,
+    streamed: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Find the request schema of a buffered or a streamed call.
+
+    OpenAI's schema is a union of a streaming variant (``stream``
+    required) and a buffered one; Anthropic's is one object for both.
+
+    Args:
+        case: The endpoint.
+        streamed: Whether the call is streamed.
+
+    Returns:
+        The object schema of the call and the schema's definitions.
+    """
+    schema = load(case.name, "request.schema.json")
+    definitions: dict[str, Any] = schema.get("$defs", {})
+    variants = [
+        resolve(variant, definitions)
+        for variant in schema.get("anyOf", [schema])
+    ]
+
+    if len(variants) == 1:
+        return variants[0], definitions
+
+    (variant,) = [
+        variant
+        for variant in variants
+        if ("stream" in variant.get("required", ())) is streamed
+    ]
+    return variant, definitions
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("streamed", [False, True], ids=["create", "stream"])
+def test_method_fields_match_the_request_schema(
+    case: Case,
+    streamed: bool,
+) -> None:
+    # A field takes None exactly where upstream takes null, and leaves
+    # itself out by default only where upstream lets it be absent.
+    method = case.stream if streamed else case.create
+    definition, definitions = request_definition(case, streamed=streamed)
+    properties = definition.get("properties", {})
+    required = set(definition.get("required", []))
+    problems: list[str] = []
+
+    for name, field in method.model_fields.items():
+        wire = field.serialization_alias or name
+        where = f"{method.__name__}.{name}"
+
+        if wire not in properties:
+            problems.append(f"{where}: not in the request schema")
+            continue
+
+        nullable = allows_null(properties[wire], definitions)
+        takes_none = field.annotation is Any or type(None) in get_args(
+            field.annotation
+        )
+
+        if nullable and not takes_none:
+            problems.append(f"{where}: upstream takes null, the field not")
+        if takes_none and not nullable:
+            problems.append(f"{where}: the field takes None, upstream not")
+        if wire in required and field.default is MISSING:
+            problems.append(f"{where}: required upstream, left out here")
+
+    assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_a_bare_shared_request_sends_only_what_it_must(case: Case) -> None:
+    # Nothing that was not given is sent, not even as null; Anthropic
+    # requires max_tokens, so the adapter fills in its default.
+    request = GenerationRequest(model="m", input="Hi")
+    expected = {
+        "openai/responses": {"model", "input"},
+        "anthropic/messages": {"model", "messages", "max_tokens"},
+    }[case.name]
+
+    for method in (
+        case.adapter.to_method(request),
+        case.adapter.to_stream_method(request),
+    ):
+        assert set(method.get_body_map()) - {"stream"} == expected
 
 
 @pytest.mark.parametrize("case", CASES)

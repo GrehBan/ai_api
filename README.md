@@ -5,7 +5,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 <!-- --8<-- [start:intro] -->
 You describe each API call as a small declarative class: a Pydantic model whose generic argument is its result type. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming, and ships clients for OpenAI and Anthropic with one shared text generation API.
 
-> **Status: pre-alpha (0.4.4).** The core abstractions are in place, but the public API may still change without notice.
+> **Status: pre-alpha (0.5.0).** The core abstractions are in place, but the public API may still change without notice.
 
 ## Features
 
@@ -35,6 +35,8 @@ Or with pip: `pip install -e .`
 
 ```python title="quick_start.py"
 import asyncio
+
+from pydantic import MISSING
 
 from ai_api import (
     BaseAPI,
@@ -67,7 +69,7 @@ class CreateCompletion(BaseAPIMethod[Completion]):
 
     model: str
     messages: list[Message]
-    temperature: float | None = None
+    temperature: float | MISSING = MISSING   # left out until given
 
 
 async def main() -> None:

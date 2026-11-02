@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from pydantic import MISSING
+
 from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import TEMPORAL_TYPES, format_temporal
 from ai_api.types.base import BaseAPIType
@@ -62,10 +64,10 @@ class BodyNormalizer:
 
     Nested models are dumped by alias, enums (also dict keys) are
     unwrapped, and dates, times and durations are written by the method's
-    ``IValueFormatter``. ``None`` fields are dropped from the body and
-    from nested models, but kept as ``null`` inside lists and dicts.
-    Files and binary streams are passed through unchanged for the body
-    builder to handle.
+    ``IValueFormatter``. ``None`` is kept everywhere, for the encoder to
+    send as ``null``, also in a nested model; a field the request leaves
+    out is not in the body at all. Files and binary streams are passed
+    through unchanged for the body builder to handle.
     """
 
     def normalize_mapping(
@@ -73,23 +75,22 @@ class BodyNormalizer:
         body: Mapping[str, Any],
         formatter: IValueFormatter,
     ) -> dict[str, Any]:
-        """Normalize the fields of a body, dropping ``None`` results.
+        """Normalize the fields of a body.
 
         Args:
             body: Body fields of a request.
             formatter: Writes the dates, times and durations.
 
         Returns:
-            A new dict with normalized values.
+            A new dict with normalized values; ``None`` stays ``None``.
 
         Raises:
             TypeError: If a value is a text stream.
             ValueError: If a value cannot be normalized.
         """
         return {
-            key: normalized
+            key: self.normalize(value, formatter)
             for key, value in body.items()
-            if (normalized := self.normalize(value, formatter)) is not None
         }
 
     def normalize(self, value: Any, formatter: IValueFormatter) -> Any:
@@ -105,9 +106,10 @@ class BodyNormalizer:
         Raises:
             TypeError: If the value is or contains a text stream.
             ValueError: If a stream is closed or unreadable, the formatter
-                rejects a value (a naive datetime, by default), or a
-                container contains itself or is nested deeper than
-                ``MAX_DEPTH``.
+                rejects a value (a naive datetime, by default), a value is
+                ``MISSING`` (it leaves a whole field out, so it cannot be
+                an item of a list or a value of a dict), or a container
+                contains itself or is nested deeper than ``MAX_DEPTH``.
         """
         return self._normalize(value, formatter, set())
 
@@ -130,12 +132,19 @@ class BodyNormalizer:
         Raises:
             TypeError: If the value is or contains a text stream.
             ValueError: If a stream is closed or unreadable, the formatter
-                rejects a value, a container contains itself or is nested
-                deeper than ``MAX_DEPTH``, or two keys of a dict give the
-                same value.
+                rejects a value, a value is ``MISSING``, a container
+                contains itself or is nested deeper than ``MAX_DEPTH``, or
+                two keys of a dict give the same value.
         """
         if value is None:
             return None
+
+        if value is MISSING:
+            raise ValueError(
+                "MISSING cannot be sent: it leaves a whole field out of a "
+                "request, so it cannot be an item of a list or a value of "
+                "a dict"
+            )
 
         if isinstance(value, InputFile):
             return value
@@ -148,7 +157,6 @@ class BodyNormalizer:
                 value.model_dump(
                     mode="python",
                     by_alias=True,
-                    exclude_none=True,
                     warnings=False,
                 ),
                 formatter,
