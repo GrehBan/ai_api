@@ -62,7 +62,7 @@ A field is sent as it is declared. JSON tells a field that is absent from one th
 
 A default of `None` raises `TypeError` at class definition. It would send `null` for a field nobody set, which some APIs reject and others take as a request to clear a value; `= MISSING` is what leaves a field out. Fields with `exclude=True` are never sent and are not checked.
 
-The same goes for nested request data: a model whose field defaults to `None`, anywhere inside a field's type, raises `TypeError` too. Describe nested data with a `TypedDict`, as the provider SDKs do: a key marked `NotRequired` is left out until given, and a plain dict literal type-checks against it:
+The same goes for nested request data: a model whose field defaults to `None`, anywhere inside a field's type, raises `TypeError` too. Types are looked into once the class is complete, so a recursive type alias such as `type JSON = dict[str, JSON] | list[JSON] | str | None` is fine, and a model declared further down than the method is checked at the method's first use: from then on every instance raises. Describe nested data with a `TypedDict`, as the provider SDKs do: a key marked `NotRequired` is left out until given, and a plain dict literal type-checks against it:
 
 ```python title="optional_fields.py"
 from typing import NotRequired, TypedDict

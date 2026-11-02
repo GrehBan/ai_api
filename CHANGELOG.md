@@ -18,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given), `x: int | None | MISSING = MISSING` (left out, or `null`),
   `x: int | None` (required, may be `null`).
 - **Breaking:** a method field that defaults to `None`, or holds a
-  model with such a field anywhere in its type, raises `TypeError` at
-  class definition, since it would send `null` for a value nobody
-  set. Replace `limit: int | None = None` with
+  model with such a field anywhere in its type, raises `TypeError`
+  once the class is complete (at definition; at the first use of a
+  class that names a model declared further down, and then for every
+  instance), since it would send `null` for a value nobody set.
+  Recursive type aliases are walked once. Replace `limit: int | None = None` with
   `limit: int | MISSING = MISSING` (`from pydantic import MISSING`),
   and describe nested request data with a `TypedDict` (`NotRequired`
   keys are left out). Fields with `exclude=True` are not checked.

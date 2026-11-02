@@ -93,8 +93,10 @@ def nested_models(annotation: Any) -> Iterator[type[BaseModel]]:
     """Find the Pydantic models an annotation can hold, at any depth.
 
     Unions, ``Annotated``, generic containers, type aliases, the keys of
-    a ``TypedDict`` and the fields of the models found are looked into;
-    each model is yielded once, so a recursive model ends.
+    a ``TypedDict`` and the fields of the models found are looked into.
+    Each model, ``TypedDict`` and type alias is looked into once, so a
+    recursive one (``type JSON = dict[str, JSON] | ...``) ends: a cycle
+    is legal in types, so it stops the walk instead of raising.
 
     Args:
         annotation: The annotation of a field.
@@ -114,32 +116,39 @@ def _nested_models(
 
     Args:
         annotation: An annotation or a part of one.
-        seen: Identities of the models and ``TypedDict`` classes already
-            looked into.
+        seen: Identities of the models, ``TypedDict`` classes and type
+            aliases already looked into.
 
     Yields:
         Every model class not seen before.
     """
+    named = isinstance(annotation, TypeAliasType) or is_typeddict(annotation)
+    is_model = isinstance(annotation, type) and issubclass(
+        annotation, BaseModel
+    )
+
+    if named or is_model:
+        if id(annotation) in seen:
+            return
+
+        seen.add(id(annotation))
+
     if isinstance(annotation, TypeAliasType):
         yield from _nested_models(annotation.__value__, seen)
         return
 
     if is_typeddict(annotation):
-        if id(annotation) not in seen:
-            seen.add(id(annotation))
-            hints = get_type_hints(annotation, include_extras=True)
+        hints = get_type_hints(annotation, include_extras=True)
 
-            for hint in hints.values():
-                yield from _nested_models(hint, seen)
+        for hint in hints.values():
+            yield from _nested_models(hint, seen)
         return
 
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        if id(annotation) not in seen:
-            seen.add(id(annotation))
-            yield annotation
+    if is_model:
+        yield annotation
 
-            for field in annotation.model_fields.values():
-                yield from _nested_models(field.annotation, seen)
+        for field in annotation.model_fields.values():
+            yield from _nested_models(field.annotation, seen)
         return
 
     origin = get_origin(annotation)

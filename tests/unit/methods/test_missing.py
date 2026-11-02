@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, NotRequired, TypedDict
 
 import pytest
-from pydantic import MISSING, BaseModel, Field
+from pydantic import MISSING, BaseModel, Field, PydanticUserError
 
 from ai_api.enums import BodyFormat
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.types.base import BaseAPIType
 from tests.conftest import make_method
+
+if TYPE_CHECKING:
+    from decimal import Decimal
 
 
 class Loose(BaseModel):
@@ -48,6 +51,52 @@ class Tree(TypedDict):
     label: str
     note: NotRequired[str | None]
     kids: NotRequired[list[Tree]]
+
+
+type JSON = dict[str, JSON] | list[JSON] | str | int | float | bool | None
+type Ping = list[Pong] | int
+type Pong = dict[str, Ping]
+type Branches[T] = list[Branches[T]] | T
+
+
+class Early(BaseAPIMethod[bytes]):
+    """Names models declared further down: checked at its first use."""
+
+    __request_path__ = "/early"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+
+    late: LateLoose | MISSING = MISSING
+
+
+class EarlyStrict(BaseAPIMethod[bytes]):
+    __request_path__ = "/early"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+
+    late: LateStrict
+
+
+class LateLoose(BaseModel):
+    note: str | None = None
+
+
+class LateStrict(BaseModel):
+    note: str | None
+
+
+class Unresolved(TypedDict):
+    amount: Decimal  # imported only for type checkers
+
+
+class Pending(BaseAPIMethod[bytes]):
+    """Names a type that never resolves: Pydantic keeps it incomplete."""
+
+    __request_path__ = "/pending"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+
+    data: Unresolved
 
 
 class Reply(BaseAPIType):
@@ -108,6 +157,7 @@ def test_an_excluded_none_default_is_never_sent() -> None:
         pytest.param(Annotated[Loose, "meta"], id="annotated"),
         pytest.param(Looses, id="type-alias"),
         pytest.param(Many[Loose], id="generic-alias"),
+        pytest.param(Branches[Loose], id="recursive-generic-alias"),
         pytest.param(Holder, id="nested-model"),
         pytest.param(LooseKeys, id="typeddict"),
     ],
@@ -134,6 +184,10 @@ def test_a_model_with_a_none_default_in_the_type_is_rejected(
         pytest.param(Node, id="recursive-model"),
         pytest.param(Tree, id="recursive-typeddict"),
         pytest.param(list[Tree] | MISSING, id="typeddict-list"),
+        # A cycle is legal in a type: the walk stops at it.
+        pytest.param(JSON, id="recursive-alias"),
+        pytest.param(Ping, id="mutually-recursive-aliases"),
+        pytest.param(Branches[Strict] | MISSING, id="recursive-generic"),
     ],
 )
 def test_request_data_without_none_defaults_is_accepted(
@@ -214,3 +268,31 @@ def test_a_path_parameter_cannot_default_to_missing() -> None:
             path="/items/{item_id}",
             fields={"item_id": (str | MISSING, MISSING)},
         )
+
+
+def test_a_forward_reference_is_checked_at_first_use() -> None:
+    # The class completes, and its types are looked into, only once
+    # LateLoose exists; every instance raises, not only the first.
+    for _ in range(2):
+        with pytest.raises(
+            TypeError, match=r"Early: field 'late' can hold LateLoose"
+        ):
+            Early()
+
+    assert Early.__definition_error__ is not None
+
+
+def test_a_clean_forward_reference_is_accepted() -> None:
+    method = EarlyStrict(late=LateStrict(note=None))
+
+    assert method.get_body_map() == {"late": {"note": None}}
+    assert EarlyStrict.__definition_error__ is None
+
+
+def test_an_unresolved_name_does_not_fail_the_definition() -> None:
+    # Like any Pydantic model, the class waits for the name; it is not
+    # looked into before, so the definition does not raise NameError.
+    assert Pending.__pydantic_complete__ is False
+
+    with pytest.raises(PydanticUserError, match="not fully defined"):
+        Pending.model_validate({"data": {"amount": 1}})

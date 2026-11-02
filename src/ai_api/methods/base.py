@@ -9,6 +9,7 @@ from typing import (
     Any,
     ClassVar,
     Final,
+    NoReturn,
     TypeVar,
     cast,
 )
@@ -159,6 +160,9 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         __retryable__: Whether transient failures may be retried. Ignored
             when the request carries a file that can be read only once.
         __response_format__: How the response body is parsed.
+        __definition_error__: Set when the class failed a check on
+            completing at its first use (a forward reference); every
+            instance then raises it as ``TypeError``. ``None`` otherwise.
     """
 
     model_config = ConfigDict(
@@ -179,6 +183,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     __retryable__: ClassVar[bool] = False
     __response_format__: ClassVar[ResponseFormat]
     __request_headers__: ClassVar[HeadersType | None] = None
+    __definition_error__: ClassVar[str | None] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -191,7 +196,6 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         cls._init_query_params()
         cls._init_path_params()
         cls._check_body_fields()
-        cls._check_none_defaults()
         cls._init_response_type()
 
         # A parametrized class such as BaseStreamMethod[Event] is created
@@ -317,6 +321,24 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             )
 
     @classmethod
+    def __pydantic_on_complete__(cls) -> None:
+        """Check the field types once every name in them is resolved.
+
+        Pydantic calls this when the class is complete: at definition,
+        or, for a class that names a type defined further down, when it
+        is first used. A type is looked into only then, so a forward
+        reference is checked too and a name that does not exist yet
+        does not fail the definition.
+
+        Raises:
+            TypeError: If a field would send ``null`` for a value nobody
+                gave (see ``_check_none_defaults``).
+        """
+        super().__pydantic_on_complete__()
+        cls.__definition_error__ = None
+        cls._check_none_defaults()
+
+    @classmethod
     def _check_none_defaults(cls) -> None:
         """Reject defaults of ``None``, which would be sent as ``null``.
 
@@ -327,6 +349,11 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         defaults are dumped with it. Fields excluded from dumps are
         never sent and not checked.
 
+        The message is kept in ``__definition_error__``: a class that
+        completes at its first use stays usable to Pydantic after this
+        raised once, and ``model_post_init`` raises it for every
+        instance.
+
         Raises:
             TypeError: If a field defaults to ``None``, or its type can
                 hold a model with a field that does.
@@ -336,10 +363,10 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                 continue
 
             if field.default is None:
-                raise TypeError(
-                    f"{cls.__name__}: field {name!r} defaults to None, "
-                    "which is sent as null; default to MISSING to leave "
-                    "the field out until it is given"
+                cls._fail_definition(
+                    f"field {name!r} defaults to None, which is sent as "
+                    "null; default to MISSING to leave the field out "
+                    "until it is given"
                 )
 
             for model in nested_models(field.annotation):
@@ -348,13 +375,25 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     for key, inner in model.model_fields.items()
                     if inner.default is None and not inner.exclude
                 ):
-                    raise TypeError(
-                        f"{cls.__name__}: field {name!r} can hold "
-                        f"{model.__name__}, whose fields {nulls} default "
-                        "to None, which is sent as null; describe request "
-                        "data with a TypedDict (NotRequired for a key "
-                        "left out)"
+                    cls._fail_definition(
+                        f"field {name!r} can hold {model.__name__}, whose "
+                        f"fields {nulls} default to None, which is sent "
+                        "as null; describe request data with a TypedDict "
+                        "(NotRequired for a key left out)"
                     )
+
+    @classmethod
+    def _fail_definition(cls, problem: str) -> NoReturn:
+        """Keep a class-definition error and raise it.
+
+        Args:
+            problem: What is wrong with the class.
+
+        Raises:
+            TypeError: Always, naming the class.
+        """
+        cls.__definition_error__ = f"{cls.__name__}: {problem}"
+        raise TypeError(cls.__definition_error__)
 
     @classmethod
     def _init_response_type(cls) -> None:
@@ -404,8 +443,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             context: Pydantic validation context.
 
         Raises:
+            TypeError: If the class failed a check when it completed
+                (``__definition_error__``).
             ValueError: If a field holds a text stream.
         """
+        if error := type(self).__definition_error__:
+            raise TypeError(error)
+
         for name, value in self:
             wrapped = wrap_streams(value)
 
