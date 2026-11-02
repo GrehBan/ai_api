@@ -7,7 +7,46 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 authors = [
-    { name = "GrehBan", email = "57055685+GrehBan@users.noreply.github.com" },
+    { name = "GrehBan", email = "maximfeedback19@gmail.com" },
+]
+maintainers = [
+    { name = "GrehBan", email = "maximfeedback19@gmail.com" },
+]
+keywords = [
+    "ai",
+    "llm",
+    "openai",
+    "anthropic",
+    "claude",
+    "api-client",
+    "http-client",
+    "async",
+    "asyncio",
+    "aiohttp",
+    "pydantic",
+    "typed",
+    "streaming",
+    "sse",
+]
+# No "License ::" classifier: PEP 639 replaces it with the SPDX
+# expression in `license`, and a build that has both fails.
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: AsyncIO",
+    "Framework :: Pydantic :: 2",
+    "Framework :: aiohttp",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
     "aiodns>=4.0.4",
@@ -22,8 +61,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/GrehBan/ai_api"
 Documentation = "https://grehban.github.io/ai_api/"
 Repository = "https://github.com/GrehBan/ai_api"
+Issues = "https://github.com/GrehBan/ai_api/issues"
 Changelog = "https://github.com/GrehBan/ai_api/blob/master/CHANGELOG.md"
 
 [build-system]
