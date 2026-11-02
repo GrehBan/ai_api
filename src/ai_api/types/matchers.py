@@ -18,6 +18,8 @@ Example:
 
 from __future__ import annotations
 
+import inspect
+import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any, Final, cast
@@ -54,8 +56,55 @@ def _key(value: object) -> object:
     return value
 
 
+def _is_descriptor(value: object) -> bool:
+    """Check whether a value implements the descriptor protocol.
+
+    Args:
+        value: The value to inspect.
+
+    Returns:
+        True if the value implements the descriptor protocol.
+    """
+    if isinstance(value, property):
+        return True
+    return any(
+        hasattr(type(value), method)
+        for method in ("__get__", "__set__", "__delete__")
+    )
+
+
+def _getattr_slotted(
+    item: object,
+    name: str,
+    default: object = _MISSING,
+) -> object:
+    """Retrieve an attribute statically, resolving built-in slot descriptors.
+
+    Inspect the attribute without invoking properties or arbitrary
+    descriptors. Built-in slot descriptors are resolved to their stored
+    values. Uninitialized slots return ``_MISSING``.
+
+    Args:
+        item: The object containing the attribute.
+        name: The name of the attribute to retrieve.
+        default: The value to return if the attribute is not found.
+
+    Returns:
+        The attribute value, the unresolved descriptor, or the default
+        if the attribute is missing. Returns ``_MISSING`` for an
+        uninitialized slot.
+    """
+    value = inspect.getattr_static(item, name, default)
+    if isinstance(value, types.MemberDescriptorType):
+        try:
+            return value.__get__(item, type(item))
+        except AttributeError:
+            return _MISSING
+    return value
+
+
 def _field(item: object, name: str) -> object:
-    """Read a field of an item, without running any code of it.
+    """Read a field of an item, without evaluating arbitrary descriptors.
 
     Args:
         item: A model, a decoded JSON value or ``DONE_MARKER``.
@@ -72,12 +121,15 @@ def _field(item: object, name: str) -> object:
 
     if isinstance(item, BaseModel):
         if name in type(item).model_fields:
-            return getattr(item, name)
+            return vars(item).get(name, _MISSING)
 
         extra = item.model_extra or {}
         return extra.get(name, _MISSING)
 
-    return getattr(item, name, _MISSING)
+    value = _getattr_slotted(item, name, _MISSING)
+    if value is not _MISSING and _is_descriptor(value):
+        return _MISSING
+    return value
 
 
 class BaseMatcher(ABC):

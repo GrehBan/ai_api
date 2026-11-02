@@ -86,7 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transform_stream(..., stream_type=...)` yields a `Stream` subclass built
   on the transformed items, which `GenerationResource` uses for its
   `GenerationStream`.
-
 - Conversions: `ai_api.adapters.IConversion[SourceT, TargetT]` (a protocol
   of `__call__(source, /)`, so a plain function fits) and its ABC
   `BaseConversion`, for pure value conversions between a provider's types
@@ -221,7 +220,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of a plain `Stream`.
 - `CompletedEvent.model` is required: an adapter that builds the event
   passes the model.
-
 - An Anthropic stream builds a real `Usage` (from `message_start` and the
   cumulative `message_delta` counts) and `MessageDelta` for the final
   `CompletedEvent`. A stream without `message_start`, or with counts before
@@ -297,7 +295,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OpenAIClient()` without a token or a session reads the key from
   `OPENAI_API_KEY`; an explicit token wins over it and an empty variable
   counts as unset.
-
 - OpenAI Responses API: `CreateResponse` and `StreamResponse` in
   `ai_api.providers.openai.methods` (`POST /v1/responses`, with OpenAI's
   limits on `max_output_tokens`, `temperature`, `top_p` and metadata checked
@@ -367,7 +364,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuilt from the offline docs dump by
   `python -m tests.providers.contracts.update`. New test dependency
   `jsonschema`, new dev dependency `types-jsonschema`.
-
 - Event matchers in `ai_api.types`: the `IEventMatcher` protocol
   (`matches(item) -> bool`, for models and decoded JSON alike), `BaseMatcher`,
   `EventTypes(*types)`, `FieldValues(name, *values)`, `TopLevelError()`,

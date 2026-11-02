@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import math
 from collections.abc import AsyncIterator, Mapping
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import BytesPayload, FormData
@@ -38,8 +39,11 @@ async def _read_source(file: InputFile) -> AsyncIterator[bytes]:
         APIRequestError: If the source fails.
     """
     try:
-        async for chunk in file.open():
-            yield chunk
+        # Use aclosing to ensure the source
+        # is closed after reading, even if an error occurs.
+        async with aclosing(file.open()) as source:
+            async for chunk in source:
+                yield chunk
     except Exception as exc:
         raise APIRequestError(
             f"Failed to read upload {file.filename!r}: {exc}"

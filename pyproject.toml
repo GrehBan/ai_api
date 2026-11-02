@@ -41,6 +41,9 @@ dev = [
     "types-aiofiles>=25.1.0.20260518",
     "types-jsonschema>=4.26.0.20261006",
 ]
+docs = [
+    "rumdl>=0.3.2",
+]
 test = [
     "hypothesis>=6.170.14",
     "jsonschema>=4.25",
@@ -195,3 +198,13 @@ typeCheckingMode = "strict"
 reportUnknownArgumentType = false
 reportUnknownMemberType = false
 reportUnknownVariableType = false
+
+[tool.rumdl]
+
+[tool.rumdl.MD024]
+siblings_only = true
+
+[tool.rumdl.per-file-ignores]
+"CHANGELOG.md" = ["MD024"]
+"README.md" = ["MD013"]
+"CLAUDE.md" = ["MD013"]

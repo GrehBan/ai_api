@@ -25,6 +25,15 @@ from ai_api.types.protocols import IEventMatcher
 if TYPE_CHECKING:
     from ai_api.methods.protocols import IStreamMethod
 
+# Because when a server sends an endless stream of data
+#  without event delimiters,
+# both LineDecoder and SSEDecoder may expand
+# their internal buffers without any defined limit.
+# Let’s leave this decision to the user.
+MAX_LINE_SIZE: Final[int] = 1024 * 1024
+"""Maximum number of characters in a line of an SSE or NDJSON stream."""
+MAX_EVENT_SIZE: Final[int] = 4 * 1024 * 1024
+"""Maximum number of characters in an SSE event data."""
 
 ERROR_EVENTS: Final = EventTypes("error") | TopLevelError()
 """Default ``error_events`` of ``StreamResponseParser``.
@@ -101,8 +110,8 @@ class StreamResponseParser:
     def __init__(
         self,
         *,
-        max_line_size: int | None = None,
-        max_event_size: int | None = None,
+        max_line_size: int | None = MAX_LINE_SIZE,
+        max_event_size: int | None = MAX_EVENT_SIZE,
         require_event_stream: bool = True,
         error_events: IEventMatcher = ERROR_EVENTS,
     ) -> None:
@@ -110,9 +119,9 @@ class StreamResponseParser:
 
         Args:
             max_line_size: Longest SSE or NDJSON line accepted, in
-                characters; ``None`` for no limit.
+                characters; defaults to 1 MiB, ``None`` for no limit.
             max_event_size: Largest SSE event data accepted, in
-                characters; ``None`` for no limit.
+                characters; defaults to 4 MiB, ``None`` for no limit.
             require_event_stream: Whether an SSE response must have
                 ``Content-Type: text/event-stream``. A proxy or captive
                 portal answering 200 with an HTML page would otherwise
@@ -392,6 +401,10 @@ class _EventReader[T]:
 
                 continue
 
+            # check open before resolving error,
+            # because of BaseStreamMethod.__stream_terminal__ contract
+            # say: Any subsequent event must result in an APIResponseError.
+            ending.check_open()
             if event.event == "error":
                 raise self._resolve(self._loads_or_none(event.data))
 
@@ -405,12 +418,9 @@ class _EventReader[T]:
 
                 if body is not None and self._error_events.matches(body):
                     raise self._resolve(body)
-
-                ending.check_open()
                 item = cast(T, event)
             else:
                 body = self._decode(event.data)
-                ending.check_open()
                 item = self._validate(event.data, body)
 
             ending.see(item)
@@ -436,8 +446,11 @@ class _EventReader[T]:
 
         async for line in self._iter_lines():
             if line.strip():
-                body = self._decode(line)
+                # check open before resolving error,
+                # because of BaseStreamMethod.__stream_terminal__ contract
+                # say: Any subsequent event must result in an APIResponseError.
                 ending.check_open()
+                body = self._decode(line)
                 item = self._validate(line, body)
                 ending.see(item)
                 yield item

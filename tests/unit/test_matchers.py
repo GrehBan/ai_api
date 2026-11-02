@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.types.base import BaseAPIType
 from ai_api.types.matchers import (
     DONE,
@@ -142,6 +143,54 @@ def test_a_models_extra_fields_are_read() -> None:
 
     assert FieldValues("phase", "late").matches(item)
     assert not FieldValues("phase", "early").matches(item)
+
+
+class Attributes:
+    """An object that is neither a mapping nor a model."""
+
+    kind = "class-level"
+
+    def __init__(self) -> None:
+        self.type = "x"
+
+    @property
+    def status(self) -> str:
+        raise RuntimeError("must not be read")
+
+    def phase(self) -> str:
+        raise RuntimeError("must not be called")
+
+
+def test_an_objects_attributes_are_read_without_running_its_code() -> None:
+    item = Attributes()
+
+    assert EventTypes("x").matches(item)
+    assert FieldValues("kind", "class-level").matches(item)
+    assert not FieldValues("status", "failed").matches(item)
+    assert not FieldValues("phase", "late").matches(item)
+
+
+class Slotted:
+    """An object whose fields are slots, like ``ServerSentEvent``."""
+
+    __slots__ = ("status", "type")
+
+    def __init__(self) -> None:
+        self.type = "x"
+
+
+def test_slots_are_read_and_an_unset_slot_is_missing() -> None:
+    item = Slotted()
+
+    assert EventTypes("x").matches(item)
+    assert not FieldValues("status", None).matches(item)
+
+
+def test_a_server_sent_event_is_matched_by_its_fields() -> None:
+    event = ServerSentEvent(data="{}", event="error")
+
+    assert FieldValues("event", "error").matches(event)
+    assert not FieldValues("event", "message").matches(event)
 
 
 class Plain:

@@ -8,7 +8,7 @@ import io
 import mimetypes
 import os
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from pathlib import Path
 from typing import Any, Final, Self, cast
 
@@ -88,7 +88,7 @@ class InputFile(ABC):
         """
 
     @abstractmethod
-    def open(self) -> AsyncIterator[bytes]:
+    def open(self) -> AsyncGenerator[bytes]:
         """Read the content from its beginning.
 
         Called once per upload attempt.
@@ -186,6 +186,39 @@ class InputFile(ABC):
         )
 
 
+class ChunkedFile(InputFile):
+    """Content read in chunks from disk or a stream.
+
+    The content is read in chunks of a given size, which is the default
+    for files on disk and streams. The whole content is not held in
+    memory.
+
+    Attributes:
+        chunk_size: Number of bytes read at a time.
+    """
+
+    def __init__(
+        self,
+        filename: str | None = None,
+        content_type: str | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+    ) -> None:
+        """Store the file metadata and chunk size.
+
+        Args:
+            filename: File name sent in the multipart part.
+            content_type: MIME type; guessed from ``filename`` if omitted.
+            chunk_size: Number of bytes read at a time.
+        """
+        # Validate the chunk size before
+        # calling the superclass constructor, so that
+        # the exception is raised before the file is used in a request.
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        super().__init__(filename, content_type)
+        self.chunk_size = chunk_size
+
+
 class BytesFile(InputFile):
     """Content held in memory.
 
@@ -212,7 +245,7 @@ class BytesFile(InputFile):
         super().__init__(filename, content_type)
         self.data = data
 
-    async def open(self) -> AsyncIterator[bytes]:
+    async def open(self) -> AsyncGenerator[bytes]:
         """Yield the whole content.
 
         Yields:
@@ -221,7 +254,7 @@ class BytesFile(InputFile):
         yield self.data
 
 
-class PathFile(InputFile):
+class PathFile(ChunkedFile):
     """A file on disk, read in chunks with ``aiofiles``.
 
     Attributes:
@@ -246,8 +279,11 @@ class PathFile(InputFile):
             chunk_size: Number of bytes read at a time.
         """
         self.path = Path(path)
-        super().__init__(filename or self.path.name, content_type)
-        self.chunk_size = chunk_size
+        super().__init__(
+            filename or self.path.name,
+            content_type,
+            chunk_size,
+        )
 
     def check(self) -> None:
         """Check that the path is an existing file.
@@ -270,7 +306,7 @@ class PathFile(InputFile):
                 str(self.path),
             )
 
-    async def open(self) -> AsyncIterator[bytes]:
+    async def open(self) -> AsyncGenerator[bytes]:
         """Read the file from the beginning.
 
         Yields:
@@ -281,7 +317,7 @@ class PathFile(InputFile):
                 yield chunk
 
 
-class IOFile(InputFile):
+class IOFile(ChunkedFile):
     """An already open binary stream.
 
     Seekable streams are read from the position they had when the file
@@ -320,18 +356,18 @@ class IOFile(InputFile):
         if filename is None and isinstance(name, str):
             filename = Path(name).name
 
-        super().__init__(filename, content_type)
+        super().__init__(filename, content_type, chunk_size)
         self.file = file
-        self.chunk_size = chunk_size
         self._start = file.tell() if file.seekable() else None
         self._opened = False
+        self._reading = False
 
     @property
     def reusable(self) -> bool:
         """Whether the stream is seekable."""
         return self._start is not None
 
-    async def open(self) -> AsyncIterator[bytes]:
+    async def open(self) -> AsyncGenerator[bytes]:
         """Read the stream from its start position.
 
         Blocking reads run in a worker thread.
@@ -345,29 +381,35 @@ class IOFile(InputFile):
                 ready: its ``read()`` returns ``None``, which is not the
                 end of the stream, so the upload would be cut short.
         """
-        if self._start is not None:
-            await asyncio.to_thread(self.file.seek, self._start)
-        elif self._opened:
+        if self._reading:
+            raise RuntimeError("IOFile cannot be read concurrently")
+        if self._start is None and self._opened:
             raise RuntimeError("Non-seekable stream can be read only once")
 
         self._opened = True
+        self._reading = True
 
-        # A raw stream in non-blocking mode returns None, not b"".
-        read = cast("Callable[[int], bytes | None]", self.file.read)
+        try:
+            if self._start is not None:
+                await asyncio.to_thread(self.file.seek, self._start)
+            # A raw stream in non-blocking mode returns None, not b"".
+            read = cast("Callable[[int], bytes | None]", self.file.read)
 
-        while True:
-            chunk = await asyncio.to_thread(read, self.chunk_size)
+            while True:
+                chunk = await asyncio.to_thread(read, self.chunk_size)
 
-            if chunk is None:
-                raise BlockingIOError(
-                    errno.EAGAIN,
-                    "The stream is non-blocking and has no data ready; "
-                    "IOFile needs a blocking stream",
-                )
-            if not chunk:
-                return
+                if chunk is None:
+                    raise BlockingIOError(
+                        errno.EAGAIN,
+                        "The stream is non-blocking and has no data ready; "
+                        "IOFile needs a blocking stream",
+                    )
+                if not chunk:
+                    return
 
-            yield chunk
+                yield chunk
+        finally:
+            self._reading = False
 
 
 class StreamFile(InputFile):
@@ -401,7 +443,7 @@ class StreamFile(InputFile):
         """Always ``False``: the iterator cannot be restarted."""
         return False
 
-    async def open(self) -> AsyncIterator[bytes]:
+    async def open(self) -> AsyncGenerator[bytes]:
         """Forward the iterator's chunks.
 
         Yields:

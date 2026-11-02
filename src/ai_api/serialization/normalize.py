@@ -5,22 +5,15 @@ from __future__ import annotations
 import io
 from collections.abc import Mapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 
+from ai_api._traversal import guard_traversal
 from ai_api.serialization.values import TEMPORAL_TYPES, format_temporal
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import InputFile
 
 if TYPE_CHECKING:
     from ai_api.serialization.protocols import IValueFormatter
-
-MAX_DEPTH: Final = 253
-"""Deepest nesting of containers accepted in a body field.
-
-orjson refuses more than 254 nested containers, and the body object is
-one of them; a deeper field fails with a clear ``ValueError`` here
-instead of an encoder ``TypeError``.
-"""
 
 
 def _key(key: Any) -> Any:
@@ -193,25 +186,13 @@ class BodyNormalizer:
             ValueError: If the container contains itself, is nested deeper
                 than ``MAX_DEPTH``, or an item cannot be normalized.
         """
-        if id(value) in parents:
-            raise ValueError("Request body contains a circular reference")
-
-        if len(parents) >= MAX_DEPTH:
-            raise ValueError(
-                f"Request body is nested deeper than {MAX_DEPTH} levels"
-            )
-
-        parents.add(id(value))
-
-        try:
+        with guard_traversal(value, parents):
             if isinstance(value, Mapping):
                 return self._normalize_dict(value, formatter, parents)
 
             return [
                 self._normalize(item, formatter, parents) for item in value
             ]
-        finally:
-            parents.discard(id(value))
 
     def _normalize_dict(
         self,

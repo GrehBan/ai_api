@@ -12,9 +12,11 @@ from typing import Annotated, Any, Union
 import pytest
 from pydantic import Field, PlainSerializer, ValidationError
 
+from ai_api._traversal import MAX_DEPTH
 from ai_api.enums import BodyFormat
 from ai_api.http.headers import Headers
 from ai_api.methods.base import BaseAPIMethod
+from ai_api.methods.fields import has_one_shot_file
 from ai_api.serialization.values import BaseValueFormatter
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile, InputFile, IOFile, StreamFile
@@ -413,6 +415,67 @@ def test_a_container_without_streams_is_kept_as_it_is() -> None:
     box = Box(name="x")
 
     assert Upload(payload=box).payload is box
+
+
+def _cyclic(kind: str) -> Any:
+    """Build a value that contains itself, the way a caller could."""
+    if kind == "list":
+        items: list[Any] = []
+        items.append(items)
+        return items
+
+    if kind == "dict":
+        mapping: dict[str, Any] = {}
+        mapping["self"] = mapping
+        return mapping
+
+    holder = Holder()
+    holder.payload = [holder]
+    return holder
+
+
+@pytest.mark.parametrize("kind", ["list", "dict", "model"])
+def test_a_value_that_contains_itself_is_rejected(kind: str) -> None:
+    # Pydantic takes it as Any; the stream wrapper would recurse forever.
+    with pytest.raises(ValidationError, match="Circular reference"):
+        Upload(payload=_cyclic(kind))
+
+
+@pytest.mark.parametrize("kind", ["list", "dict", "model"])
+def test_the_file_check_rejects_a_value_that_contains_itself(
+    kind: str,
+) -> None:
+    with pytest.raises(ValueError, match="Circular reference"):
+        has_one_shot_file(_cyclic(kind))
+
+
+def test_one_value_in_two_places_is_not_a_cycle() -> None:
+    shared = [BytesFile(b"x")]
+
+    method = Upload(payload={"a": shared, "b": [shared]})
+
+    assert method.payload["a"] is shared
+    assert not has_one_shot_file(method)
+
+
+def _nested(depth: int) -> list[Any]:
+    """Build ``depth`` lists, each holding the next one."""
+    value: list[Any] = []
+
+    for _ in range(depth - 1):
+        value = [value]
+
+    return value
+
+
+def test_a_field_nested_up_to_the_limit_is_taken() -> None:
+    assert Upload(payload=_nested(MAX_DEPTH)).payload is not None
+
+
+def test_a_field_nested_deeper_than_the_limit_is_rejected() -> None:
+    # The same limit as the body normalizer, before Python's own one.
+    with pytest.raises(ValidationError, match="nested deeper"):
+        Upload(payload=_nested(MAX_DEPTH + 1))
 
 
 def test_non_seekable_stream_disables_retries() -> None:
