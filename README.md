@@ -13,7 +13,7 @@ You describe each API call as a small declarative class: a Pydantic model whose 
 - **Buffered and streamed responses.** JSON models, text, bytes or nothing; streams of bytes, text, or typed events from server-sent events (SSE) and newline-delimited JSON (NDJSON).
 - **Checked streams.** A method can declare the protocol's last event, so a stream cut between two events raises instead of looking complete.
 - **File uploads.** From bytes, a path, an open binary stream or an async iterator; a retry resends the whole file.
-- **Opt-in retries.** Transient failures are retried with exponential backoff and jitter, honouring `Retry-After` up to a cap.
+- **Opt-in retries.** Transient failures are retried with exponential backoff and jitter, honouring `Retry-After` up to a cap; a `RetryPolicy` tunes them per session or per call.
 - **Structured errors.** One exception class per common HTTP status, plus transport and response errors, each with the provider's code, the request id and a `transient` flag.
 - **Provider clients.** `OpenAIClient` (Responses API) and `AnthropicClient` (Messages API), both with the provider-neutral `client.generation`.
 - **Replaceable parts.** Sessions depend on protocols, so the API, authentication, error mapping, headers and JSON codec can each be swapped.

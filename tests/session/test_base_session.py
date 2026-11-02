@@ -19,6 +19,7 @@ from aiollm.http.exceptions.resolver import BaseErrorResolver
 from aiollm.http.exceptions.response import APIResponseError
 from aiollm.http.exceptions.status import (
     APIStatusError,
+    BadGatewayError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
@@ -35,6 +36,8 @@ from aiollm.response.buffered import BufferedResponse
 from aiollm.response.parse.stream import StreamResponseParser
 from aiollm.response.protocols import IStreamResponse
 from aiollm.serialization.json import JsonLoads, loads
+from aiollm.session.retry import DEFAULT_RETRY_POLICY, RetryPolicy, RetryState
+from aiollm.session.retry.runner import calculate_wait
 from aiollm.types.base import BaseAPIType
 from aiollm.types.files import StreamFile
 from tests.conftest import FakeStreamResponse, FakeTransport, make_method
@@ -248,11 +251,13 @@ async def test_transient_errors_are_retried_until_success(
 async def test_retry_that_would_end_after_the_deadline_is_not_started(
     no_retry_wait: MagicMock,
 ) -> None:
-    def long_wait(_: RetryCallState) -> float:
+    def long_wait(_: RetryCallState, __: RetryPolicy) -> float:
         return 30.0
 
     no_retry_wait.side_effect = long_wait
-    transport = FakeTransport([failed(503), ok()], retry_deadline=10)
+    transport = FakeTransport(
+        [failed(503), ok()], retry_policy=RetryPolicy(deadline=10)
+    )
 
     with pytest.raises(ServiceUnavailableError):
         await transport.send_request(buffered_method(retryable=True))
@@ -263,17 +268,165 @@ async def test_retry_that_would_end_after_the_deadline_is_not_started(
 async def test_retry_deadline_can_be_disabled(
     no_retry_wait: MagicMock,
 ) -> None:
-    transport = FakeTransport([failed(503)] * 4, retry_deadline=None)
+    transport = FakeTransport(
+        [failed(503)] * 4, retry_policy=RetryPolicy(deadline=None)
+    )
 
     with pytest.raises(ServiceUnavailableError):
         await transport.send_request(buffered_method(retryable=True))
 
     assert transport.attempts == 4
-    assert transport.retry_deadline is None
 
 
-def test_retry_deadline_defaults_to_15_minutes() -> None:
-    assert FakeTransport().retry_deadline == 900
+def test_a_session_has_the_default_policy() -> None:
+    policy = FakeTransport().retry_policy
+
+    assert policy is DEFAULT_RETRY_POLICY
+    assert policy.max_attempts == 4
+    assert policy.deadline == 900
+    assert policy.max_retry_after == 60
+
+
+async def test_the_session_policy_limits_the_attempts() -> None:
+    transport = FakeTransport(
+        [failed(503)] * 6 + [ok()], retry_policy=RetryPolicy(max_attempts=6)
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        await transport.send_request(buffered_method(retryable=True))
+
+    assert transport.attempts == 6
+
+
+async def test_a_call_policy_replaces_the_session_policy() -> None:
+    transport = FakeTransport(
+        [failed(503), failed(503), ok(b"done")],
+        retry_policy=RetryPolicy(max_attempts=1),
+    )
+
+    result = await transport.send_request(
+        buffered_method(retryable=True),
+        retry_policy=RetryPolicy(max_attempts=3),
+    )
+
+    assert result == b"done"
+    assert transport.attempts == 3
+
+
+async def test_one_attempt_turns_retries_off(
+    no_retry_wait: MagicMock,
+) -> None:
+    transport = FakeTransport([failed(503), ok()])
+
+    with pytest.raises(ServiceUnavailableError):
+        await transport.send_request(
+            buffered_method(retryable=True),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+
+    assert transport.attempts == 1
+    assert no_retry_wait.call_count == 0
+
+
+async def test_a_policy_does_not_make_a_method_retryable() -> None:
+    transport = FakeTransport([failed(503), ok()])
+
+    with pytest.raises(ServiceUnavailableError):
+        await transport.send_request(
+            buffered_method(),
+            retry_policy=RetryPolicy(max_attempts=4),
+        )
+
+    assert transport.attempts == 1
+
+
+async def test_a_call_policy_applies_to_opening_a_stream() -> None:
+    transport = FakeTransport(
+        stream_responses=[
+            FakeStreamResponse([], status=503),
+            FakeStreamResponse([b"x"]),
+        ]
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        async with transport.stream(
+            stream_method(retryable=True),
+            retry_policy=RetryPolicy(max_attempts=1),
+        ):
+            pass
+
+    assert transport.attempts == 1
+
+
+async def test_retry_if_can_refuse_a_transient_error() -> None:
+    seen: list[RetryState] = []
+
+    def only_first(state: RetryState) -> bool:
+        seen.append(state)
+        return state.attempt < 2
+
+    transport = FakeTransport(
+        [failed(503), failed(502), ok()],
+        retry_policy=RetryPolicy(retry_if=only_first),
+    )
+
+    with pytest.raises(BadGatewayError):
+        await transport.send_request(buffered_method(retryable=True))
+
+    assert transport.attempts == 2
+    assert [state.attempt for state in seen] == [1, 2]
+    assert isinstance(seen[0].error, ServiceUnavailableError)
+    assert seen[0].elapsed >= 0
+
+
+async def test_retry_if_is_not_asked_about_a_permanent_error() -> None:
+    calls: list[RetryState] = []
+    transport = FakeTransport(
+        [failed(404)],
+        retry_policy=RetryPolicy(retry_if=lambda s: bool(calls.append(s))),
+    )
+
+    with pytest.raises(NotFoundError):
+        await transport.send_request(buffered_method(retryable=True))
+
+    assert calls == []
+
+
+async def test_a_failing_retry_if_keeps_the_request_error_as_cause() -> None:
+    def broken(_: RetryState) -> bool:
+        raise ZeroDivisionError
+
+    transport = FakeTransport(
+        [failed(503), ok()], retry_policy=RetryPolicy(retry_if=broken)
+    )
+
+    with pytest.raises(ZeroDivisionError) as caught:
+        await transport.send_request(buffered_method(retryable=True))
+
+    assert isinstance(caught.value.__cause__, ServiceUnavailableError)
+    assert transport.attempts == 1
+
+
+async def test_a_custom_backoff_decides_the_wait(
+    no_retry_wait: MagicMock,
+) -> None:
+    # The real function, imported before the fixture patched the module.
+    no_retry_wait.side_effect = calculate_wait
+    attempts: list[int] = []
+
+    def instant(state: RetryState) -> float:
+        attempts.append(state.attempt)
+        return 0.0
+
+    transport = FakeTransport(
+        [APIConnectionError(), APIConnectionError(), ok(b"done")],
+        retry_policy=RetryPolicy(backoff=instant),
+    )
+
+    assert await transport.send_request(buffered_method(retryable=True)) == (
+        b"done"
+    )
+    assert attempts == [1, 2]
 
 
 async def test_retries_stop_after_four_attempts() -> None:

@@ -20,6 +20,7 @@ from aiollm.methods.protocols import IAPIMethod, IStreamMethod
 from aiollm.response.stream import Stream
 from aiollm.session.base import BaseSession
 from aiollm.session.protocols import ISession, ISessionFactory, Timeout
+from aiollm.session.retry.policy import RetryPolicy
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -99,6 +100,7 @@ class BaseClient[SessionT: ISession]:
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> T:
         """Send a method and return its parsed response.
 
@@ -107,6 +109,8 @@ class BaseClient[SessionT: ISession]:
             headers: Headers for this request only.
             timeout: Seconds the whole request may take; ``None`` for
                 the session's timeout.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
 
         Returns:
             The parsed response, typed by the method's generic argument.
@@ -115,6 +119,7 @@ class BaseClient[SessionT: ISession]:
             method,
             headers=headers,
             timeout=timeout,
+            retry_policy=retry_policy,
         )
 
     def stream[T](
@@ -123,6 +128,7 @@ class BaseClient[SessionT: ISession]:
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> AbstractAsyncContextManager[Stream[T]]:
         """Send a stream method; use the result with ``async with``.
 
@@ -131,6 +137,8 @@ class BaseClient[SessionT: ISession]:
             headers: Headers for this request only.
             timeout: Longest silence between two chunks, in seconds;
                 ``None`` for the session's stream timeout.
+            retry_policy: Retry policy of opening the stream; ``None``
+                for the session's.
 
         Returns:
             A context manager that yields the stream and closes it on
@@ -140,6 +148,7 @@ class BaseClient[SessionT: ISession]:
             method,
             headers=headers,
             timeout=timeout,
+            retry_policy=retry_policy,
         )
 
 

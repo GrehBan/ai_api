@@ -9,13 +9,7 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Self
 
-from tenacity import (
-    AsyncRetrying,
-    RetryCallState,
-    stop_after_attempt,
-    stop_before_delay,
-)
-from tenacity.stop import stop_base
+from tenacity import RetryCallState
 
 from aiollm.http.exceptions.protocols import IErrorResolver
 from aiollm.http.headers import Headers
@@ -26,13 +20,8 @@ from aiollm.response.protocols import IStreamResponse
 from aiollm.response.stream import Stream
 from aiollm.serialization.json import JsonDumps, JsonLoads, dumps, loads
 from aiollm.session.protocols import Timeout
-from aiollm.session.retry import (
-    DEFAULT_MAX_RETRY_AFTER,
-    DEFAULT_RETRY_DEADLINE,
-    RETRY_ATTEMPT_LIMIT,
-    calculate_wait,
-    retry_condition,
-)
+from aiollm.session.retry.policy import DEFAULT_RETRY_POLICY, RetryPolicy
+from aiollm.session.retry.runner import build_retrying
 from aiollm.types.files import closing_source
 
 if TYPE_CHECKING:
@@ -78,11 +67,8 @@ class BaseSession(ABC):
         headers: Default headers sent with every request.
         json_loads: JSON decoder for response bodies.
         json_dumps: JSON encoder for request bodies.
-        max_retry_after: Longest ``Retry-After`` the session waits for,
-            in seconds; a transient error asking for a longer wait is
-            raised without retrying.
-        retry_deadline: Seconds since the first attempt after which no
-            retry starts; ``None`` for no limit.
+        retry_policy: When and how long a retryable request is retried,
+            unless a call gives its own policy.
     """
 
     def __init__(
@@ -94,8 +80,7 @@ class BaseSession(ABC):
         headers: HeadersType | None = None,
         json_loads: JsonLoads = loads,
         json_dumps: JsonDumps = dumps,
-        max_retry_after: float = DEFAULT_MAX_RETRY_AFTER,
-        retry_deadline: float | None = DEFAULT_RETRY_DEADLINE,
+        retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
     ) -> None:
         """Store the session's collaborators.
 
@@ -108,12 +93,9 @@ class BaseSession(ABC):
                 empty set is used when ``None``.
             json_loads: JSON decoder for response bodies.
             json_dumps: JSON encoder for request bodies.
-            max_retry_after: Longest ``Retry-After`` to wait for, in
-                seconds.
-            retry_deadline: Seconds since the first attempt after which
-                no retry starts; a wait that would end later is not
-                started. An attempt in progress is not interrupted (its
-                own timeout limits it). ``None`` for no limit.
+            retry_policy: When and how long a retryable request is
+                retried: four attempts at most, none started after 15
+                minutes, a ``Retry-After`` above 60 s not waited for.
         """
         self.api = api
         self.auth = auth
@@ -123,8 +105,7 @@ class BaseSession(ABC):
         )
         self.json_loads = json_loads
         self.json_dumps = json_dumps
-        self.max_retry_after = max_retry_after
-        self.retry_deadline = retry_deadline
+        self.retry_policy = retry_policy
 
     @abstractmethod
     async def close(self) -> None:
@@ -160,14 +141,13 @@ class BaseSession(ABC):
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> T:
         """Send a method and return its parsed response.
 
-        If ``method.retryable`` is true, transient failures are retried up
-        to four attempts in total, unless the API asks to wait longer than
-        ``max_retry_after`` or the retry would start after
-        ``retry_deadline``. ``headers`` and ``timeout`` apply to every
-        attempt.
+        If ``method.retryable`` is true, transient failures are retried as
+        the retry policy allows. ``headers`` and ``timeout`` apply to
+        every attempt.
 
         Args:
             method: The method to send.
@@ -176,6 +156,9 @@ class BaseSession(ABC):
                 authentication header.
             timeout: Seconds the whole request may take, instead of the
                 total of the session's timeout; ``None`` to keep it.
+            retry_policy: Retry policy of this request only, instead of
+                the session's; ``None`` to keep it. It does not make a
+                method retryable.
 
         Returns:
             The parsed response, typed by the method's generic argument.
@@ -195,6 +178,7 @@ class BaseSession(ABC):
                 headers=headers,
                 timeout=timeout,
             ),
+            retry_policy=retry_policy,
         )
         logger.debug("Completed %s", name)
         return result
@@ -206,6 +190,7 @@ class BaseSession(ABC):
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> AsyncGenerator[Stream[T]]:
         """Send a method and stream its response.
 
@@ -223,6 +208,9 @@ class BaseSession(ABC):
                 instead of the session's stream timeout; ``None`` to keep
                 it. A stream has no total limit, so a long generation is
                 not cut off.
+            retry_policy: Retry policy of opening this stream only,
+                instead of the session's; ``None`` to keep it. It does
+                not make a method retryable.
 
         Yields:
             The stream of items, typed by the method's generic argument.
@@ -253,6 +241,7 @@ class BaseSession(ABC):
                 headers=headers,
                 timeout=timeout,
             ),
+            retry_policy=retry_policy,
         )
 
         # A failing close (of an upload left open, say) is noted on the
@@ -276,23 +265,24 @@ class BaseSession(ABC):
         self,
         retryable: bool,
         call: Callable[[], Awaitable[R]],
+        *,
+        retry_policy: RetryPolicy | None,
     ) -> R:
         """Run ``call``, retrying transient failures if allowed.
 
         Args:
             retryable: Whether retries are allowed for this request.
             call: Performs one attempt.
+            retry_policy: The call's own policy; ``None`` for the
+                session's.
 
         Returns:
             The result of the first successful attempt.
         """
-        if not retryable:
+        policy = self.retry_policy if retry_policy is None else retry_policy
+
+        if not retryable or policy.max_attempts == 1:
             return await call()
-
-        stop: stop_base = stop_after_attempt(RETRY_ATTEMPT_LIMIT)
-
-        if self.retry_deadline is not None:
-            stop |= stop_before_delay(self.retry_deadline)
 
         async def attempt() -> R:
             """Perform one attempt.
@@ -305,15 +295,7 @@ class BaseSession(ABC):
             """
             return await call()
 
-        # With reraise=True tenacity returns the first result or raises
-        # the last error, so no state is left to guard against.
-        retrying = AsyncRetrying(
-            retry=retry_condition(self.max_retry_after),
-            wait=calculate_wait,
-            stop=stop,
-            before_sleep=_log_retry,
-            reraise=True,
-        )
+        retrying = build_retrying(policy, before_sleep=_log_retry)
         return await retrying(attempt)
 
     async def _send_once[T](

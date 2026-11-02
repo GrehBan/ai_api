@@ -14,16 +14,30 @@ from aiollm.session.protocols import (
     Timeout,
 )
 from aiollm.session.retry import (
+    DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRY_AFTER,
     DEFAULT_RETRY_DEADLINE,
+    DEFAULT_RETRY_POLICY,
+    FullJitterBackoff,
+    IBackoff,
+    IRetryPredicate,
+    RetryPolicy,
+    RetryState,
 )
 
 __all__ = [
     "BaseSession",
+    "DEFAULT_MAX_ATTEMPTS",
     "DEFAULT_MAX_RETRY_AFTER",
     "DEFAULT_RETRY_DEADLINE",
+    "DEFAULT_RETRY_POLICY",
+    "FullJitterBackoff",
+    "IBackoff",
+    "IRetryPredicate",
     "ISession",
     "ISessionFactory",
+    "RetryPolicy",
+    "RetryState",
     "SessionFactory",
     "Timeout",
 ]

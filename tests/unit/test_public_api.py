@@ -29,6 +29,7 @@ PACKAGES = [
     "aiollm.serialization",
     "aiollm.session",
     "aiollm.session.body",
+    "aiollm.session.retry",
     "aiollm.types",
     "aiollm.types.requests",
     "aiollm.types.responses",

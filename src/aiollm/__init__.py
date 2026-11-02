@@ -100,6 +100,13 @@ from aiollm.serialization.values import (
 from aiollm.session.base import (
     BaseSession,
 )
+from aiollm.session.retry.policy import (
+    FullJitterBackoff,
+    RetryPolicy,
+)
+from aiollm.session.retry.state import (
+    RetryState,
+)
 from aiollm.types.base import (
     BaseAPIType,
     BaseAPITypeExtra,
@@ -165,6 +172,7 @@ __all__ = [
     "CompletedEvent",
     "ConflictError",
     "ContentTooLargeError",
+    "FullJitterBackoff",
     "GatewayTimeoutError",
     "GenerationEvent",
     "GenerationEventType",
@@ -189,6 +197,8 @@ __all__ = [
     "RequestTimeoutError",
     "RequestValidationError",
     "ResponseFormat",
+    "RetryPolicy",
+    "RetryState",
     "Role",
     "ServerSentEvent",
     "ServiceUnavailableError",

@@ -52,8 +52,8 @@ src/aiollm/
 ├── methods/            BaseAPIMethod, BaseStreamMethod, field checks, path templates
 ├── response/           BufferedResponse, Stream, transform_stream, map_stream;
 │                       parse/ parsers
-├── session/            BaseSession, AiohttpSession, SessionFactory, retries,
-│                       body/ builders
+├── session/            BaseSession, AiohttpSession, SessionFactory;
+│                       retry/ RetryPolicy, body/ builders
 ├── client/             BaseClient, BaseProviderClient
 ├── adapters/           adapters between shared types and provider methods
 ├── resources/          GenerationResource, use cases and AdapterUseCase orchestrators

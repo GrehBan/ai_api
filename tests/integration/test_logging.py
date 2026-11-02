@@ -26,7 +26,7 @@ from aiollm.providers.openai import OpenAIClient
 from aiollm.response.aiohttp import wait_for_writer
 from aiollm.response.buffered import BufferedResponse
 from aiollm.session.aiohttp import AiohttpSession
-from aiollm.session.retry import should_retry
+from aiollm.session.retry.runner import should_retry
 from aiollm.types.unknown import UNKNOWN, by_type
 from tests.conftest import (
     TEST_TOKEN,
@@ -223,7 +223,7 @@ def test_a_retry_after_above_the_limit_is_logged(
 
     assert records(caplog) == [
         (
-            "aiollm.session.retry",
+            "aiollm.session.retry.runner",
             "DEBUG",
             "Not retrying RateLimitError: the API asks to wait 120.0 s, "
             "more than max_retry_after (60 s)",

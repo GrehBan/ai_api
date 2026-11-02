@@ -24,6 +24,7 @@ from aiollm.client.validators import (
 from aiollm.enums import Provider
 from aiollm.http.auth import APIKeyAuth, BearerAuth
 from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import ServiceUnavailableError
 from aiollm.http.headers import AUTHORIZATION
 from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
@@ -35,6 +36,7 @@ from aiollm.providers.openai.resolver import OpenAIErrorResolver
 from aiollm.response.buffered import BufferedResponse
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.session.factory import SessionFactory
+from aiollm.session.retry import RetryPolicy
 from aiollm.types.requests import GenerationRequest
 from aiollm.types.responses import GenerationResponse
 from tests.conftest import (
@@ -380,6 +382,28 @@ async def test_client_forwards_call_options() -> None:
         pass
 
     assert transport.call_options == [({"X-A": "1"}, 3), ({"X-B": "2"}, 4)]
+
+
+async def test_client_forwards_the_retry_policy() -> None:
+    once = RetryPolicy(max_attempts=1)
+    transport = FakeTransport(
+        [BufferedResponse(503, {}, b""), BufferedResponse(200, {}, b"ok")],
+        [FakeStreamResponse([], status=503), FakeStreamResponse([b"a"])],
+    )
+    client = BaseClient(transport)
+    retryable = make_method(BaseAPIMethod[bytes], __retryable__=True)
+    retryable_stream = make_method(
+        BaseStreamMethod[bytes], http_method="GET", __retryable__=True
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        await client.send_request(retryable(), retry_policy=once)
+
+    with pytest.raises(ServiceUnavailableError):
+        async with client.stream(retryable_stream(), retry_policy=once):
+            pass
+
+    assert transport.attempts == 2
 
 
 async def test_client_context_closes_its_session() -> None:

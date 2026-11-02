@@ -9,6 +9,7 @@ from aiollm.http.exceptions.protocols import IErrorResolver
 from aiollm.http.protocols import IAuth
 from aiollm.methods.protocols import IAPIMethod, IStreamMethod
 from aiollm.response.stream import Stream
+from aiollm.session.retry.policy import RetryPolicy
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -56,6 +57,7 @@ class ISession(Protocol):
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> T:
         """Send a method and return its parsed response.
 
@@ -65,6 +67,8 @@ class ISession(Protocol):
                 session's and the method's headers.
             timeout: Seconds the whole request may take; ``None`` for
                 the session's timeout.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
 
         Returns:
             The parsed response.
@@ -77,6 +81,7 @@ class ISession(Protocol):
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> AbstractAsyncContextManager[Stream[T]]:
         """Send a method and stream its response.
 
@@ -86,6 +91,8 @@ class ISession(Protocol):
                 session's and the method's headers.
             timeout: Longest silence between two chunks, in seconds;
                 ``None`` for the session's stream timeout.
+            retry_policy: Retry policy of opening the stream; ``None``
+                for the session's.
 
         Returns:
             A context manager that yields the stream and closes it on

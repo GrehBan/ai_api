@@ -19,6 +19,7 @@ from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.client import session_factory as openai_factory
 from aiollm.resources import GenerationResource, IGenerationResource
 from aiollm.session.aiohttp import AiohttpSession, AiohttpSessionOptions
+from aiollm.session.retry import RetryPolicy
 from aiollm.types.requests import GenerationRequest
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 from tests.providers.test_openai_responses import RESPONSE, STREAM, frame
@@ -136,13 +137,13 @@ def test_session_options_match_the_session_arguments() -> None:
     ids=["openai", "anthropic"],
 )
 async def test_clients_pass_session_arguments_on(build: Any) -> None:
-    client = build(TEST_TOKEN, max_retry_after=5.0, retry_deadline=None)
+    policy = RetryPolicy(max_retry_after=5.0, deadline=None)
+    client = build(TEST_TOKEN, retry_policy=policy)
 
     async with client:
         session = client.session
         assert isinstance(session, AiohttpSession)
-        assert session.max_retry_after == 5.0
-        assert session.retry_deadline is None
+        assert session.retry_policy is policy
 
 
 @pytest.mark.parametrize(

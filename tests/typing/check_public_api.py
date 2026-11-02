@@ -28,6 +28,8 @@ from aiollm import (
     IncompleteReason,
     Provider,
     ResponseFormat,
+    RetryPolicy,
+    RetryState,
     Role,
     ServerSentEvent,
     Stream,
@@ -198,9 +200,21 @@ async def call_options_are_keyword_only(session: AiohttpSession) -> None:
     await session.send_request(GetText(), headers=Headers(), timeout=0.5)
     await session.send_request(GetText(), {"X-A": "1"})  # type: ignore[call-arg]
     await session.send_request(GetText(), timeout="2")  # type: ignore[arg-type]
+    await session.send_request(GetText(), retry_policy=RetryPolicy())
+    await session.send_request(GetText(), retry_policy=3)  # type: ignore[arg-type]
 
     async with session.stream(Download(), timeout=30) as chunks:
         assert_type(chunks, Stream[bytes])
+
+
+def retry_policy_takes_typed_callables() -> None:
+    def only_rate_limits(state: RetryState) -> bool:
+        return state.attempt < 3
+
+    RetryPolicy(retry_if=only_rate_limits, backoff=lambda state: 1.0)
+    RetryPolicy(retry_if=lambda state: "yes")  # type: ignore[arg-type]
+    RetryPolicy(backoff=lambda: 1.0)  # type: ignore[arg-type]
+    RetryPolicy(5)  # type: ignore[call-arg]
 
 
 def aliased_fields_are_set_by_name() -> None:

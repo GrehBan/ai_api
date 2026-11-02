@@ -14,8 +14,7 @@
 | `max_connections` | `100` | Maximum number of simultaneous connections |
 | `timeout` | 600 s total, 30 s connect | Timeout of buffered requests |
 | `stream_timeout` | no total limit, 30 s connect, 600 s between chunks | Timeout of streamed requests |
-| `max_retry_after` | `60` | Longest `Retry-After` to wait for, in seconds |
-| `retry_deadline` | `900` | Seconds after the first attempt after which no retry starts; `None` for no limit |
+| `retry_policy` | `RetryPolicy()` | When and how long a retryable request is retried; see [Retry policy](errors.md#retry-policy) |
 | `max_body_size` | `None` | Largest buffered response or error body, in bytes; streamed bodies are not limited |
 | `trust_env` | `False` | Use proxy settings and `.netrc` from the environment |
 | `follow_redirects` | `False` | Follow redirects within the origin of the request |
@@ -67,7 +66,7 @@ A request gets headers from four places. Names are case-insensitive, and a later
 
 ## Per-request headers and timeout
 
-`send_request` and `stream`, on a session or a client, take two keyword-only arguments for one call:
+`send_request` and `stream`, on a session or a client, take keyword-only arguments for one call:
 
 ```python title="call_options.py"
 class BetaCompletion(CreateCompletion):
@@ -87,8 +86,9 @@ async def complete(prompt: str, key: str) -> Completion:
 
 - **`headers=`** is a mapping or `Headers`. It is sent with every attempt of the call, retries included, and is not kept for later calls: an idempotency key, `Last-Event-ID`, a trace id.
 - **`timeout=`** is a number of seconds. It changes one limit of the session's timeout for this call and keeps the others; see [Timeouts](#timeouts).
+- **`retry_policy=`** is a `RetryPolicy` that replaces the session's for this call (for a stream, its opening); see [Retry policy](errors.md#retry-policy).
 
-Both stay out of the method, because they describe one call, not the API endpoint: the same `CreateCompletion` can be sent with different keys and limits.
+They stay out of the method, because they describe one call, not the API endpoint: the same `CreateCompletion` can be sent with different keys and limits.
 
 ## JSON codec
 
@@ -167,7 +167,7 @@ Every record, by logger:
 | WARNING | `session.base` | a retry |
 | DEBUG | `session.base` | a call's start and end (`items=` for a stream) |
 | DEBUG | `session.aiohttp` | each attempt: sent (method and the path as declared, such as `/files/{file_id}`), finished (status and duration; for a stream, when the headers came), that a redirect was followed, the connection pool opened and closed |
-| DEBUG | `session.retry` | an error not retried because its `Retry-After` is above `max_retry_after` |
+| DEBUG | `session.retry.runner` | an error not retried because its `Retry-After` is above the policy's `max_retry_after` |
 | DEBUG | `session.loop` | the event loop a session is bound to |
 | DEBUG | `response.aiohttp` | a failure of the body writer after the answer came, which aiohttp drops, by its type |
 | DEBUG | `types.unknown` | a `type` the library does not model yet, kept as an unknown item |

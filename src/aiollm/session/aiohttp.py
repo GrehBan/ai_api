@@ -47,10 +47,7 @@ from aiollm.session.base import BaseSession
 from aiollm.session.body.aiohttp import AiohttpBodyBuilder
 from aiollm.session.loop import bind_loop
 from aiollm.session.protocols import Timeout
-from aiollm.session.retry import (
-    DEFAULT_MAX_RETRY_AFTER,
-    DEFAULT_RETRY_DEADLINE,
-)
+from aiollm.session.retry.policy import DEFAULT_RETRY_POLICY, RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +160,7 @@ class AiohttpSessionOptions(TypedDict, total=False):
         max_connections: Maximum number of simultaneous connections.
         timeout: Timeout of buffered requests.
         stream_timeout: Timeout of streamed requests.
-        max_retry_after: Longest ``Retry-After`` to wait for, in seconds.
-        retry_deadline: Seconds since the first attempt after which no
-            retry starts; ``None`` for no limit.
+        retry_policy: When and how long a retryable request is retried.
         max_body_size: Largest buffered body accepted, in bytes.
         trust_env: Whether to use proxy settings from the environment.
         follow_redirects: Whether to follow same-origin redirects.
@@ -178,8 +173,7 @@ class AiohttpSessionOptions(TypedDict, total=False):
     max_connections: int
     timeout: ClientTimeout
     stream_timeout: ClientTimeout
-    max_retry_after: float
-    retry_deadline: float | None
+    retry_policy: RetryPolicy
     max_body_size: int | None
     trust_env: bool
     follow_redirects: bool
@@ -213,8 +207,7 @@ class AiohttpSession(BaseSession):
         max_connections: int = 100,
         timeout: ClientTimeout = DEFAULT_TIMEOUT,
         stream_timeout: ClientTimeout = DEFAULT_STREAM_TIMEOUT,
-        max_retry_after: float = DEFAULT_MAX_RETRY_AFTER,
-        retry_deadline: float | None = DEFAULT_RETRY_DEADLINE,
+        retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
         max_body_size: int | None = None,
         trust_env: bool = False,
         follow_redirects: bool = False,
@@ -236,10 +229,8 @@ class AiohttpSession(BaseSession):
             stream_timeout: Timeout of streamed requests. It has no total
                 limit, because a stream may last indefinitely; only the
                 silence between chunks (``sock_read``) is limited.
-            max_retry_after: Longest ``Retry-After`` to wait for, in
-                seconds.
-            retry_deadline: Seconds since the first attempt after which
-                no retry starts; ``None`` for no limit.
+            retry_policy: When and how long a retryable request is
+                retried; see ``RetryPolicy``.
             max_body_size: Largest buffered response or error body
                 accepted, in bytes; ``None`` for no limit. Streamed
                 bodies are not limited.
@@ -260,8 +251,7 @@ class AiohttpSession(BaseSession):
             headers=headers,
             json_loads=json_loads,
             json_dumps=json_dumps,
-            max_retry_after=max_retry_after,
-            retry_deadline=retry_deadline,
+            retry_policy=retry_policy,
         )
 
         self._connector_kwargs: dict[str, Any] = {

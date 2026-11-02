@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol, Self
 from aiollm.methods.protocols import IAPIMethod, IStreamMethod
 from aiollm.response.stream import Stream
 from aiollm.session.protocols import ISession, Timeout
+from aiollm.session.retry.policy import RetryPolicy
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -56,6 +57,7 @@ class IClient(Protocol):
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> T:
         """Send a method and return its parsed response.
 
@@ -64,6 +66,8 @@ class IClient(Protocol):
             headers: Headers for this request only.
             timeout: Seconds the whole request may take; ``None`` for
                 the session's timeout.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
 
         Returns:
             The parsed response.
@@ -76,6 +80,7 @@ class IClient(Protocol):
         *,
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> AbstractAsyncContextManager[Stream[T]]:
         """Send a stream method; use the result with ``async with``.
 
@@ -84,6 +89,8 @@ class IClient(Protocol):
             headers: Headers for this request only.
             timeout: Longest silence between two chunks, in seconds;
                 ``None`` for the session's stream timeout.
+            retry_policy: Retry policy of opening the stream; ``None``
+                for the session's.
 
         Returns:
             A context manager that yields the stream and closes it on
