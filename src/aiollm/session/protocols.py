@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING, Protocol, Self, TypedDict
 
 from aiollm.http.exceptions.protocols import IErrorResolver
-from aiollm.http.protocols import IAuth
+from aiollm.http.protocols import HeadersType, IAuth
 from aiollm.methods.protocols import IAPIMethod, IStreamMethod
 from aiollm.response.stream import Stream
 from aiollm.session.retry.policy import RetryPolicy
@@ -14,11 +14,32 @@ from aiollm.session.retry.policy import RetryPolicy
 if TYPE_CHECKING:
     from types import TracebackType
 
-    from aiollm.http.protocols import HeadersType
-
 type Timeout = float
 """Seconds; for a buffered request the limit of the whole request, for
 a stream the longest silence between two chunks."""
+
+
+class CallOptions(TypedDict, total=False):
+    """The options of one call, as ``send_request`` and ``stream`` take.
+
+    The shared layer (use cases, ``client.generation``) takes them as
+    ``**options`` and passes them on to the session unchanged, so type
+    checkers check them at the call. Each key is a keyword-only argument
+    of ``ISession.send_request`` with the same type; a test keeps the
+    two in step.
+
+    Attributes:
+        headers: Headers for this request only; they override the
+            session's and the method's headers.
+        timeout: Seconds for this request instead of the session's
+            limit; ``None`` to keep it.
+        retry_policy: Retry policy of this request; ``None`` for the
+            session's.
+    """
+
+    headers: HeadersType | None
+    timeout: Timeout | None
+    retry_policy: RetryPolicy | None
 
 
 class ISession(Protocol):

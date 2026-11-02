@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager
-from typing import Any
+from typing import Any, Unpack
 
 from aiollm.adapters.protocols import (
     IAdapter,
@@ -16,7 +16,7 @@ from aiollm.http.exceptions.response import APIResponseError
 from aiollm.http.exceptions.transport import APIStreamInterruptedError
 from aiollm.resources.base import BaseSessionAccess
 from aiollm.response.stream import Stream, transform_stream
-from aiollm.session.protocols import ISession
+from aiollm.session.protocols import CallOptions, ISession
 from aiollm.types.protocols import IEventMatcher
 from aiollm.types.requests.base import BaseRequest
 from aiollm.types.responses.base import BaseResponse
@@ -35,11 +35,17 @@ class BaseUseCase[
     """
 
     @abstractmethod
-    async def __call__(self, request: ReqT) -> RespT:
+    async def __call__(
+        self,
+        request: ReqT,
+        **options: Unpack[CallOptions],
+    ) -> RespT:
         """Send the request and convert the provider's response.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             The response in shared types.
@@ -63,11 +69,14 @@ class BaseStreamUseCase[
     def stream(
         self,
         request: ReqT,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[Stream[EventT]]:
         """Open the stream; use the result with ``async with``.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             A context manager that yields the events and closes the
@@ -92,6 +101,7 @@ async def _respond[ReqT: BaseRequest, RawT, RespT: BaseResponse](
     session: ISession,
     adapter: IAdapter[ReqT, RawT, RespT],
     request: ReqT,
+    **options: Unpack[CallOptions],
 ) -> RespT:
     """Send the adapted method and convert its result.
 
@@ -99,11 +109,12 @@ async def _respond[ReqT: BaseRequest, RawT, RespT: BaseResponse](
         session: The session that sends the method.
         adapter: Converts the request and the response.
         request: The request in shared types.
+        **options: Options of the call, passed on to the session.
 
     Returns:
         The response in shared types.
     """
-    raw = await session.send_request(adapter.to_method(request))
+    raw = await session.send_request(adapter.to_method(request), **options)
     return adapter.to_response(raw, request)
 
 
@@ -181,6 +192,7 @@ def open_adapted_stream[
     request: ReqT,
     terminal: IEventMatcher | None,
     stream_type: Callable[[AsyncIterator[EventT]], S],
+    **options: Unpack[CallOptions],
 ) -> AbstractAsyncContextManager[S]:
     """Open the adapted stream method and convert its items.
 
@@ -194,6 +206,7 @@ def open_adapted_stream[
         terminal: Recognizes the final event of the converted stream;
             ``None`` checks nothing.
         stream_type: The ``Stream`` class of the converted events.
+        **options: Options of the call, passed on to the session.
 
     Returns:
         A context manager that yields the events and closes both streams
@@ -223,7 +236,7 @@ def open_adapted_stream[
         )
 
     return transform_stream(
-        session.stream(method),
+        session.stream(method, **options),
         events,
         stream_type=stream_type,
     )
@@ -263,16 +276,22 @@ class AdapterUseCase[
         super().__init__(session)
         self.adapter = adapter
 
-    async def __call__(self, request: ReqT) -> RespT:
+    async def __call__(
+        self,
+        request: ReqT,
+        **options: Unpack[CallOptions],
+    ) -> RespT:
         """Send the request and convert the provider's response.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             The response in shared types.
         """
-        return await _respond(self.session, self.adapter, request)
+        return await _respond(self.session, self.adapter, request, **options)
 
 
 class AdapterStreamUseCase[
@@ -313,18 +332,26 @@ class AdapterStreamUseCase[
     def stream(
         self,
         request: ReqT,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[Stream[EventT]]:
         """Open the stream; use the result with ``async with``.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             A context manager that yields the events and closes the
             converted and the provider's stream on exit.
         """
         return open_adapted_stream(
-            self.session, self.adapter, request, self.terminal, Stream
+            self.session,
+            self.adapter,
+            request,
+            self.terminal,
+            Stream,
+            **options,
         )
 
 
@@ -371,30 +398,44 @@ class AdapterCompositeUseCase[
         self.adapter = adapter
         self.terminal = terminal
 
-    async def __call__(self, request: ReqT) -> RespT:
+    async def __call__(
+        self,
+        request: ReqT,
+        **options: Unpack[CallOptions],
+    ) -> RespT:
         """Send the request and convert the provider's response.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             The response in shared types.
         """
-        return await _respond(self.session, self.adapter, request)
+        return await _respond(self.session, self.adapter, request, **options)
 
     def stream(
         self,
         request: ReqT,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[Stream[EventT]]:
         """Open the stream; use the result with ``async with``.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             A context manager that yields the events and closes the
             converted and the provider's stream on exit.
         """
         return open_adapted_stream(
-            self.session, self.adapter, request, self.terminal, Stream
+            self.session,
+            self.adapter,
+            request,
+            self.terminal,
+            Stream,
+            **options,
         )

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, Protocol, overload
+from typing import TYPE_CHECKING, Any, Protocol, Unpack, overload
 
 from pydantic import MISSING
 
 from aiollm.client.protocols import IClient
 from aiollm.response.stream import Stream
-from aiollm.session.protocols import ISession
+from aiollm.session.protocols import CallOptions, ISession, Timeout
 from aiollm.types.requests.base import BaseRequest
 from aiollm.types.requests.generation import GenerationRequest
 from aiollm.types.responses.base import BaseResponse
@@ -17,7 +17,9 @@ from aiollm.types.responses.events import BaseResponseEvent
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
+    from aiollm.http.protocols import HeadersType
     from aiollm.resources.stream import GenerationStream
+    from aiollm.session.retry.policy import RetryPolicy
     from aiollm.types.requests.generation import Turn
 
 
@@ -40,11 +42,17 @@ class IUseCase[
 ](ISessionAccess, Protocol):
     """Turns a shared request into a shared response."""
 
-    async def __call__(self, request: ReqT) -> RespT:
+    async def __call__(
+        self,
+        request: ReqT,
+        **options: Unpack[CallOptions],
+    ) -> RespT:
         """Send the request and convert the provider's response.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             The response in shared types.
@@ -61,11 +69,14 @@ class IStreamUseCase[
     def stream(
         self,
         request: ReqT,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[Stream[EventT]]:
         """Open the stream; use the result with ``async with``.
 
         Args:
             request: The request in shared types.
+            **options: Options of the call (``headers``, ``timeout``,
+                ``retry_policy``), passed on to the session.
 
         Returns:
             A context manager that yields the events and closes the
@@ -86,7 +97,9 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
     """Generates text; the same interface for every provider.
 
     Both methods take the request's fields as keyword arguments, as the
-    providers' SDKs do, or a ready ``GenerationRequest``.
+    providers' SDKs do, or a ready ``GenerationRequest``, and the options
+    of the call (``headers``, ``timeout``, ``retry_policy``) as
+    ``send_request`` does; no request field is named like one of them.
     """
 
     @overload
@@ -99,6 +112,7 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
     @overload
@@ -106,18 +120,28 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         self,
         request: GenerationRequest,
         /,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
     async def create(
         self,
         request: GenerationRequest | None = None,
         /,
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
         **fields: Any,
     ) -> GenerationResponse[RawT]:
         """Generate the whole response at once.
 
         Args:
             request: What to generate, as a ready request.
+            headers: Headers for this request only.
+            timeout: Seconds for this request instead of the session's
+                limit; ``None`` to keep it.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -136,6 +160,7 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
     @overload
@@ -143,18 +168,28 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         self,
         request: GenerationRequest,
         /,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
     def stream(
         self,
         request: GenerationRequest | None = None,
         /,
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
         **fields: Any,
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]:
         """Open a stream of generation events; use with ``async with``.
 
         Args:
             request: What to generate, as a ready request.
+            headers: Headers for this request only.
+            timeout: Seconds for this request instead of the session's
+                limit; ``None`` to keep it.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 

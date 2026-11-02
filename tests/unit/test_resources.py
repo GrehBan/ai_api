@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import Any
+from typing import Any, Unpack
 
 import pytest
 from pydantic import (
@@ -13,6 +13,7 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
 )
+from pytest_mock import MockerFixture
 
 from aiollm.adapters.base import (
     BaseAdapter,
@@ -48,6 +49,8 @@ from aiollm.resources.usecases import (
 )
 from aiollm.response.buffered import BufferedResponse
 from aiollm.response.stream import Stream, map_stream
+from aiollm.session.protocols import CallOptions
+from aiollm.session.retry import RetryPolicy
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import EventTypes
 from aiollm.types.requests.generation import GenerationRequest, Turn
@@ -115,9 +118,10 @@ class Generate(
     async def __call__(
         self,
         request: GenerationRequest,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawResponse]:
         raw = await self.session.send_request(
-            Create(model=request.model, input=request.input)
+            Create(model=request.model, input=request.input), **options
         )
         return GenerationResponse[RawResponse](
             id=raw.id,
@@ -130,9 +134,10 @@ class Generate(
     def stream(
         self,
         request: GenerationRequest,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[Stream[GenerationEvent[RawEvent]]]:
         method = CreateStream(model=request.model, input=request.input)
-        return map_stream(self.session.stream(method), to_event)
+        return map_stream(self.session.stream(method, **options), to_event)
 
 
 class Responses(BaseResource[FakeTransport]):
@@ -863,3 +868,92 @@ async def test_use_case_checks_events_of_any_iterator() -> None:
         received = [event.type async for event in events]
 
     assert received == ["completed"]
+
+
+OPTIONS: CallOptions = {
+    "headers": {"X-Trace": "t-1"},
+    "timeout": 5.0,
+    "retry_policy": RetryPolicy(max_attempts=1),
+}
+"""Options of one call, each different from the session's."""
+
+
+@pytest.mark.parametrize(
+    "use_case",
+    [AdapterUseCase, AdapterCompositeUseCase],
+    ids=["buffered", "composite"],
+)
+async def test_adapter_use_case_passes_the_call_options_on(
+    use_case: type[Any],
+    mocker: MockerFixture,
+) -> None:
+    transport = FakeTransport([BufferedResponse(200, {}, RESPONSE_BODY)])
+    send = mocker.spy(transport, "send_request")
+
+    await use_case(transport, ADAPTER)(REQUEST, **OPTIONS)
+
+    assert send.call_args.kwargs == OPTIONS
+    assert transport.call_options == [({"X-Trace": "t-1"}, 5.0)]
+
+
+@pytest.mark.parametrize(
+    "use_case",
+    [AdapterStreamUseCase, AdapterCompositeUseCase],
+    ids=["stream", "composite"],
+)
+async def test_adapter_stream_passes_the_call_options_on(
+    use_case: type[Any],
+    mocker: MockerFixture,
+) -> None:
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(STREAM_CHUNKS, headers=SSE)]
+    )
+    stream = mocker.spy(transport, "stream")
+
+    async with use_case(transport, ADAPTER).stream(REQUEST, **OPTIONS):
+        pass
+
+    assert stream.call_args.kwargs == OPTIONS
+    assert transport.call_options == [({"X-Trace": "t-1"}, 5.0)]
+
+
+async def test_generation_resource_passes_the_call_options_on(
+    mocker: MockerFixture,
+) -> None:
+    body = BufferedResponse(200, {}, RESPONSE_BODY)
+    transport = FakeTransport(
+        [body, body],
+        [
+            FakeStreamResponse(STREAM_CHUNKS, headers=SSE),
+            FakeStreamResponse(STREAM_CHUNKS, headers=SSE),
+        ],
+    )
+    send = mocker.spy(transport, "send_request")
+    stream = mocker.spy(transport, "stream")
+    generation = GenerationResource(transport, ADAPTER)
+
+    await generation.create(REQUEST, **OPTIONS)
+    await generation.create(model="gpt", input="Hi", **OPTIONS)
+    async with generation.stream(REQUEST, **OPTIONS):
+        pass
+    async with generation.stream(model="gpt", input="Hi", **OPTIONS):
+        pass
+
+    assert [call.kwargs for call in send.call_args_list] == [OPTIONS] * 2
+    assert [call.kwargs for call in stream.call_args_list] == [OPTIONS] * 2
+    assert transport.call_options == [({"X-Trace": "t-1"}, 5.0)] * 4
+
+
+async def test_generation_resource_keeps_the_session_options_by_default(
+    mocker: MockerFixture,
+) -> None:
+    transport = FakeTransport([BufferedResponse(200, {}, RESPONSE_BODY)])
+    send = mocker.spy(transport, "send_request")
+
+    await GenerationResource(transport, ADAPTER).create(REQUEST)
+
+    assert send.call_args.kwargs == {
+        "headers": None,
+        "timeout": None,
+        "retry_policy": None,
+    }

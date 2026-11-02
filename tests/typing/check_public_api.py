@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Annotated, Literal, assert_type
+from typing import Annotated, Literal, Unpack, assert_type
 
 from pydantic import Field
 
@@ -70,7 +70,7 @@ from aiollm.resources import (
     IUseCase,
 )
 from aiollm.response import map_stream
-from aiollm.session import ISession, ISessionFactory
+from aiollm.session import CallOptions, ISession, ISessionFactory
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.requests import GenerationRequest, Turn
 from aiollm.types.responses import (
@@ -280,11 +280,22 @@ class Echo(BaseUseCase[GenerationRequest, GenerationResponse[str]]):
     async def __call__(
         self,
         request: GenerationRequest,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[str]:
         assert_type(self.session, ISession)
         return GenerationResponse[str].model_validate(
             {"provider": "openai", "model": request.model, "raw": "x"}
         )
+
+
+class NoOptions(BaseUseCase[GenerationRequest, GenerationResponse[str]]):
+    """A use case must take the options of the call."""
+
+    async def __call__(  # type: ignore[override]
+        self,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        raise NotImplementedError
 
 
 def use_case_implements_protocol(
@@ -329,7 +340,9 @@ def resource_keeps_the_session_type(session: AiohttpSession) -> None:
 class WrongRequest(BaseUseCase[Model, GenerationResponse[str]]):  # type: ignore[type-var]
     """A use case request must be a ``BaseRequest``."""
 
-    async def __call__(self, request: Model) -> GenerationResponse[str]:
+    async def __call__(
+        self, request: Model, **options: Unpack[CallOptions]
+    ) -> GenerationResponse[str]:
         raise NotImplementedError
 
 
@@ -516,6 +529,27 @@ async def generation_takes_keyword_arguments(client: OpenAIClient) -> None:
     await client.generation.create(input="x")  # type: ignore[call-overload]
     # None would mean null: an optional field is left out instead.
     await client.generation.create(model="m", input="x", instructions=None)  # type: ignore[call-overload]
+
+
+async def generation_takes_the_call_options(
+    client: OpenAIClient,
+    request: GenerationRequest,
+) -> None:
+    once = RetryPolicy(max_attempts=1)
+    response = await client.generation.create(
+        model="m",
+        input="x",
+        headers={"X-A": "1"},
+        timeout=5,
+        retry_policy=once,
+    )
+    assert_type(response, GenerationResponse[Response])
+    await client.generation.create(request, timeout=5.0, retry_policy=once)
+    async with client.generation.stream(request, headers=Headers()) as events:
+        assert_type(events, GenerationStream[ResponseStreamEvent])
+    await client.generation.create(request, timeout="5")  # type: ignore[call-overload]
+    await client.generation.create(request, retry_policy=1)  # type: ignore[call-overload]
+    await client.generation.create(request, retries=1)  # type: ignore[call-overload]
 
 
 def clients_take_session_arguments() -> None:

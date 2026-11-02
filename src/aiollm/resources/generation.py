@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Unpack, overload
 
 from pydantic import MISSING
 
@@ -14,7 +14,7 @@ from aiollm.resources.usecases import (
     AdapterCompositeUseCase,
     open_adapted_stream,
 )
-from aiollm.session.protocols import ISession
+from aiollm.session.protocols import CallOptions, ISession, Timeout
 from aiollm.types.requests.generation import GenerationRequest
 from aiollm.types.responses.events import (
     GENERATION_TERMINAL,
@@ -23,6 +23,8 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
+    from aiollm.http.protocols import HeadersType
+    from aiollm.session.retry.policy import RetryPolicy
     from aiollm.types.requests.generation import Turn
 
 
@@ -37,7 +39,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     response, ``RawItemT`` one item of its stream.
 
     Both methods take the request's fields as keyword arguments, as the
-    providers' SDKs do, or a ready ``GenerationRequest``; not both.
+    providers' SDKs do, or a ready ``GenerationRequest``; not both. The
+    options of the call (``headers``, ``timeout``, ``retry_policy``) are
+    passed on to the session, as ``send_request`` takes them.
 
     Example:
         >>> generation = GenerationResource(session, ResponsesAdapter())
@@ -81,6 +85,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
     @overload
@@ -88,18 +93,28 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         self,
         request: GenerationRequest,
         /,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
     async def create(
         self,
         request: GenerationRequest | None = None,
         /,
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
         **fields: Any,
     ) -> GenerationResponse[RawT]:
         """Generate the whole response at once.
 
         Args:
             request: What to generate, as a ready request.
+            headers: Headers for this request only.
+            timeout: Seconds for this request instead of the session's
+                limit; ``None`` to keep it.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -110,7 +125,12 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
             TypeError: Both a request and fields are given.
             ValidationError: The fields do not make a valid request.
         """
-        return await self._generate(_request(request, fields))
+        return await self._generate(
+            _request(request, fields),
+            headers=headers,
+            timeout=timeout,
+            retry_policy=retry_policy,
+        )
 
     @overload
     def stream(
@@ -122,6 +142,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
     @overload
@@ -129,18 +150,28 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         self,
         request: GenerationRequest,
         /,
+        **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
     def stream(
         self,
         request: GenerationRequest | None = None,
         /,
+        *,
+        headers: HeadersType | None = None,
+        timeout: Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
         **fields: Any,
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]:
         """Open a stream of generation events; use with ``async with``.
 
         Args:
             request: What to generate, as a ready request.
+            headers: Headers for this request only.
+            timeout: Seconds for this request instead of the session's
+                limit; ``None`` to keep it.
+            retry_policy: Retry policy of this request; ``None`` for the
+                session's.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -164,6 +195,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
             _request(request, fields),
             self._generate.terminal,
             GenerationStream,
+            headers=headers,
+            timeout=timeout,
+            retry_policy=retry_policy,
         )
 
 

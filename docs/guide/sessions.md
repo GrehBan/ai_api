@@ -66,7 +66,7 @@ A request gets headers from four places. Names are case-insensitive, and a later
 
 ## Per-request headers and timeout
 
-`send_request` and `stream`, on a session or a client, take keyword-only arguments for one call:
+`send_request` and `stream`, on a session or a client, and `client.generation.create` and `stream` take keyword-only arguments for one call:
 
 ```python title="call_options.py"
 class BetaCompletion(CreateCompletion):

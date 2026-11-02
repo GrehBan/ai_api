@@ -9,6 +9,7 @@ from aiollm.session.factory import (
     SessionFactory,
 )
 from aiollm.session.protocols import (
+    CallOptions,
     ISession,
     ISessionFactory,
     Timeout,
@@ -27,6 +28,7 @@ from aiollm.session.retry import (
 
 __all__ = [
     "BaseSession",
+    "CallOptions",
     "DEFAULT_MAX_ATTEMPTS",
     "DEFAULT_MAX_RETRY_AFTER",
     "DEFAULT_RETRY_DEADLINE",
