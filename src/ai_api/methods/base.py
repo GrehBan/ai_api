@@ -559,6 +559,15 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         )
 
     @property
+    def request_path_template(self) -> str:
+        """The path as declared, placeholders kept, e.g. ``/files/{id}``.
+
+        It holds none of the request's values, so it is what a log may
+        show: a path parameter can be an identifier of a user's data.
+        """
+        return self.__request_path__
+
+    @property
     def request_method(self) -> str:
         """HTTP method."""
         return self.__request_method__

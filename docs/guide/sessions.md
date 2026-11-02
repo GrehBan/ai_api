@@ -155,9 +155,9 @@ An exception that reaches your code is not logged: you decide whether it is an e
 
 | Level | When | Examples |
 |---|---|---|
-| DEBUG | the details of a call, a recovered or deliberately suppressed error | a call's start and end, every attempt (method, path, status, duration), an error the library swallows (with its traceback) |
+| DEBUG | the details of a call, a recovered or deliberately suppressed error | a call's start and end, every attempt (method, declared path, status, duration), an error the library swallows (by its type) |
 | INFO | a significant success, when it is worth it | none yet |
-| WARNING | an error handled by a retry or a fallback | a retry: the error of the failed attempt and its notes (that error is not raised, so this is where it shows), the attempt that follows and the wait |
+| WARNING | an error handled by a retry or a fallback | a retry: the type of the failed attempt's error and how many notes it has (that error is not raised, so this is where it shows), the attempt that follows and the wait |
 | ERROR | a failure that could not reach any caller | a read or a close that failed after its caller was cancelled, reported through the event loop's exception handler, which asyncio logs under its own `asyncio` logger |
 
 Every record, by logger:
@@ -166,12 +166,12 @@ Every record, by logger:
 |---|---|---|
 | WARNING | `session.base` | a retry |
 | DEBUG | `session.base` | a call's start and end (`items=` for a stream) |
-| DEBUG | `session.aiohttp` | each attempt: sent (method and path), finished (status and duration; for a stream, when the headers came), a redirect followed, the connection pool opened and closed |
+| DEBUG | `session.aiohttp` | each attempt: sent (method and the path as declared, such as `/files/{file_id}`), finished (status and duration; for a stream, when the headers came), that a redirect was followed, the connection pool opened and closed |
 | DEBUG | `session.retry` | an error not retried because its `Retry-After` is above `max_retry_after` |
 | DEBUG | `session.loop` | the event loop a session is bound to |
-| DEBUG | `response.aiohttp` | a failure of the body writer after the answer came, which aiohttp drops, with its traceback |
+| DEBUG | `response.aiohttp` | a failure of the body writer after the answer came, which aiohttp drops, by its type |
 | DEBUG | `types.unknown` | a `type` the library does not model yet, kept as an unknown item |
-| DEBUG | `types.files` | an upload waiting for a cancelled read of its stream |
+| DEBUG | `types.files` | an upload waiting for a cancelled read of its stream (not the file's name) |
 | DEBUG | `client.validators` | the environment variable an API key was read from |
 
-A request is logged by its method and path only. Query strings (which may carry a key), headers, bodies, tokens and API keys are never logged. The official SDKs log request bodies at DEBUG; this library does not, since a body holds the prompts.
+A request is logged by its method and its path as declared, placeholders kept. Never logged, at any level: the values of path parameters (an identifier may name a user's data), query strings (which may carry a key), headers, bodies, tokens and API keys, the message, notes and traceback of an error (they may hold a file path or a request's value), and the names of uploaded files. The official SDKs log request bodies at DEBUG; this library does not, since a body holds the prompts.

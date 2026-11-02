@@ -31,13 +31,21 @@ jobs:
         env:
           NO_MKDOCS_2_WARNING: "1"
 
-  tests:
-    name: tests (${{ matrix.os }})
+  test-matrix:
+    name: tests (${{ matrix.os }}, ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # Every CPython the package supports (requires-python >= 3.13);
+        # 3.13, the oldest, is also what .python-version pins locally.
+        python: ["3.13", "3.14", "3.15"]
+    env:
+      # For every uv command of the job: with only `uv sync --python`,
+      # `uv run` would take .python-version's 3.13 and rebuild the
+      # environment without the test group.
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -50,7 +58,70 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: test-report-${{ matrix.os }}
+          name: test-report-${{ matrix.os }}-${{ matrix.python }}
           path: |
             coverage.xml
             report.html
+
+  tests:
+    # One stable name for the branch ruleset, whatever the matrix holds.
+    name: tests
+    if: always()
+    needs: [test-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test-matrix.result }}" = "success"
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv build
+      - name: Install the wheel into a clean environment and import it
+        run: |
+          uv venv --python 3.13 .wheel-env
+          uv pip install --python .wheel-env dist/*.whl
+          .wheel-env/bin/python - <<'EOF'
+          from importlib.metadata import version
+
+          import ai_api
+          import ai_api.providers.anthropic
+          import ai_api.providers.openai
+
+          assert ai_api.__version__ == version("ai-api"), (
+              ai_api.__version__,
+              version("ai-api"),
+          )
+          print("ai-api", ai_api.__version__, "imports from its wheel")
+          EOF
+
+  changelog:
+    # A pull request adds a fragment to CHANGES/ (or, for a release,
+    # changes CHANGELOG.md itself); the "no changelog" label skips the
+    # check for a change no user sees.
+    name: changelog
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(github.event.pull_request.labels.*.name, 'no changelog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: >-
+          uv run --locked --only-group dev
+          towncrier check --compare-with origin/${{ github.base_ref }}
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      # Known vulnerabilities in every locked dependency, dev tools too.
+      # An exception is an --ignore <ID> with its reason in a comment
+      # (rule, reason, scope, owner, review condition: manifest §18).
+      - run: uv audit --locked --preview-features audit-command

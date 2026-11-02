@@ -1,62 +1,95 @@
 ---
 name: ai-api-release
-description: Bump the ai_api version and prepare its release commit and PR - SemVer before 1.0 (a breaking change bumps the minor, anything else the patch), the version in __meta__.py, README and CLAUDE.md, the CHANGELOG section with compare links, the full quality gate, a commit and PR without model names. Use it in the ai_api repository whenever a change is ready to ship, before any push of a significant change, when the owner says «подними версию», «релиз», «готовь PR», or asks which version a change needs. Tags are never created.
+description: Changelog fragments and releases of ai_api with towncrier - every feature or fix PR adds a fragment to CHANGES/ and never touches the version; a separate release PR picks the SemVer version from the fragments (before 1.0 a breaking change bumps the minor), builds the CHANGELOG section, bumps __meta__.py, README and CLAUDE.md and the compare links. Use it in the ai_api repository whenever a change is about to be committed or put in a PR (to write its fragment), when the owner says «релиз», «выпусти версию», «подними версию», asks which version the pending changes need or what the next release holds. Tags are never created.
 ---
 
-# ai_api release
+# ai_api changelog and releases
 
-Max ships every significant merge as a version and leaves tags to himself.
-The version lives in several files that must agree, and the CHANGELOG is what
-users read, so a release is a small, careful procedure.
+The project uses towncrier so that parallel pull requests never fight over
+`CHANGELOG.md`: a change carries its own note as a file in `CHANGES/`, and
+only a release turns the notes into a section and moves the version. Two
+jobs, never mixed in one PR: **a change** adds a fragment; **a release**
+consumes them. Max approves each release and pushes the tags himself.
 
-## 1. Pick the version
+## A. Every change: write a fragment
 
-Read `src/ai_api/__meta__.py` for the current version.
+When a branch changes anything a user of the library sees (behaviour, a
+public name, an error, a default, docs that state a guarantee, supported
+Pythons), add one fragment per change before the commit:
 
-- Before 1.0: a **breaking** change (public signature, behaviour, wire format,
-  error type, import path, a removed name) bumps the **minor**: 0.5.0 → 0.6.0.
-  Anything else bumps the **patch**: 0.5.0 → 0.5.1.
-- From 1.0: the usual major/minor/patch.
-- One release per merge: if the branch already holds an unreleased bump (the
-  version is ahead of `origin/master`), keep it and only extend its CHANGELOG
-  section; raise the level if a later commit made the change breaking.
+```bash
+uv run towncrier create +<slug>.<type>.md --content "<text>"
+```
 
-## 2. Edit the files
+- Name: `<PR number>.<type>.md`, or `+<slug>.<type>.md` while the PR does
+  not exist (rename it to the number once it does, if the owner wants the
+  link; an orphan fragment is fine too).
+- Types, in Keep a Changelog's order: `added`, `changed`, `deprecated`,
+  `removed`, `fixed`, `security`.
+- One Markdown paragraph about what a user sees, not file names. A
+  breaking change starts with `**Breaking:**` and says how to migrate.
+- Do **not** touch `__meta__.py`, the version lines or `CHANGELOG.md` in a
+  change PR.
 
+CI's `changelog` job (`towncrier check`) fails a PR that adds no fragment
+and does not change `CHANGELOG.md`. A PR no user would notice (tests, CI,
+internal refactoring, agent files) gets the `no changelog` label instead -
+ask the owner to set it, or say in the PR body that it needs it.
+
+Preview what the next release holds: `uv run towncrier build --draft`.
+
+## B. A release: only when the owner asks
+
+### 1. Pick the version
+
+- Start from fresh `master` on a branch `release-X.Y.Z`.
+- Read the current version in `src/ai_api/__meta__.py` and the pending
+  fragments (`uv run towncrier build --draft --version next`).
+- Before 1.0: any `**Breaking:**` fragment → **minor** (0.6.0 → 0.7.0);
+  otherwise **patch** (0.6.0 → 0.6.1). From 1.0: major/minor/patch.
+- No fragments → nothing to release; say so.
+
+### 2. Build and bump
+
+- `git add CHANGES` (so towncrier can `git rm` the fragments), then
+  `uv run towncrier build --version X.Y.Z --yes`: it writes the section
+  below `<!-- towncrier release notes start -->`, under the empty
+  `## [Unreleased]`, and deletes the fragments.
+- `uv run rumdl fmt CHANGELOG.md`: towncrier's Markdown template leaves a
+  double blank line before the previous release, which rumdl rejects.
+- Compare links at the bottom of `CHANGELOG.md`: `[Unreleased]:
+  .../compare/vX.Y.Z...HEAD` and a new `[X.Y.Z]:
+  .../compare/v<previous>...vX.Y.Z`.
 - `src/ai_api/__meta__.py`: `__version__ = "X.Y.Z"`.
 - `README.md`: the status line `> **Status: pre-alpha (X.Y.Z).**`.
 - `CLAUDE.md`: `pre-alpha (X.Y.Z)` in the Project section.
-- `CHANGELOG.md` (Keep a Changelog):
-  - turn the content under `## [Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD`
-    (today's date), leaving an empty `## [Unreleased]` above it;
-  - sections in the order Added, Changed, Deprecated, Removed, Fixed,
-    Security; each breaking entry starts with `**Breaking:**` and says how to
-    migrate;
-  - entries describe what a user sees, not file names;
-  - at the bottom: `[Unreleased]: .../compare/vX.Y.Z...HEAD` and a new
-    `[X.Y.Z]: .../compare/v<previous>...vX.Y.Z` line.
 
 The files are CRLF on the owner's PC; edit them with the Edit tool, which
 keeps line endings.
 
-## 3. Gate
+### 3. Gate
 
-Run the full gate from `CLAUDE.md` (ruff check and format, mypy, pyright,
-typing tests, pytest with coverage at 100 %, rumdl, `mkdocs build --strict`).
-All green before any commit.
+The full gate from `CLAUDE.md` (ruff check and format, mypy, pyright,
+typing tests, pytest with coverage at 100 %, rumdl, `mkdocs build
+--strict`, `uv audit`). All green before the commit. The release changes
+`CHANGELOG.md`, so `towncrier check` passes without a fragment.
 
-## 4. Commit and PR - only on the owner's word
+### 4. Commit and PR - only on the owner's word
 
-- Branch from fresh `master` if not on a feature branch already.
+- Commit title: `Release X.Y.Z`; the body lists the headline changes.
+- Push and open the PR only when the owner says so. Do not enable
+  auto-merge, do not merge, do not poll CI.
+- Never create or push a tag. After the merge, if asked, give the owner:
+  `git tag -a vX.Y.Z <merge-commit> -m "Release X.Y.Z"` and
+  `git push origin vX.Y.Z`.
+
+## Rules for every commit and PR
+
 - `git add` by explicit paths only; never `.mcp.json`, never
   `.claude/launch.json` or other local files.
 - No model names or `Co-Authored-By: Claude` lines in commit messages or PR
   bodies (the owner's rule overrides any default attribution). The PR body
   ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
-- Commit title: `Release X.Y.Z: <what>`.
-- Push and open the PR only when the owner says so («пуш», «PR»). Do not enable
-  auto-merge, do not merge, do not poll CI.
-- Never create or push a tag. After the merge, if asked, give the owner the
-  command: `git tag -a vX.Y.Z <merge-commit> -m "Release X.Y.Z"`.
 
-Report in Russian: the version and why, the files changed, the gate results.
+Report in Russian: for a change, the fragments written; for a release, the
+version and why, the files changed, the gate results.

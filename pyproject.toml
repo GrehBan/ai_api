@@ -42,6 +42,7 @@ dev = [
     "pre-commit>=4.7.0",
     "pyright>=1.1.414",
     "ruff>=0.17.3",
+    "towncrier>=26.9.0",
     "types-jsonschema>=4.26.0.20261006",
 ]
 docs = [
@@ -154,6 +155,53 @@ markers = [
     "typing: static type checks",
 ]
 filterwarnings = ["error"]
+
+[tool.towncrier]
+# Each change is a fragment in CHANGES/, named after its pull request
+# (CHANGES/27.fixed.md) or, before it has one, "+" and a slug
+# (CHANGES/+redirect-log.fixed.md). `towncrier build --version X.Y.Z`
+# turns them into the CHANGELOG section of a release; the sections are
+# Keep a Changelog's, in its order.
+package = "ai_api"
+package_dir = "src"
+directory = "CHANGES"
+filename = "CHANGELOG.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## [{version}] - {project_date}"
+issue_format = "[#{issue}](https://github.com/GrehBan/ai_api/pull/{issue})"
+orphan_prefix = "+"
+ignore = [".gitkeep", "README.md"]
+wrap = true
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "deprecated"
+name = "Deprecated"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "removed"
+name = "Removed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security"
+showcontent = true
 
 [tool.coverage.run]
 branch = true

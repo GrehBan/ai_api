@@ -140,7 +140,8 @@ def _same_origin(url: URL) -> ClientMiddlewareType:
             )
 
         if request.url != url:
-            logger.debug("Following redirect to %s", request.url.path)
+            # Not the target: the server's path may name a user's data.
+            logger.debug("Following a redirect")
 
         return await handler(request)
 
@@ -492,9 +493,12 @@ class AiohttpSession(BaseSession):
         request_headers.update(method.request_headers.build(headers))
         request_headers[self.auth.header_name] = self.auth.encode()
 
-        # The path only: a query may carry a key; never headers or bodies.
+        # The declared path only: its values may name a user's data, a
+        # query may carry a key; never headers or bodies.
         logger.debug(
-            "Sending %s %s", method.request_method, method.request_path
+            "Sending %s %s",
+            method.request_method,
+            method.request_path_template,
         )
         started = time.perf_counter()
 

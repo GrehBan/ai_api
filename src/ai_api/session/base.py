@@ -45,14 +45,16 @@ def _log_retry(state: RetryCallState) -> None:
     """Log a retry before its wait: the next attempt, the wait, the cause.
 
     The failed attempt's error is not logged elsewhere, since it is not
-    raised; its notes (a failing close of an upload, say) go with it.
+    raised, so its type is named here, and the number of its notes (a
+    failing close of an upload, say). Not their text, nor the error's
+    message: either may hold a file path or a value of the request.
 
     Args:
         state: Tenacity's state of the current retry loop.
     """
     exc = state.outcome.exception() if state.outcome else None
     delay = state.next_action.sleep if state.next_action else 0.0
-    notes = "; ".join(getattr(exc, "__notes__", ()))
+    notes = len(getattr(exc, "__notes__", ()))
     logger.warning(
         "Retrying request after %s: attempt=%d, delay=%.2fs%s",
         type(exc).__name__,

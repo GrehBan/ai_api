@@ -55,17 +55,19 @@ async def wait_for_writer(response: ClientResponse) -> None:
     ``release()`` cancels the task that writes the body but does not
     wait for it, and an upload reader cannot be closed while that task
     still runs it. A failure of the task after the response has come
-    does not change the response; aiohttp drops it as well.
+    does not change the response; aiohttp drops it as well. It is logged
+    by its type only: its message, notes and traceback may hold a file
+    path or a value of the upload.
 
     Args:
         response: The response of the request.
     """
     try:
         await response.wait_for_close()
-    except Exception:  # noqa: BLE001 - logged, aiohttp drops it too
+    except Exception as exc:  # noqa: BLE001 - logged, aiohttp drops it too
         logger.debug(
-            "The request body writer failed after the response came",
-            exc_info=True,
+            "The request body writer failed after the response came: %s",
+            type(exc).__name__,
         )
 
 
