@@ -207,7 +207,39 @@ async def test_thread_work_returns_what_the_call_returns() -> None:
     await work.wait_idle()
 
 
-async def test_a_cancelled_call_runs_on_and_the_cleanup_waits() -> None:
+class Reported:
+    """Collects what the event loop's exception handler is given."""
+
+    def __init__(self) -> None:
+        self.contexts: list[dict[str, Any]] = []
+
+    def __call__(
+        self, _: asyncio.AbstractEventLoop, context: dict[str, Any]
+    ) -> None:
+        self.contexts.append(context)
+
+    @property
+    def messages(self) -> list[str]:
+        return [context["message"] for context in self.contexts]
+
+
+@pytest.fixture
+async def reported() -> AsyncIterator[Reported]:
+    """Catch the reports of failures that have no caller any more."""
+    collector = Reported()
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(collector)
+
+    try:
+        yield collector
+    finally:
+        gc.collect()  # an unretrieved task exception is reported here
+        loop.set_exception_handler(None)
+
+
+async def test_a_cancelled_call_runs_on_and_the_cleanup_waits(
+    reported: Reported,
+) -> None:
     gate = Gate()
     events: list[str] = []
     work = ThreadWork()
@@ -216,13 +248,17 @@ async def test_a_cancelled_call_runs_on_and_the_cleanup_waits() -> None:
         gate.wait()
         events.append("call ended")
 
+    def cleanup() -> None:
+        on_loop = threading.current_thread() is threading.main_thread()
+        events.append("cleanup on the loop" if on_loop else "cleanup")
+
     task = asyncio.create_task(work.run(call))
     await gate.reached()
 
     await cancelled(task)
 
     assert work.busy
-    work.finish(lambda: events.append("cleanup"))
+    await work.finish(cleanup)  # put off: it returns at once
     assert events == []
 
     with pytest.raises(RuntimeError, match="one call at a time"):
@@ -231,7 +267,29 @@ async def test_a_cancelled_call_runs_on_and_the_cleanup_waits() -> None:
     gate.released.set()
     await work.wait_idle()
 
+    # The cleanup ran after the call, in a worker thread.
     assert events == ["call ended", "cleanup"]
+    assert reported.contexts == []
+
+
+@pytest.mark.parametrize(
+    ("blocking", "thread"),
+    [(True, "worker"), (False, "loop")],
+    ids=["blocking", "not-blocking"],
+)
+async def test_a_cleanup_runs_where_it_may(
+    blocking: bool,  # noqa: FBT001
+    thread: str,
+) -> None:
+    where: list[str] = []
+
+    def cleanup() -> None:
+        on_loop = threading.current_thread() is threading.main_thread()
+        where.append("loop" if on_loop else "worker")
+
+    await ThreadWork().finish(cleanup, blocking=blocking)
+
+    assert where == [thread]
 
 
 def fail() -> None:
@@ -243,21 +301,99 @@ def fail() -> None:
     [None, GeneratorExit()],
     ids=["no-error", "generator-exit"],
 )
-def test_a_failing_cleanup_is_raised_when_nothing_would_show_it(
+async def test_a_failing_cleanup_is_raised_when_nothing_would_show_it(
     error: BaseException | None,
 ) -> None:
     with pytest.raises(OSError, match="close failed"):
-        ThreadWork().finish(fail, error=error)
+        await ThreadWork().finish(fail, error=error)
 
 
-def test_a_failing_cleanup_is_noted_on_the_error() -> None:
+async def test_a_failing_cleanup_is_noted_on_the_error() -> None:
     error = ValueError("read failed")
 
-    ThreadWork().finish(fail, error=error)
+    await ThreadWork().finish(fail, error=error)
 
     assert error.__notes__ == [
         "Releasing the resource also failed: OSError('close failed')"
     ]
+
+
+@pytest.mark.parametrize("noted", [True, False], ids=["error", "no-error"])
+async def test_a_failing_put_off_cleanup_is_noted_and_reported(
+    reported: Reported,
+    noted: bool,  # noqa: FBT001
+) -> None:
+    # Nobody awaits a put-off cleanup: its failure goes on the error that
+    # ended the work and to the loop, never to a later caller.
+    gate = Gate()
+    work = ThreadWork()
+    task = asyncio.create_task(work.run(gate.wait))
+    await gate.reached()
+    await cancelled(task)
+    error = asyncio.CancelledError()
+
+    await work.finish(fail, error=error if noted else None)
+    gate.released.set()
+    await work.wait_idle()
+    await asyncio.sleep(0)  # the done callback of the cleanup
+
+    notes = ["Releasing the resource also failed: OSError('close failed')"]
+    assert getattr(error, "__notes__", []) == (notes if noted else [])
+    assert reported.messages == [
+        "ThreadWork: Releasing the resource also failed"
+    ]
+    assert isinstance(reported.contexts[0]["exception"], OSError)
+
+
+async def test_cancelled_work_retrieves_late_exception(
+    reported: Reported,
+) -> None:
+    gate = Gate()
+    work = ThreadWork()
+
+    def read() -> bytes:
+        gate.wait()
+        raise OSError("read failed")
+
+    task = asyncio.create_task(work.run(read))
+    await gate.reached()
+
+    await cancelled(task)
+    gate.released.set()
+    await work.wait_idle()
+    await asyncio.sleep(0)  # the done callback of the call
+
+    # Reported once, as a failure nobody could receive, and never as
+    # "Task exception was never retrieved".
+    assert reported.messages == [
+        "ThreadWork: A call whose caller was cancelled failed"
+    ]
+    assert str(reported.contexts[0]["exception"]) == "read failed"
+
+
+async def test_a_put_off_cleanup_cancelled_before_it_ran_is_reported(
+    reported: Reported,
+) -> None:
+    # As at the end of asyncio.run, which cancels every task left.
+    gate = Gate()
+    work = ThreadWork()
+    task = asyncio.create_task(work.run(gate.wait))
+    await gate.reached()
+    await cancelled(task)
+    error = asyncio.CancelledError()
+    before = asyncio.all_tasks()
+
+    await work.finish(fail, error=error)
+    (finishing,) = asyncio.all_tasks() - before
+    finishing.cancel()
+    await asyncio.wait({finishing})
+    await asyncio.sleep(0)
+    gate.released.set()
+    await work.wait_idle()
+
+    message = "Releasing the resource was cancelled before it ran"
+    assert reported.messages == [f"ThreadWork: {message}"]
+    assert error.__notes__[0].startswith(message)
 
 
 # open_file
@@ -322,30 +458,30 @@ async def test_a_cancelled_open_closes_what_the_thread_opened(
     await until(lambda: slow_open.opened and slow_open.opened[0].closed)
 
 
-async def test_a_cancelled_open_that_fails_reports_nothing(
+async def test_a_cancelled_open_that_fails_is_reported(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    reported: Reported,
 ) -> None:
     opener = SlowOpen(fails=True)
     patch_open(monkeypatch, opener)
-    reported: list[dict[str, Any]] = []
-    loop = asyncio.get_running_loop()
-    loop.set_exception_handler(lambda _, context: reported.append(context))
     task = asyncio.create_task(open_file(tmp_path / "a.bin", "rb"))
     await opener.gate.reached()
 
     await cancelled(task)
     opener.gate.released.set()
     await until(lambda: asyncio.all_tasks() == {asyncio.current_task()})
-    gc.collect()
+    await asyncio.sleep(0)
 
-    loop.set_exception_handler(None)
-    assert reported == []
+    assert reported.messages == [
+        "ThreadWork: A call whose caller was cancelled failed"
+    ]
 
 
 async def test_an_open_cancelled_with_its_thread_reports_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    reported: Reported,
 ) -> None:
     # As at the end of asyncio.run, which cancels every task left.
     slow_open = SlowOpen()
@@ -362,6 +498,8 @@ async def test_an_open_cancelled_with_its_thread_reports_nothing(
     assert opening.cancelled()
     await until(lambda: slow_open.opened)
     slow_open.opened[0].close()
+    await until(lambda: asyncio.all_tasks() == {asyncio.current_task()})
+    assert reported.contexts == []
 
 
 # PathFile
