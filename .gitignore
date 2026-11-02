@@ -14,3 +14,6 @@ wheels/
 coverage.xml
 report.html
 .mypy_cache/
+
+# The documentation site, built by mkdocs
+site/

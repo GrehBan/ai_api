@@ -2,7 +2,7 @@
 [project]
 name = "ai-api"
 dynamic = ["version"]
-description = "Asynchronous Python API client library"
+description = "Async-first toolkit for building typed HTTP API clients"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
@@ -20,6 +20,11 @@ dependencies = [
     "tenacity>=9.2.1",
     "yarl>=1.25.1",
 ]
+
+[project.urls]
+Documentation = "https://grehban.github.io/ai_api/"
+Repository = "https://github.com/GrehBan/ai_api"
+Changelog = "https://github.com/GrehBan/ai_api/blob/master/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
@@ -40,6 +45,8 @@ dev = [
     "types-jsonschema>=4.26.0.20261006",
 ]
 docs = [
+    "mkdocs-material>=9.8.0",
+    "mkdocstrings[python]>=1.0.8",
     "rumdl>=0.3.2",
 ]
 test = [
@@ -206,3 +213,6 @@ siblings_only = true
 "CHANGELOG.md" = ["MD024"]
 "README.md" = ["MD013"]
 "CLAUDE.md" = ["MD013"]
+"docs/**" = ["MD013"]
+"docs/changelog.md" = ["MD041"]  # the page is CHANGELOG.md, included
+"docs/testing-plan.md" = ["MD036"]  # a historical record, kept as it was
