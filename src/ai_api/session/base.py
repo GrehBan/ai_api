@@ -27,6 +27,7 @@ from ai_api.session.retry import (
     calculate_wait,
     retry_condition,
 )
+from ai_api.types.files import closing_source
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -217,7 +218,9 @@ class BaseSession(ABC):
             ),
         )
 
-        try:
+        # A failing close (of an upload left open, say) is noted on the
+        # error that ended the block instead of replacing it.
+        async with closing_source(response, what="the response"):
             stream = Stream(
                 method.stream_parser.parse(
                     method,
@@ -227,12 +230,8 @@ class BaseSession(ABC):
                 )
             )
 
-            try:
+            async with closing_source(stream, what="the stream"):
                 yield stream
-            finally:
-                await stream.aclose()
-        finally:
-            await response.aclose()
 
     async def _with_retry[R](
         self,

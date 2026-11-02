@@ -118,8 +118,8 @@ class Stream[T]:
         """Write a byte stream to a file without buffering it in memory.
 
         Only available on ``Stream[bytes]``. Opening, writing and closing
-        run in a worker thread; after a cancellation the file is closed
-        once the call running there is over.
+        run in a worker thread; after a cancellation the file is closed,
+        in the thread too, once the write running there is over.
 
         Args:
             path: Destination file; it is created or overwritten.
@@ -142,12 +142,11 @@ class Stream[T]:
             async for chunk in self:
                 await work.run(file.write, chunk)
                 written += len(chunk)
-
-            await work.run(file.close)
         except BaseException as exc:
-            work.finish(file.close, error=exc)
+            await work.finish(file.close, error=exc)
             raise
 
+        await work.finish(file.close)
         return written
 
 

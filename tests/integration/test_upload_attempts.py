@@ -19,7 +19,7 @@ from typing import Any, Literal
 import pytest
 from yarl import URL
 
-from ai_api.enums import BodyFormat
+from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.http.auth import BearerAuth
 from ai_api.http.exceptions.resolver import BaseErrorResolver
 from ai_api.http.exceptions.response import APIResponseError
@@ -28,8 +28,9 @@ from ai_api.http.exceptions.transport import (
     APIConnectionError,
     APIRequestError,
 )
-from ai_api.methods.base import BaseAPIMethod
+from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
 from ai_api.session.aiohttp import AiohttpSession
+from ai_api.types.base import BaseAPIType
 from ai_api.types.files import IOFile, PathFile, StreamFile
 from tests.conftest import TEST_TOKEN, LocalAPI
 
@@ -263,4 +264,60 @@ async def test_a_failing_close_is_noted_on_the_attempts_error(
 
     (note,) = info.value.__notes__
     assert note.startswith("Closing upload 'a.bin' also failed")
+    assert source.closed == 1
+
+
+class Event(BaseAPIType):
+    text: str
+
+
+class StreamUpload(BaseStreamMethod[Event]):
+    __request_path__ = "/files"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.MULTIPART
+    __response_format__ = ResponseFormat.SSE
+
+    file: Any = None
+
+
+async def stream_before_the_body(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """Answer an SSE stream the parser rejects, before reading the body."""
+    await reader.readuntil(b"\r\n\r\n")
+    writer.write(
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+        b"data: not json\n\n"
+    )
+    await writer.drain()
+    writer.close()
+
+
+async def test_a_failing_close_never_hides_the_streams_error() -> None:
+    # The parser fails while the upload is still open, and its source
+    # fails to close when the response is: the parser's error is raised,
+    # with the close failure as a note.
+    server = await asyncio.start_server(stream_before_the_body, "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()[:2]
+    source = Produce(close_fails=True)
+    method = StreamUpload(file=StreamFile(source, filename="a.bin"))
+
+    try:
+        async with AiohttpSession(
+            LocalAPI(URL(f"http://{host}:{port}/")),
+            BearerAuth(TEST_TOKEN),
+            BaseErrorResolver(),
+        ) as session:
+            with pytest.raises(APIResponseError, match="decode") as info:
+                async with session.stream(method) as events:
+                    async for _ in events:
+                        pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    (note,) = info.value.__notes__
+    assert note.startswith("Closing the response also failed: APIRequestError")
+    assert "close failed" in note
     assert source.closed == 1

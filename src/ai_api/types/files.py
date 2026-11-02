@@ -32,13 +32,16 @@ type BinaryStream = io.BufferedIOBase | io.RawIOBase
 
 @asynccontextmanager
 async def closing_source[T](
-    source: AsyncIterator[T],
-) -> AsyncGenerator[AsyncIterator[T]]:
-    """Close an async iterator when the block ends, however it ends.
+    source: T,
+    *,
+    what: str = "the source",
+) -> AsyncGenerator[T]:
+    """Close a resource when the block ends, however it ends.
 
-    The iterator is closed by ``aclose()`` when it has one (a generator,
-    for example), else by ``close()``, whose result is awaited when it is
-    awaitable; never by both, and not at all when it has neither.
+    The resource (an async iterator, a response) is closed by
+    ``aclose()`` when it has one (a generator, for example), else by
+    ``close()``, whose result is awaited when it is awaitable; never by
+    both, and not at all when it has neither.
 
     A failing close never hides why the block ended: when the block
     raised, a cancellation too, that exception goes on with the close
@@ -46,10 +49,11 @@ async def closing_source[T](
     closed as a generator, is the close error itself raised.
 
     Args:
-        source: The iterator to close.
+        source: The resource to close.
+        what: How the note names the resource.
 
     Yields:
-        The same iterator.
+        The same resource.
     """
     try:
         yield source
@@ -60,17 +64,17 @@ async def closing_source[T](
         try:
             await _close(source)
         except Exception as close_error:  # noqa: BLE001 - kept as a note
-            exc.add_note(f"Closing the source also failed: {close_error!r}")
+            exc.add_note(f"Closing {what} also failed: {close_error!r}")
         raise
     else:
         await _close(source)
 
 
 async def _close(source: object) -> None:
-    """Close an iterator by ``aclose()``, else by ``close()``, if it can be.
+    """Close a resource by ``aclose()``, else by ``close()``, if it can be.
 
     Args:
-        source: The iterator to close.
+        source: The resource to close.
     """
     for name in ("aclose", "close"):
         close = getattr(source, name, None)
@@ -92,11 +96,19 @@ class ThreadWork:
     call, so the resource is released only after it (``finish``) and the
     next user waits for it (``wait_idle``) instead of using the resource
     under it.
+
+    A failure that no caller can receive any more (a call or a cleanup
+    that ran on after its caller was cancelled) is never dropped: it is
+    added as a note to the exception given to ``finish``, if any, and
+    reported through the event loop's exception handler, the asyncio
+    channel for errors that have no caller. It is never raised into a
+    later, unrelated caller.
     """
 
     def __init__(self) -> None:
         """Create the helper with no call running."""
         self._running: asyncio.Task[Any] | None = None
+        self._finishing: asyncio.Task[None] | None = None
 
     @property
     def busy(self) -> bool:
@@ -111,6 +123,9 @@ class ThreadWork:
         **kwargs: P.kwargs,
     ) -> R:
         """Run a blocking call in a worker thread.
+
+        If the caller is cancelled, the call runs on; a failure it ends
+        with is reported, since nobody awaits it any more.
 
         Args:
             func: The blocking callable.
@@ -129,47 +144,147 @@ class ThreadWork:
 
         task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
         self._running = task
-        # A cancelled caller leaves the call running and kept in _running.
-        return await asyncio.shield(task)
+
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.add_done_callback(self._abandoned)
+            raise
 
     async def wait_idle(self) -> None:
-        """Wait until no call is running; a failed call does not raise."""
-        if self._running is not None:
-            await asyncio.wait({self._running})
+        """Wait until no call or cleanup runs; a failure does not raise."""
+        tasks = {
+            task
+            for task in (self._running, self._finishing)
+            if task is not None
+        }
 
-    def finish(
+        if tasks:
+            await asyncio.wait(tasks)
+
+    async def finish(
         self,
         cleanup: Callable[[], object],
         *,
+        blocking: bool = True,
         error: BaseException | None = None,
     ) -> None:
         """Release the resource now, or as soon as the running call ends.
 
-        A cleanup put off until the call ends runs in the event loop,
-        which reports its failure through the loop's exception handler.
+        A blocking cleanup, such as a file's ``close``, which may flush,
+        runs in the worker thread, never in the event loop. With a call
+        still running (its caller was cancelled), the cleanup is put off
+        until that call ends, in a task this helper keeps; ``finish``
+        returns at once and ``wait_idle`` waits for it.
 
         Args:
-            cleanup: Releases the resource, such as a file's ``close``.
+            cleanup: Releases the resource.
+            blocking: Whether the cleanup blocks; ``False`` runs it in
+                the event loop, as code that must not leave its thread
+                (a change to shared state) needs.
             error: The exception that ends the work, if any; a failing
                 cleanup is added to it as a note instead of hiding it.
 
         Raises:
-            Exception: Whatever the cleanup raises when it runs now and
-                there is no ``error`` to keep it, or that error is a
+            Exception: Whatever a cleanup that runs now raises when there
+                is no ``error`` to keep it, or that error is a
                 ``GeneratorExit``, which nobody would see.
         """
         running = self._running
 
         if running is not None and not running.done():
-            running.add_done_callback(lambda _: cleanup())
+            self._finishing = asyncio.create_task(
+                self._finish_after(running, cleanup, blocking=blocking)
+            )
+            self._finishing.add_done_callback(
+                lambda task: self._finished(task, error)
+            )
             return
 
         try:
-            cleanup()
+            if blocking:
+                await self.run(cleanup)
+            else:
+                cleanup()
         except Exception as exc:
             if error is None or isinstance(error, GeneratorExit):
                 raise
             error.add_note(f"Releasing the resource also failed: {exc!r}")
+
+    @staticmethod
+    async def _finish_after(
+        running: asyncio.Task[Any],
+        cleanup: Callable[[], object],
+        *,
+        blocking: bool,
+    ) -> None:
+        """Run a put-off cleanup once the running call has ended.
+
+        Args:
+            running: The call still running.
+            cleanup: Releases the resource.
+            blocking: Whether to run the cleanup in a worker thread.
+        """
+        await asyncio.wait({running})
+
+        if blocking:
+            await asyncio.to_thread(cleanup)
+        else:
+            cleanup()
+
+    def _abandoned(self, task: asyncio.Task[Any]) -> None:
+        """Report how a call whose caller was cancelled ended, if it failed.
+
+        Args:
+            task: The call.
+        """
+        if task.cancelled():
+            return
+
+        exc = task.exception()
+
+        if exc is not None:
+            _report("A call whose caller was cancelled failed", exc)
+
+    def _finished(
+        self,
+        task: asyncio.Task[None],
+        error: BaseException | None,
+    ) -> None:
+        """Report how a put-off cleanup ended, if it did not succeed.
+
+        Args:
+            task: The cleanup.
+            error: The exception that ended the work, which gets a note.
+        """
+        if task.cancelled():
+            message = "Releasing the resource was cancelled before it ran"
+            failure: BaseException = asyncio.CancelledError(message)
+        else:
+            exc = task.exception()
+
+            if exc is None:
+                return
+
+            message = "Releasing the resource also failed"
+            failure = exc
+
+        if error is not None and not isinstance(error, GeneratorExit):
+            error.add_note(f"{message}: {failure!r}")
+
+        _report(message, failure)
+
+
+def _report(message: str, exc: BaseException) -> None:
+    """Report a failure that no caller can receive any more.
+
+    Args:
+        message: What failed.
+        exc: The failure.
+    """
+    asyncio.get_running_loop().call_exception_handler(
+        {"message": f"ThreadWork: {message}", "exception": exc}
+    )
 
 
 async def open_file(
@@ -179,8 +294,8 @@ async def open_file(
     """Open a binary file without blocking the event loop.
 
     The opening runs in a worker thread, which goes on when the caller is
-    cancelled; a file it opens after that is closed at once, so a
-    cancelled open leaves no file open.
+    cancelled; a file it opens after that is closed, in the thread too,
+    so a cancelled open leaves no file open.
 
     Args:
         path: The file to open.
@@ -189,27 +304,29 @@ async def open_file(
     Returns:
         The open file.
     """
-    opening = asyncio.create_task(
-        asyncio.to_thread(Path(path).open, mode),
-    )
+    work = ThreadWork()
+    opened: list[BinaryIO] = []
+
+    def open_binary() -> BinaryIO:
+        """Open the file and keep it for a cancelled caller.
+
+        Returns:
+            The open file.
+        """
+        file = Path(path).open(mode)  # noqa: SIM115
+        opened.append(file)
+        return file
+
+    def close_opened() -> None:
+        """Close the file the thread opened, if it did."""
+        for file in opened:
+            file.close()
 
     try:
-        return await asyncio.shield(opening)
-    except asyncio.CancelledError:
-        opening.add_done_callback(_close_opened)
+        return await work.run(open_binary)
+    except asyncio.CancelledError as exc:
+        await work.finish(close_opened, error=exc)
         raise
-
-
-def _close_opened(opening: asyncio.Task[BinaryIO]) -> None:
-    """Close the file an abandoned ``open_file`` opened, if it did.
-
-    Args:
-        opening: The task of the opening.
-    """
-    if opening.cancelled() or opening.exception() is not None:
-        return
-
-    opening.result().close()
 
 
 @dataclass(slots=True)
@@ -544,10 +661,10 @@ class PathFile(ChunkedFile):
             while chunk := await work.run(file.read, self.chunk_size):
                 yield chunk
         except BaseException as exc:
-            work.finish(file.close, error=exc)
+            await work.finish(file.close, error=exc)
             raise
 
-        work.finish(file.close)
+        await work.finish(file.close)
 
 
 class IOFile(ChunkedFile):
@@ -657,7 +774,9 @@ class IOFile(ChunkedFile):
         finally:
             lease.ended = True
             stream = self.file
-            lease.work.finish(lambda: _READERS.pop(stream))
+            await lease.work.finish(
+                lambda: _READERS.pop(stream), blocking=False
+            )
 
 
 class StreamFile(InputFile):

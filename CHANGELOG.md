@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-02
+
+### Fixed
+
+- A file closed after a cancelled read or write (`PathFile`,
+  `Stream.save`, a cancelled `open`) was closed in the event loop,
+  where a flush could block every other task; it is closed in the
+  worker thread now.
+- A close put off until a cancelled call ended failed silently into
+  the loop's handler, without the note on the error that ended the
+  work; it now gets the note and is reported as a `ThreadWork`
+  failure.
+- A call that failed after its caller was cancelled (a `read()` that
+  raised later) was dropped without a trace; it is now reported
+  through the loop's exception handler.
+- A stream that failed while its upload was still open, with a
+  source that then failed to close, raised the close error instead
+  of its own; the stream's error is raised now, with the close error
+  as a note. `BaseSession.stream` closes the parser and the response
+  the way an upload source is closed.
+
+### Changed
+
+- `closing_source(resource, what=...)` takes any closable resource
+  and names it in the note. `ThreadWork.finish` is a coroutine and
+  takes `blocking=`; both are internal helpers of `types/files.py`.
+
 ## [0.4.2] - 2026-11-02
 
 ### Added
@@ -711,7 +738,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/GrehBan/ai_api/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/GrehBan/ai_api/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/GrehBan/ai_api/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/GrehBan/ai_api/compare/v0.3.0...v0.4.0
