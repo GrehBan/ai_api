@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-02
+
+### Added
+
+- A documentation site, built with MkDocs and Material and published to
+  GitHub Pages: <https://grehban.github.io/ai_api/>. The guide pages
+  were checked against the code; the reference is generated from the
+  docstrings. CI builds it with `mkdocs build --strict`, and
+  `.github/workflows/docs.yml` publishes it from `master`.
+- `[project.urls]` in `pyproject.toml`: documentation, repository and
+  changelog.
+
+### Changed
+
+- `README.md` is short: what the library is, features, installation and
+  the quick start, with links to the site. The rest moved to the guide.
+- Every Python example has a `title="name.py"`, by which
+  `tests/docs/test_examples.py` (was `test_readme.py`) finds it in the
+  README and every page; an example without a title or without a test
+  fails.
+
+### Fixed
+
+- Documentation claims that no longer matched the code, among them:
+  session headers are read on every request, not fixed when the pool
+  is created; methods cannot send `tools` or other parameters they do
+  not list; a text stream in a method is a `ValidationError` at
+  creation; `APIStatusError` also covers in-band failures below 400.
+
 ## [0.4.1] - 2026-11-02
 
 ### Changed
@@ -682,7 +711,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/GrehBan/ai_api/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/GrehBan/ai_api/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/GrehBan/ai_api/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/GrehBan/ai_api/compare/v0.2.0...v0.3.0
