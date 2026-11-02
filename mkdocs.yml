@@ -1,0 +1,116 @@
+site_name: ai-api
+site_description: Async-first toolkit for building typed HTTP API clients.
+site_url: https://grehban.github.io/ai_api/
+repo_url: https://github.com/GrehBan/ai_api
+repo_name: GrehBan/ai_api
+edit_uri: edit/master/docs/
+copyright: MIT License
+
+strict: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+not_in_nav: |
+  /testing-plan.md
+  /sse-ndjson-plan.md
+
+exclude_docs: |
+  testing-plan-stages.png
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          inventories:
+            - https://docs.python.org/3/objects.inv
+          options:
+            docstring_style: google
+            extensions: []
+            members_order: source
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            show_if_no_docstring: false
+            filters: ["!^_"]
+            summary: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - Guide:
+      - How a request flows: guide/request-flow.md
+      - Methods: guide/methods.md
+      - Uploads: guide/uploads.md
+      - Streaming: guide/streaming.md
+      - Errors and retries: guide/errors.md
+      - Sessions: guide/sessions.md
+      - Providers: guide/providers.md
+      - Shared generation: guide/generation.md
+      - Resources and use cases: guide/resources.md
+      - Extending: guide/extending.md
+      - Design: guide/design.md
+  - Reference:
+      - ai_api: reference/index.md
+      - types: reference/types.md
+      - methods: reference/methods.md
+      - http: reference/http.md
+      - response: reference/response.md
+      - session: reference/session.md
+      - client: reference/client.md
+      - adapters: reference/adapters.md
+      - resources: reference/resources.md
+      - serialization: reference/serialization.md
+      - providers.openai: reference/openai.md
+      - providers.anthropic: reference/anthropic.md
+  - Shared field mapping: unification.md
+  - Development: development.md
+  - Changelog: changelog.md

@@ -1,4 +1,10 @@
-"""Block L: the README examples run against a local server."""
+"""Block L: the documentation examples run against a local server.
+
+Every ```` ```python ```` block of ``README.md`` and of the pages in
+``docs/`` has a ``title="name.py"``; the tests find blocks by it, so a
+block can move between pages, and a block without a title, or one no
+test runs, fails ``test_every_example_is_tested``.
+"""
 
 import ast
 import json
@@ -9,7 +15,7 @@ import types
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -35,10 +41,72 @@ from ai_api.types.base import BaseAPIType
 from ai_api.types.requests import GenerationRequest
 from tests.conftest import LocalAPI, Recorder, Reply
 
-README = Path(__file__).parents[2] / "README.md"
-BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
+ROOT = Path(__file__).parents[2]
+HISTORICAL: Final = frozenset({"testing-plan.md", "sse-ndjson-plan.md"})
+"""Records of old plans, not documentation: their code is not run."""
 
-(
+FENCE: Final = re.compile(
+    r"^```python(?P<info>[^\n]*)\n(?P<code>.*?)^```", re.S | re.M
+)
+TITLE: Final = re.compile(r'title="([^"]+)"')
+
+
+def documentation() -> list[Path]:
+    """Return the README and every page of the site."""
+    pages = sorted((ROOT / "docs").rglob("*.md"))
+    return [ROOT / "README.md"] + [
+        page for page in pages if page.name not in HISTORICAL
+    ]
+
+
+def collect() -> tuple[dict[str, tuple[Path, str]], list[str]]:
+    """Find the python blocks by title; list what is wrong."""
+    blocks: dict[str, tuple[Path, str]] = {}
+    problems: list[str] = []
+
+    for path in documentation():
+        where = path.relative_to(ROOT).as_posix()
+
+        for match in FENCE.finditer(path.read_text("utf-8")):
+            title = TITLE.search(match["info"])
+
+            if title is None:
+                problems.append(f"{where}: a python block without a title")
+                continue
+
+            name = title.group(1)
+
+            if name in blocks:
+                problems.append(f"{where}: a second block {name!r}")
+
+            blocks[name] = (path, match["code"])
+
+    return blocks, problems
+
+
+BLOCKS, PROBLEMS = collect()
+
+QUICK_START: Final = "quick_start.py"
+INHERITANCE: Final = "inheritance.py"
+DATES: Final = "dates.py"
+QUERY: Final = "query.py"
+ALIASES: Final = "aliases.py"
+PATH_PARAMS: Final = "path_params.py"
+UPLOADS: Final = "uploads.py"
+STREAMING: Final = "streaming.py"
+EVENTS: Final = "events.py"
+RESTART: Final = "restart.py"
+HANDLING: Final = "handling.py"
+RESOLVER: Final = "resolver.py"
+AUTH: Final = "auth.py"
+CALL_OPTIONS: Final = "call_options.py"
+CLIENT: Final = "client.py"
+OPENAI_RESPONSES: Final = "openai_responses.py"
+ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
+SHARED_GENERATION: Final = "shared_generation.py"
+RESOURCES: Final = "resources.py"
+
+TESTED: Final = (
     QUICK_START,
     INHERITANCE,
     DATES,
@@ -58,7 +126,8 @@ BLOCKS = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), re.S)
     ANTHROPIC_MESSAGES,
     SHARED_GENERATION,
     RESOURCES,
-) = range(19)
+)
+"""The title of every example a test below runs."""
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -81,7 +150,7 @@ async def chunks() -> AsyncIterator[bytes]:
 
 
 class Examples:
-    """Runs README blocks in one module, like a reader pasting them."""
+    """Runs example blocks in one module, like a reader pasting them."""
 
     def __init__(self, module: types.ModuleType) -> None:
         self.module = module
@@ -89,17 +158,19 @@ class Examples:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.module, name)
 
-    async def run(self, *indexes: int) -> list[Any]:
+    async def run(self, *titles: str) -> list[Any]:
         """Run blocks in order; return values of top-level expressions."""
         values: list[Any] = []
 
-        for index in indexes:
-            for statement in ast.parse(BLOCKS[index]).body:
-                values.append(await self._run(statement))
+        for title in titles:
+            path, code = BLOCKS[title]
+
+            for statement in ast.parse(code).body:
+                values.append(await self._run(statement, path))
 
         return values
 
-    async def _run(self, statement: ast.stmt) -> Any:
+    async def _run(self, statement: ast.stmt, path: Path) -> Any:
         if is_asyncio_run(statement):
             # The caller awaits ``main()`` itself, inside the test's loop.
             return None
@@ -112,7 +183,7 @@ class Examples:
         )
         code = compile(
             tree,
-            str(README),
+            str(path),
             "eval" if is_expression else "exec",
             flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
         )
@@ -158,12 +229,13 @@ def examples(
 
 
 def test_every_example_is_tested() -> None:
-    # A new ```python block needs a test here.
-    assert len(BLOCKS) == 19
+    # A new ```python block needs a title and a test here.
+    assert PROBLEMS == []
+    assert sorted(BLOCKS) == sorted(TESTED)
 
 
 def test_quick_start_ends_with_asyncio_run() -> None:
-    last = ast.parse(BLOCKS[QUICK_START]).body[-1]
+    last = ast.parse(BLOCKS[QUICK_START][1]).body[-1]
 
     assert ast.unparse(last) == "asyncio.run(main())"
 

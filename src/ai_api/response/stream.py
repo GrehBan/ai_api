@@ -7,12 +7,11 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Self, overload
 
-import aiofiles
-
 from ai_api.http.exceptions.transport import (
     APIStreamInterruptedError,
     APITransportError,
 )
+from ai_api.types.files import ThreadWork, open_file
 
 
 class Stream[T]:
@@ -118,7 +117,9 @@ class Stream[T]:
     ) -> int:
         """Write a byte stream to a file without buffering it in memory.
 
-        Only available on ``Stream[bytes]``.
+        Only available on ``Stream[bytes]``. Opening, writing and closing
+        run in a worker thread; after a cancellation the file is closed
+        once the call running there is over.
 
         Args:
             path: Destination file; it is created or overwritten.
@@ -134,11 +135,18 @@ class Stream[T]:
         """
         self._check_open()
         written = 0
+        file = await open_file(path, "wb")
+        work = ThreadWork()
 
-        async with aiofiles.open(path, "wb") as file:
+        try:
             async for chunk in self:
-                await file.write(chunk)
+                await work.run(file.write, chunk)
                 written += len(chunk)
+
+            await work.run(file.close)
+        except BaseException as exc:
+            work.finish(file.close, error=exc)
+            raise
 
         return written
 

@@ -7,7 +7,7 @@ import inspect
 import io
 import math
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import BytesPayload, FormData
@@ -18,54 +18,29 @@ from ai_api.http.headers import JSON_CONTENT_TYPE
 from ai_api.serialization.json import JsonDumps, dumps
 from ai_api.serialization.normalize import BodyNormalizer
 from ai_api.serialization.values import scalar_text
-from ai_api.types.files import BytesFile, InputFile
+from ai_api.types.files import BytesFile, InputFile, closing_source
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from ai_api.serialization.protocols import IValueFormatter
 
 
-@asynccontextmanager
-async def _closing[T](
-    source: AsyncIterator[T],
-) -> AsyncGenerator[AsyncIterator[T]]:
-    """Close an upload source when it is done, if it can be closed.
-
-    ``InputFile.open()`` may return any async iterator, so the source is
-    closed by ``aclose()`` when it has one (a generator, for example),
-    else by ``close()``, whose result is awaited when it is awaitable (an
-    ``aiofiles`` file, for example); never by both.
-
-    Args:
-        source: The iterator ``InputFile.open()`` returned.
-
-    Yields:
-        The same iterator.
-    """
-    try:
-        yield source
-    finally:
-        for name in ("aclose", "close"):
-            close = getattr(source, name, None)
-
-            if callable(close):
-                result = close()
-
-                if inspect.isawaitable(result):
-                    await result
-
-                break
-
-
-async def _read_source(file: InputFile) -> AsyncGenerator[bytes]:
+async def _read_source(
+    file: InputFile,
+    source: AsyncIterator[bytes],
+) -> AsyncGenerator[bytes]:
     """Read an upload, marking failures of its source.
 
     aiohttp reports any error raised while it writes the body as a
     connection error, which would be retried. Wrapping it here lets the
     session tell a broken source from a broken connection. The source is
-    closed when the reading ends, also when it is cut short.
+    closed by ``closing_source`` when the reading ends, also when it is
+    cut short; a cancellation goes through as it is.
 
     Args:
-        file: The file to read.
+        file: The file being read.
+        source: The iterator ``file.open()`` returned.
 
     Yields:
         Chunks of the file.
@@ -74,7 +49,7 @@ async def _read_source(file: InputFile) -> AsyncGenerator[bytes]:
         APIRequestError: If the source fails, also while it is closed.
     """
     try:
-        async with _closing(file.open()) as source:
+        async with closing_source(source):
             async for chunk in source:
                 yield chunk
     except Exception as exc:
@@ -83,21 +58,54 @@ async def _read_source(file: InputFile) -> AsyncGenerator[bytes]:
         ) from exc
 
 
-async def _close_reader(reader: AsyncGenerator[bytes]) -> None:
+async def _close_reader(
+    reader: AsyncGenerator[bytes],
+    file: InputFile,
+    source: AsyncIterator[bytes],
+    error: BaseException | None,
+) -> None:
     """Close an upload reader once nothing is running it.
 
     aiohttp does not close the iterator of a body it stops writing; it
     cancels the writing task without waiting for it. Until that task has
     taken the cancellation, the reader counts as running and refuses
-    ``aclose()``.
+    ``aclose()``. A reader that never started (the request failed before
+    its body was sent) has not run its body, so its source is closed
+    here.
 
     Args:
         reader: A reader made by ``_read_source``.
+        file: The file being read.
+        source: The iterator the reader reads.
+        error: The exception that ends the attempt, if any; a failing
+            close is added to it as a note instead of hiding it.
+
+    Raises:
+        APIRequestError: If the source fails to close and the attempt has
+            no exception of its own.
     """
+    started = inspect.getasyncgenstate(reader) != inspect.AGEN_CREATED
+
     while inspect.getasyncgenstate(reader) == inspect.AGEN_RUNNING:
         await asyncio.sleep(0)
 
-    await reader.aclose()
+    try:
+        await reader.aclose()
+
+        if not started:
+            try:
+                async with closing_source(source):
+                    pass
+            except Exception as exc:
+                raise APIRequestError(
+                    f"Failed to close upload {file.filename!r}: {exc}"
+                ) from exc
+    except Exception as close_error:
+        if error is None:
+            raise
+        error.add_note(
+            f"Closing upload {file.filename!r} also failed: {close_error!r}"
+        )
 
 
 class AiohttpBodyBuilder:
@@ -154,7 +162,8 @@ class AiohttpBodyBuilder:
                 infinite, the formatter rejects a value, or
                 ``BodyFormat.NONE`` is given a non-empty body, which would
                 be dropped.
-            APIRequestError: If a file to upload does not exist.
+            APIRequestError: If a file to upload does not exist or
+                cannot be opened.
         """
         if body_format is BodyFormat.NONE:
             if body:
@@ -356,9 +365,10 @@ class AiohttpBodyBuilder:
     ) -> None:
         """Add a file part to a multipart form.
 
-        A ``BytesFile`` is sent with its length; any other file is read
-        by a reader registered on ``uploads``, so the reader is closed
-        when the attempt ends.
+        A ``BytesFile`` is sent with its length; any other file is opened
+        now and read by a reader registered on ``uploads``, so the reader
+        and its source are closed when the attempt ends, also when the
+        body is never sent.
 
         Args:
             form: The multipart form being built.
@@ -367,7 +377,7 @@ class AiohttpBodyBuilder:
             uploads: The stack the upload reader is registered on.
 
         Raises:
-            APIRequestError: If the file cannot be read.
+            APIRequestError: If the file cannot be read or opened.
         """
         try:
             file.check()
@@ -381,8 +391,35 @@ class AiohttpBodyBuilder:
         if isinstance(file, BytesFile):
             content = file.data
         else:
-            content = _read_source(file)
-            uploads.push_async_callback(_close_reader, content)
+            try:
+                source = file.open()
+            except Exception as exc:
+                raise APIRequestError(
+                    f"Cannot open upload {file.filename!r}: {exc}"
+                ) from exc
+
+            reader = _read_source(file, source)
+
+            async def close(
+                exc_type: type[BaseException] | None,
+                exc: BaseException | None,
+                traceback: TracebackType | None,
+            ) -> bool:
+                """Close the reader when the attempt ends.
+
+                Args:
+                    exc_type: The type of the attempt's exception.
+                    exc: The attempt's exception, if any.
+                    traceback: Its traceback.
+
+                Returns:
+                    ``False``: the exception is never suppressed.
+                """
+                await _close_reader(reader, file, source, exc)
+                return False
+
+            uploads.push_async_exit(close)
+            content = reader
 
         form.add_field(
             key,
