@@ -34,6 +34,7 @@ from ai_api.methods.fields import (
     nested_data_classes,
     none_defaults,
     query_value,
+    serialized_by_hand,
     wrap_streams,
 )
 from ai_api.methods.path import encode_path_value, parse_path_params
@@ -46,7 +47,6 @@ from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.serialization.protocols import IValueFormatter
 from ai_api.serialization.values import BaseValueFormatter
-from ai_api.types.base import REQUEST_CONTEXT
 from ai_api.types.protocols import IEventMatcher
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
@@ -355,7 +355,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         only together with the ``MISSING`` default: a required field that
         takes it could be left out of a request, and a ``MISSING``
         default that the type does not take is not a value of the field.
-        Fields excluded from dumps are never sent and not checked.
+        Fields excluded from dumps are never sent and not checked, nor
+        is a type with a ``PlainSerializer``, which decides what is sent.
 
         The message is kept in ``__definition_error__``: a class that
         completes at its first use stays usable to Pydantic after this
@@ -395,6 +396,9 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                     f"field {name!r} defaults to MISSING, which its type "
                     "does not take; add MISSING to the type"
                 )
+
+            if serialized_by_hand(field.metadata):
+                continue
 
             for owner in nested_data_classes(field.annotation):
                 if nulls := none_defaults(owner):
@@ -628,15 +632,12 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         Returns:
             All fields except path and query parameters, keyed by alias:
             a field left ``MISSING`` is not sent, and ``None`` is sent as
-            ``null``, also nested. A model of this library put into the
-            body at run time leaves out its fields that hold ``None`` by
-            default (see ``REQUEST_CONTEXT``).
+            ``null``, also nested, in a model put into the body too.
         """
         return self.model_dump(
             exclude=set(self.__request_query__ | self.__request_path_params__),
             by_alias=True,
             mode="python",
-            context=REQUEST_CONTEXT,
         )
 
 

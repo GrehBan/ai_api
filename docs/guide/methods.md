@@ -91,11 +91,10 @@ Search(query="cats", cursor=None).get_body_map()
 # {"query": "cats", "cursor": None}, sent as "cursor": null
 ```
 
-A model of this library that a field typed `Any` holds at run time, such as a response item sent back in the next request, keeps the shape it came in: its fields that hold `None` by default (absent in the response) are left out, and the rest are sent as they are.
-
 Some consequences that are easy to miss:
 
-- **Only `BaseAPIType` keeps its shape.** The rule lives in `BaseAPIType`'s serializer. A plain Pydantic `BaseModel` put into the body, or a model you dumped yourself with `model_dump()` and passed as a dict, sends every `None` field as `null`. A subclass of `BaseAPIType` that declares its own `@model_serializer` replaces the library's one (Pydantic keeps one per model), so it sends `null` too.
+- **A model in the body sends `None` as `null` too.** A model that a field typed `Any` holds at run time is dumped as Pydantic dumps it, so a response item sent back in the next request sends `null` for every field that was absent from the response. To send it back as it came, dump it yourself: `item.model_dump(by_alias=True, exclude_unset=True)` keeps exactly the fields the response had, an explicit `null` included.
+- **A `PlainSerializer` decides what is sent.** A type with one, such as `Annotated[Item, PlainSerializer(lambda item: item.id)]`, is not looked into for `None` defaults: the model is never dumped. A `WrapSerializer` may call the default dump, so its type is looked into as usual.
 - **`MISSING` is truthy.** `bool(MISSING)` is `True`, so `if request.instructions:` holds for a field that was not given. Compare with `is MISSING` (or `is not MISSING`), as the library's adapters do.
 - **No `null` by default.** A field cannot default to `None`, so a field that should send `null` unless told otherwise is declared without a default (`x: int | None`) and given `None` explicitly. That is deliberate: the request then shows that it sends `null`.
 

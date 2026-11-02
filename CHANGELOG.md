@@ -45,10 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The OpenAI and Anthropic request fields follow the providers'
   schemas: OpenAI's optional fields take `None` (sent as `null`),
   Anthropic's `system`, `metadata` and `stop_sequences` do not.
-- A model of the library put into a request body at run time, such
-  as a response item sent back, leaves out its fields that hold
-  `None` by default, as before; its other `None` fields are sent as
-  `null`.
+- **Breaking:** a model put into a request body at run time, such as
+  a response item sent back, sends its `None` fields as `null`; until
+  now they were dropped. Dump it with
+  `model_dump(by_alias=True, exclude_unset=True)` to send exactly the
+  fields the response had.
+- Shared requests validate assignments: `request.instructions = None`
+  raises `ValidationError`, as the constructor does.
+- A type with a `PlainSerializer` is not looked into for `None`
+  defaults: the serializer decides what is sent.
 
 ### Added
 
@@ -57,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The wire-contract tests check every provider method field against
   the request schema: `None` where `null` is allowed, `MISSING` only
   where the field is optional.
+
+### Fixed
+
+- `AnthropicGenerationAdapter` given `metadata=None` (through
+  `model_copy`, which validates nothing) raised a bare `TypeError`;
+  it raises `RequestValidationError`, as for the other fields.
 
 ## [0.4.4] - 2026-11-02
 

@@ -475,6 +475,19 @@ def test_request_takes_no_none(field: str) -> None:
     assert field not in GenerationRequest(model="m", input="i").model_dump()
 
 
+@pytest.mark.parametrize(
+    "field", ["instructions", "max_output_tokens", "metadata"]
+)
+def test_an_assignment_is_validated(field: str) -> None:
+    request = GenerationRequest(model="m", input="i")
+
+    with pytest.raises(ValidationError, match=field):
+        setattr(request, field, None)
+
+    request.instructions = "Be brief"
+    assert request.instructions == "Be brief"
+
+
 def test_request_rejects_unknown_fields_and_bad_limits() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden"):
         GenerationRequest.model_validate(

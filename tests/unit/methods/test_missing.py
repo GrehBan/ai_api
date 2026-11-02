@@ -14,7 +14,14 @@ from typing import (
 )
 
 import pytest
-from pydantic import MISSING, BaseModel, Field, PydanticUserError
+from pydantic import (
+    MISSING,
+    BaseModel,
+    Field,
+    PlainSerializer,
+    PydanticUserError,
+    WrapSerializer,
+)
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from ai_api.enums import BodyFormat
@@ -244,20 +251,33 @@ def test_typeddict_keys_not_given_are_left_out() -> None:
     }
 
 
-def test_a_model_sent_back_keeps_the_shape_it_came_in() -> None:
-    # A field that is None by default was absent from the response;
-    # a required one that is None was null in it.
-    absent = Reply.model_validate({"text": "t", "seed": None})
-    given = Reply(text="t", note="n", seed=1)
+def test_a_model_in_the_body_sends_none_as_null() -> None:
+    # No exception for models: None is null here too, also for a field
+    # that was absent from the response the model came from.
+    reply = Reply.model_validate({"text": "t", "seed": None})
 
-    assert Send(item=absent).get_body_map() == {
-        "item": {"text": "t", "seed": None}
+    assert Send(item=reply).get_body_map() == {
+        "item": {"text": "t", "note": None, "seed": None}
     }
-    assert Send(item=[given]).get_body_map() == {
-        "item": [{"text": "t", "note": "n", "seed": 1}]
+
+
+def test_exclude_unset_sends_back_what_came() -> None:
+    # The documented way to send a response item back as it came: the
+    # absent field stays absent, an explicit null stays null.
+    absent = Reply.model_validate({"text": "t", "seed": None})
+    explicit = Reply.model_validate({"text": "t", "note": None, "seed": 1})
+
+    assert Send(
+        item=[
+            absent.model_dump(by_alias=True, exclude_unset=True),
+            explicit.model_dump(by_alias=True, exclude_unset=True),
+        ]
+    ).get_body_map() == {
+        "item": [
+            {"text": "t", "seed": None},
+            {"text": "t", "note": None, "seed": 1},
+        ]
     }
-    # Outside a request the model dumps as Pydantic does.
-    assert absent.model_dump() == {"text": "t", "note": None, "seed": None}
 
 
 def test_missing_is_left_out_of_the_query() -> None:
@@ -503,3 +523,43 @@ def test_a_cycle_of_aliases_ends_the_missing_lookup() -> None:
     # The lookup stops at an alias it has seen instead of recursing.
     assert names_missing(Spun)
     assert not names_missing(Round)
+
+
+ByName = Annotated[Loose, PlainSerializer(lambda value: value.name)]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        pytest.param(ByName, id="field"),
+        pytest.param(list[ByName], id="nested"),
+    ],
+)
+def test_a_plain_serializer_decides_what_is_sent(annotation: Any) -> None:
+    # The model is never dumped, so its None default is never sent.
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        fields={"data": annotation},
+        __request_body_format__=BodyFormat.JSON,
+    )
+
+    loose = Loose(name="n")
+    value = loose if annotation is ByName else [loose]
+    expected = "n" if annotation is ByName else ["n"]
+    method = method_cls.model_validate({"data": value})
+    assert method.get_body_map() == {"data": expected}
+
+
+def test_a_wrap_serializer_is_still_looked_into() -> None:
+    # It may call the default dump, which sends the model's defaults.
+    with pytest.raises(TypeError, match="can hold Loose"):
+        make_method(
+            BaseAPIMethod[bytes],
+            fields={
+                "data": Annotated[
+                    Loose,
+                    WrapSerializer(lambda value, handler: handler(value)),
+                ]
+            },
+            __request_body_format__=BodyFormat.JSON,
+        )

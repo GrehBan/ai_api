@@ -273,7 +273,10 @@ class AnthropicGenerationAdapter(
                 ``user_id``.
         """
         check_last_turn(request, self.provider)
-        if request.metadata is not MISSING and (
+        # Only a dict has keys to check; anything else that slipped past
+        # the request's validation (None through model_copy, say) is left
+        # to the method's, which raises RequestValidationError for it.
+        if isinstance(request.metadata, Mapping) and (
             unknown := sorted(set(request.metadata) - METADATA_KEYS)
         ):
             message = (

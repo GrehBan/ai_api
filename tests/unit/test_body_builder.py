@@ -107,7 +107,7 @@ def test_json_is_normalized(builder: AiohttpBodyBuilder) -> None:
 
     assert json_of(build(builder, body, BodyFormat.JSON, ISO)) == {
         "color": "red",
-        "point": {"x": 1},
+        "point": {"x": 1, "label": None},
         "at": "2026-01-02T03:04:05Z",
         "nothing": None,
         "items": [1, None, "a"],

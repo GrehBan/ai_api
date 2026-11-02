@@ -5,7 +5,13 @@ from __future__ import annotations
 import dataclasses
 import io
 import types
-from collections.abc import Callable, Collection, Iterator, Mapping
+from collections.abc import (
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -21,7 +27,7 @@ from typing import (
     is_typeddict,
 )
 
-from pydantic import MISSING, BaseModel
+from pydantic import MISSING, BaseModel, PlainSerializer
 
 from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import scalar_text
@@ -34,6 +40,9 @@ if TYPE_CHECKING:
 
 _SEQUENCES: Final = (list, tuple, set, frozenset)
 """Values sent as a repeated query key."""
+
+_NOT_DUMPED: Final = object()
+"""What ``_see_through`` returns for a type whose serializer decides."""
 
 
 def is_mapping_type(annotation: Any) -> bool:
@@ -197,6 +206,21 @@ def _names_missing(annotation: Any, seen: set[int]) -> bool:
     return False
 
 
+def serialized_by_hand(metadata: Iterable[Any]) -> bool:
+    """Tell whether a type's metadata replaces how it is dumped.
+
+    A ``PlainSerializer`` decides alone what is sent, so the type it
+    sits on is not dumped and its defaults are never sent.
+
+    Args:
+        metadata: The ``Annotated`` metadata of a type, or a field's.
+
+    Returns:
+        ``True`` if a ``PlainSerializer`` is among it.
+    """
+    return any(isinstance(item, PlainSerializer) for item in metadata)
+
+
 def nested_data_classes(annotation: Any) -> Iterator[type[Any]]:
     """Find the classes of data an annotation can hold, at any depth.
 
@@ -204,7 +228,9 @@ def nested_data_classes(annotation: Any) -> Iterator[type[Any]]:
     a Pydantic model or dataclass, a standard dataclass or a
     ``NamedTuple``. Unions, ``Annotated``, generic containers, type
     aliases, ``NewType``, the keys of a ``TypedDict`` and the fields of
-    the classes found are looked into. Each class, ``TypedDict`` and
+    the classes found are looked into; a type with a
+    ``PlainSerializer`` is not, since the serializer decides what is
+    sent. Each class, ``TypedDict`` and
     type alias is looked into once, so a recursive one (``type JSON =
     dict[str, JSON] | ...``) ends: a cycle is legal in types, so it
     stops the walk instead of raising.
@@ -233,8 +259,9 @@ def _nested_data_classes(
     Yields:
         Every class of data not seen before.
     """
-    if isinstance(annotation, NewType):
-        yield from _nested_data_classes(annotation.__supertype__, seen)
+    annotation = _see_through(annotation)
+
+    if annotation is _NOT_DUMPED:
         return
 
     if isinstance(annotation, TypeAliasType) or _is_class(annotation):
@@ -264,6 +291,28 @@ def _nested_data_classes(
 
     for arg in get_args(annotation):
         yield from _nested_data_classes(arg, seen)
+
+
+def _see_through(annotation: Any) -> Any:
+    """Return the type the walk looks into for an annotation.
+
+    Args:
+        annotation: An annotation or a part of one.
+
+    Returns:
+        The type behind a ``NewType``, the annotation itself otherwise,
+        or ``_NOT_DUMPED`` for a type with a ``PlainSerializer``, whose
+        serializer decides what is sent.
+    """
+    while isinstance(annotation, NewType):
+        annotation = annotation.__supertype__
+
+    if get_origin(annotation) is Annotated and serialized_by_hand(
+        get_args(annotation)[1:]
+    ):
+        return _NOT_DUMPED
+
+    return annotation
 
 
 def _is_class(annotation: Any) -> bool:

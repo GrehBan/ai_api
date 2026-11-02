@@ -11,7 +11,7 @@ from pydantic import MISSING
 
 from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import TEMPORAL_TYPES, format_temporal
-from ai_api.types.base import REQUEST_CONTEXT, BaseAPIType
+from ai_api.types.base import BaseAPIType
 from ai_api.types.files import InputFile
 
 if TYPE_CHECKING:
@@ -65,11 +65,9 @@ class BodyNormalizer:
     Nested models are dumped by alias, enums (also dict keys) are
     unwrapped, and dates, times and durations are written by the method's
     ``IValueFormatter``. ``None`` is kept everywhere, for the encoder to
-    send as ``null``; a field the request leaves out is not in the body
-    at all. A model of this library leaves out its fields that hold
-    ``None`` by default, as in a method's body (``REQUEST_CONTEXT``).
-    Files and binary streams are passed through unchanged for the body
-    builder to handle.
+    send as ``null``, also in a nested model; a field the request leaves
+    out is not in the body at all. Files and binary streams are passed
+    through unchanged for the body builder to handle.
     """
 
     def normalize_mapping(
@@ -160,7 +158,6 @@ class BodyNormalizer:
                     mode="python",
                     by_alias=True,
                     warnings=False,
-                    context=REQUEST_CONTEXT,
                 ),
                 formatter,
                 parents,

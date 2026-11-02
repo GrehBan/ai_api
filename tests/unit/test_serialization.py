@@ -102,21 +102,19 @@ def test_none_is_kept_as_null(normalizer: BodyNormalizer) -> None:
     }
 
 
-def test_a_model_leaves_out_its_unset_defaults(
-    normalizer: BodyNormalizer,
-) -> None:
-    # A response model sent back keeps the shape it came in: a field
-    # that is None by default was absent, a set one is kept.
+def test_a_model_sends_none_as_null(normalizer: BodyNormalizer) -> None:
+    # One rule everywhere: a model in the body is dumped as Pydantic
+    # dumps it, None as null.
     body = {
-        "absent": Inner(name="n"),
+        "plain": Inner(name="n"),
         "given": Inner(name="m", note="x"),
         "nested": [{"inner": Inner(name="k")}],
     }
 
     assert normalizer.normalize_mapping(body, ISO) == {
-        "absent": {"name": "n"},
+        "plain": {"name": "n", "note": None},
         "given": {"name": "m", "note": "x"},
-        "nested": [{"inner": {"name": "k"}}],
+        "nested": [{"inner": {"name": "k", "note": None}}],
     }
 
 
@@ -223,7 +221,11 @@ def test_nested_model_becomes_dict(normalizer: BodyNormalizer) -> None:
     value = Outer(inner=Inner(name="x"), tags=["a"], color=Color.RED)
 
     assert normalizer.normalize_mapping({"model": value}, ISO) == {
-        "model": {"inner": {"name": "x"}, "tags": ["a"], "color": "red"},
+        "model": {
+            "inner": {"name": "x", "note": None},
+            "tags": ["a"],
+            "color": "red",
+        },
     }
 
 
