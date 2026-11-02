@@ -2,7 +2,9 @@
 
 Each layer logs only its own part, so a message is never repeated: the
 session logs a call's start, end and retries, the transport each request
-it sends. Tokens, headers, bodies and query strings never reach a log.
+it sends. Tokens, headers, bodies, query strings, the values of path
+parameters, exception messages and notes, and file names never reach a
+log: any of them may hold a key or a user's data.
 """
 
 from __future__ import annotations
@@ -46,6 +48,13 @@ class Ask(BaseAPIMethod[bytes]):
 
     prompt: str
     secret: str
+
+
+class Fetch(BaseAPIMethod[bytes]):
+    __request_path__ = "/files/{file_id}"
+    __request_method__ = "GET"
+
+    file_id: str
 
 
 class Chunks(BaseStreamMethod[bytes]):
@@ -105,14 +114,25 @@ async def test_secrets_never_reach_a_log(
     recorder: Recorder,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    recorder.reply(Reply(status=503), Reply(body=b"ok"))
+    recorder.reply(Reply(status=503), Reply(body=b"ok"), Reply(body=b"f"))
 
     await session.send_request(Ask(prompt="the prompt", secret="q-secret"))
+    await session.send_request(Fetch(file_id="file-of-a-user"))
     await session.close()
 
     text = caplog.text
-    assert records(caplog)
-    for secret in (TEST_TOKEN, "q-secret", "the prompt", "Authorization"):
+    assert (
+        "ai_api.session.aiohttp",
+        "DEBUG",
+        "Sending GET /files/{file_id}",
+    ) in (records(caplog))
+    for secret in (
+        TEST_TOKEN,
+        "q-secret",
+        "the prompt",
+        "Authorization",
+        "file-of-a-user",
+    ):
         assert secret not in text
 
 
@@ -167,17 +187,20 @@ async def test_a_followed_redirect_is_logged(
     assert (
         "ai_api.session.aiohttp",
         "DEBUG",
-        "Following redirect to /v1/moved",
+        "Following a redirect",
     ) in records(caplog)
+    # The server's path is not logged: it may name a user's data.
+    assert "moved" not in caplog.text
 
 
-async def test_a_retry_shows_the_notes_of_the_error(
+async def test_a_retry_counts_the_notes_of_the_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # The failed attempt is not raised, so its notes (a failing close of
-    # an upload, say) would be lost without the log.
-    error = APIConnectionError("reset")
-    error.add_note("Closing upload 'a.bin' also failed")
+    # The failed attempt is not raised, so the log says it had notes (a
+    # failing close of an upload, say), but not what they say: a note or
+    # the error's message may hold a file path.
+    error = APIConnectionError("reset at /home/user/private.bin")
+    error.add_note("Closing upload 'passport-scan.pdf' also failed")
     session = FakeTransport([error, BufferedResponse(200, {}, b"ok")])
 
     await session.send_request(Ask(prompt="hi", secret="s"))
@@ -185,8 +208,10 @@ async def test_a_retry_shows_the_notes_of_the_error(
     (warning,) = [m for _, level, m in records(caplog) if level == "WARNING"]
     assert warning == (
         "Retrying request after APIConnectionError: attempt=2, delay=0.00s, "
-        "notes=Closing upload 'a.bin' also failed"
+        "notes=1"
     )
+    assert "passport-scan" not in caplog.text
+    assert "private.bin" not in caplog.text
 
 
 def test_a_retry_after_above_the_limit_is_logged(
@@ -265,24 +290,24 @@ class BrokenWriter:
     """A response whose body writer failed after the answer came."""
 
     async def wait_for_close(self) -> None:
-        raise OSError("writer failed")
+        raise OSError("writer failed on /home/user/private.bin")
 
 
 async def test_a_writer_failure_after_the_answer_is_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # aiohttp drops it: the response is already there. It is not raised,
-    # but it is not lost either.
+    # but it is not lost either: its type is logged.
     await wait_for_writer(cast("ClientResponse", BrokenWriter()))
 
     assert records(caplog) == [
         (
             "ai_api.response.aiohttp",
             "DEBUG",
-            "The request body writer failed after the response came",
+            "The request body writer failed after the response came: OSError",
         )
     ]
-    # With the traceback: an intentionally suppressed error.
+    # Not its message or traceback, which may hold a file path.
     (record,) = caplog.records
-    assert record.exc_info is not None
-    assert str(record.exc_info[1]) == "writer failed"
+    assert record.exc_info is None
+    assert "private.bin" not in caplog.text

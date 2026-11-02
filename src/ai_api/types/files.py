@@ -148,11 +148,16 @@ class ThreadWork:
         task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
         self._running = task
 
+        # Waiting does not cancel the task, as shield would not either;
+        # unlike shield (3.14+), it reports nothing itself, so a failure
+        # after a cancel is reported once, by _abandoned.
         try:
-            return await asyncio.shield(task)
+            await asyncio.wait({task})
         except asyncio.CancelledError:
             task.add_done_callback(self._abandoned)
             raise
+
+        return task.result()
 
     async def wait_idle(self) -> None:
         """Wait until no call or cleanup runs; a failure does not raise."""
@@ -746,7 +751,8 @@ class IOFile(ChunkedFile):
                 )
                 raise RuntimeError(message)
 
-            logger.debug("Waiting for a cancelled read of %s", lease.reader)
+            # Not the reader: its file name may itself be personal data.
+            logger.debug("Waiting for a cancelled read of the same stream")
             await lease.work.wait_idle()
 
         if self._start is None and self._opened:

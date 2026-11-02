@@ -48,6 +48,19 @@ def test_several_params() -> None:
     assert path == "/orgs/acme/models/42"
 
 
+def test_the_template_holds_no_values() -> None:
+    # What a log may show: the declared path, never a parameter's value.
+    method_cls = make_method(
+        BaseAPIMethod[bytes],
+        path="/orgs/{org}/files/{file_id}",
+        fields={"org": str, "file_id": str},
+    )
+    method = method_cls.model_validate({"org": "acme", "file_id": "f-1"})
+
+    assert method.request_path == "/orgs/acme/files/f-1"
+    assert method.request_path_template == "/orgs/{org}/files/{file_id}"
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [(Region.EU, "eu-west"), (True, "true"), (False, "false")],

@@ -403,9 +403,13 @@ def patch_open(
     monkeypatch: pytest.MonkeyPatch,
     opener: Callable[[Path, str], Any],
 ) -> None:
-    """Make ``Path.open`` call ``opener`` with the path and the mode."""
+    """Make ``Path.open`` call ``opener`` with the path and the mode.
 
-    def fake_open(path: Path, mode: str = "r") -> Any:
+    Other arguments are ignored: the tests open binary files, and from
+    Python 3.14 ``Path.read_bytes`` passes ``buffering`` too.
+    """
+
+    def fake_open(path: Path, mode: str = "r", *_: Any, **__: Any) -> Any:
         return opener(path, mode)
 
     monkeypatch.setattr(Path, "open", fake_open)
@@ -647,10 +651,13 @@ class SlowStream(io.RawIOBase):
             self.busy = False
 
 
-async def test_the_next_read_waits_for_a_cancelled_one() -> None:
+async def test_the_next_read_waits_for_a_cancelled_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("DEBUG", logger="ai_api")
     content = bytes(range(100))
     stream = SlowStream(content)
-    file = IOFile(stream, chunk_size=10)
+    file = IOFile(stream, filename="passport-scan.pdf", chunk_size=10)
     first = file.open()
 
     async def step() -> bytes:
@@ -672,6 +679,9 @@ async def test_the_next_read_waits_for_a_cancelled_one() -> None:
 
     assert await second == content
     assert stream.overlaps == []
+    # The wait is logged without the reader: a file name can be personal.
+    assert "Waiting for a cancelled read of the same stream" in caplog.text
+    assert "passport-scan" not in caplog.text
 
 
 # StreamFile

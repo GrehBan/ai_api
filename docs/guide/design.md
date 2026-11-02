@@ -43,6 +43,17 @@ The main choices, and the reasons for them. Details are in the sections above.
 - **Files are not models.** `InputFile` is not a `BaseAPIType`, because dumping a model would read and copy the file; files are opened again for every attempt instead.
 - **Layers in one direction.** Packages are ordered core → data and HTTP primitives → methods → response → session → client → adapters → resources → providers, and a module imports only from layers below it, which keeps the core free of providers and transports.
 
+## Versioning
+
+The version follows [Semantic Versioning](https://semver.org/). Before 1.0 the public API is not stable yet, and the rule is:
+
+- a **breaking** change (a public name removed or renamed, a signature, a default, an error type, a wire format or a behaviour that code may rely on) bumps the **minor** version: 0.5.x → 0.6.0;
+- anything else (a fix, an addition, documentation) bumps the **patch**: 0.5.0 → 0.5.1.
+
+Pin the minor version (`ai-api ~= 0.5.0`) to get fixes without breaking changes. Every breaking change is marked **Breaking** in the [changelog](../changelog.md), with how to migrate. From 1.0, breaking changes bump the major version and are announced by a deprecation warning one release before.
+
+The public API is what `ai_api` and the `__all__` of its packages export. Everything else (modules and helpers whose names start with `_`, the internal helper modules such as `ai_api.methods.fields`, log messages) may change in any release. The provider types follow the providers' own schemas, so a field can appear or change when the provider changes it.
+
 ## Limitations and roadmap
 
 - **Streams are not resumed.** SSE `id` and `retry` are parsed and available on `ServerSentEvent` (both are the last value the stream set, as the HTML standard applies them), but a dropped stream is not reconnected on its own; the error reaches your code, which can open it again with `headers={"Last-Event-ID": ...}`. Planned: an opt-in reconnection for servers that replay events. See [Interrupted streams](streaming.md#interrupted-streams).

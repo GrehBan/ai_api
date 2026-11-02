@@ -39,6 +39,11 @@ class IBaseMethod[ResponseT](Protocol):
         ...
 
     @property
+    def request_path_template(self) -> str:
+        """The path as declared, placeholders kept: safe to log."""
+        ...
+
+    @property
     def request_method(self) -> str:
         """HTTP method."""
         ...
