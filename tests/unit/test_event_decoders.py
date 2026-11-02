@@ -7,6 +7,7 @@ import pytest
 from ai_api.response.parse.lines import LineDecoder, LineTooLongError
 from ai_api.response.parse.sse import (
     EventTooLargeError,
+    RetryTooLongError,
     ServerSentEvent,
     SSEDecoder,
 )
@@ -248,6 +249,21 @@ def test_invalid_retry_is_ignored(value: str) -> None:
     assert events_of([f"retry: {value}", "data: x", ""]) == [
         ServerSentEvent(data="x"),
     ]
+
+
+def test_a_retry_python_can_convert_is_kept() -> None:
+    (event,) = events_of(["retry: " + "9" * 4300, "data: x", ""])
+
+    assert event.retry == int("9" * 4300)
+
+
+def test_a_retry_with_more_digits_than_python_converts_is_refused() -> None:
+    # Python refuses to turn more than 4300 digits into an int; the
+    # decoder says so instead of letting a bare ValueError through.
+    decoder = SSEDecoder()
+
+    with pytest.raises(RetryTooLongError, match="4301 digits"):
+        decoder.decode("retry: " + "9" * 4301)
 
 
 def test_retry_is_kept_until_it_is_replaced() -> None:

@@ -440,9 +440,13 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Whether this request may be retried.
 
         ``False`` when ``__retryable__`` is not set or the request carries
-        a file that can be read only once.
+        a file that can be read only once. The fields are looked into
+        one by one, as when streams are wrapped, so a field nested as
+        deep as the limit allows does not count the method as a level.
         """
-        return self.__retryable__ and not has_one_shot_file(self)
+        return self.__retryable__ and not any(
+            has_one_shot_file(value) for _, value in self
+        )
 
     @property
     def response_format(self) -> ResponseFormat:

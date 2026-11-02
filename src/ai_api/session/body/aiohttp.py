@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import io
 import math
-from collections.abc import AsyncIterator, Mapping
-from contextlib import aclosing
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import BytesPayload, FormData
@@ -22,12 +24,45 @@ if TYPE_CHECKING:
     from ai_api.serialization.protocols import IValueFormatter
 
 
-async def _read_source(file: InputFile) -> AsyncIterator[bytes]:
+@asynccontextmanager
+async def _closing[T](
+    source: AsyncIterator[T],
+) -> AsyncGenerator[AsyncIterator[T]]:
+    """Close an upload source when it is done, if it can be closed.
+
+    ``InputFile.open()`` may return any async iterator, so the source is
+    closed by ``aclose()`` when it has one (a generator, for example),
+    else by ``close()``, whose result is awaited when it is awaitable (an
+    ``aiofiles`` file, for example); never by both.
+
+    Args:
+        source: The iterator ``InputFile.open()`` returned.
+
+    Yields:
+        The same iterator.
+    """
+    try:
+        yield source
+    finally:
+        for name in ("aclose", "close"):
+            close = getattr(source, name, None)
+
+            if callable(close):
+                result = close()
+
+                if inspect.isawaitable(result):
+                    await result
+
+                break
+
+
+async def _read_source(file: InputFile) -> AsyncGenerator[bytes]:
     """Read an upload, marking failures of its source.
 
     aiohttp reports any error raised while it writes the body as a
     connection error, which would be retried. Wrapping it here lets the
-    session tell a broken source from a broken connection.
+    session tell a broken source from a broken connection. The source is
+    closed when the reading ends, also when it is cut short.
 
     Args:
         file: The file to read.
@@ -36,18 +71,33 @@ async def _read_source(file: InputFile) -> AsyncIterator[bytes]:
         Chunks of the file.
 
     Raises:
-        APIRequestError: If the source fails.
+        APIRequestError: If the source fails, also while it is closed.
     """
     try:
-        # Use aclosing to ensure the source
-        # is closed after reading, even if an error occurs.
-        async with aclosing(file.open()) as source:
+        async with _closing(file.open()) as source:
             async for chunk in source:
                 yield chunk
     except Exception as exc:
         raise APIRequestError(
             f"Failed to read upload {file.filename!r}: {exc}"
         ) from exc
+
+
+async def _close_reader(reader: AsyncGenerator[bytes]) -> None:
+    """Close an upload reader once nothing is running it.
+
+    aiohttp does not close the iterator of a body it stops writing; it
+    cancels the writing task without waiting for it. Until that task has
+    taken the cancellation, the reader counts as running and refuses
+    ``aclose()``.
+
+    Args:
+        reader: A reader made by ``_read_source``.
+    """
+    while inspect.getasyncgenstate(reader) == inspect.AGEN_RUNNING:
+        await asyncio.sleep(0)
+
+    await reader.aclose()
 
 
 class AiohttpBodyBuilder:
@@ -79,6 +129,8 @@ class AiohttpBodyBuilder:
         body: Mapping[str, Any],
         body_format: BodyFormat,
         formatter: IValueFormatter,
+        *,
+        uploads: AsyncExitStack,
     ) -> dict[str, Any]:
         """Encode the body.
 
@@ -87,6 +139,8 @@ class AiohttpBodyBuilder:
             body_format: How the body must be encoded.
             formatter: The method's ``value_formatter``, which writes the
                 dates, times and durations.
+            uploads: The stack of the attempt; every upload reader is
+                registered on it and closed when the attempt ends.
 
         Returns:
             Keyword arguments for ``ClientSession.request``; empty for
@@ -126,6 +180,7 @@ class AiohttpBodyBuilder:
                     "data": self._build_form(
                         normalized,
                         formatter,
+                        uploads,
                         multipart=False,
                     )
                 }
@@ -135,6 +190,7 @@ class AiohttpBodyBuilder:
                     "data": self._build_form(
                         normalized,
                         formatter,
+                        uploads,
                         multipart=True,
                     )
                 }
@@ -201,6 +257,7 @@ class AiohttpBodyBuilder:
         self,
         body: Mapping[str, Any],
         formatter: IValueFormatter,
+        uploads: AsyncExitStack,
         *,
         multipart: bool,
     ) -> FormData:
@@ -209,6 +266,7 @@ class AiohttpBodyBuilder:
         Args:
             body: Normalized body fields.
             formatter: The method's ``value_formatter``.
+            uploads: The stack the upload readers are registered on.
             multipart: Whether to produce ``multipart/form-data``.
 
         Returns:
@@ -219,7 +277,7 @@ class AiohttpBodyBuilder:
         )
 
         for key, value in body.items():
-            self._add_field(form, key, value, formatter, multipart)
+            self._add_field(form, key, value, formatter, uploads, multipart)
 
         return form
 
@@ -229,6 +287,7 @@ class AiohttpBodyBuilder:
         key: str,
         value: Any,
         formatter: IValueFormatter,
+        uploads: AsyncExitStack,
         multipart: bool,
     ) -> None:
         """Add one body field to the form.
@@ -243,6 +302,7 @@ class AiohttpBodyBuilder:
             key: Field name.
             value: Normalized field value.
             formatter: The method's ``value_formatter``.
+            uploads: The stack the upload readers are registered on.
             multipart: Whether the form is multipart.
 
         Raises:
@@ -265,7 +325,7 @@ class AiohttpBodyBuilder:
                     message = f"Form field {key!r} cannot send nested lists"
                     raise TypeError(message)
 
-                self._add_field(form, key, item, formatter, multipart)
+                self._add_field(form, key, item, formatter, uploads, multipart)
             return
 
         file = InputFile.from_value(value)
@@ -274,23 +334,7 @@ class AiohttpBodyBuilder:
             if not multipart:
                 raise TypeError("Files require multipart encoding")
 
-            try:
-                file.check()
-            except OSError as exc:
-                raise APIRequestError(
-                    f"Cannot read upload {file.filename!r}: {exc}"
-                ) from exc
-
-            form.add_field(
-                key,
-                (
-                    file.data
-                    if isinstance(file, BytesFile)
-                    else _read_source(file)
-                ),
-                filename=file.filename or key,
-                content_type=file.content_type,
-            )
+            self._add_file(form, key, file, uploads)
             return
 
         if isinstance(value, Mapping):
@@ -301,4 +345,48 @@ class AiohttpBodyBuilder:
         form.add_field(
             key,
             scalar_text(value, formatter, label=f"Form field {key!r}"),
+        )
+
+    @staticmethod
+    def _add_file(
+        form: FormData,
+        key: str,
+        file: InputFile,
+        uploads: AsyncExitStack,
+    ) -> None:
+        """Add a file part to a multipart form.
+
+        A ``BytesFile`` is sent with its length; any other file is read
+        by a reader registered on ``uploads``, so the reader is closed
+        when the attempt ends.
+
+        Args:
+            form: The multipart form being built.
+            key: Field name.
+            file: The file to upload.
+            uploads: The stack the upload reader is registered on.
+
+        Raises:
+            APIRequestError: If the file cannot be read.
+        """
+        try:
+            file.check()
+        except OSError as exc:
+            raise APIRequestError(
+                f"Cannot read upload {file.filename!r}: {exc}"
+            ) from exc
+
+        content: bytes | AsyncGenerator[bytes]
+
+        if isinstance(file, BytesFile):
+            content = file.data
+        else:
+            content = _read_source(file)
+            uploads.push_async_callback(_close_reader, content)
+
+        form.add_field(
+            key,
+            content,
+            filename=file.filename or key,
+            content_type=file.content_type,
         )

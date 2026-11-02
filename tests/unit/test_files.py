@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import io
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -234,18 +234,24 @@ def test_a_chunk_size_below_one_is_rejected(
         IOFile(io.BytesIO(b"x"), chunk_size=size)
 
 
-async def test_an_io_file_is_not_read_twice_at_once() -> None:
+@pytest.mark.parametrize("files", ["one", "two"])
+async def test_a_stream_is_not_read_by_two_uploads_at_once(files: str) -> None:
     # Both reads would move the one stream position under each other.
-    file = IOFile(io.BytesIO(b"abcd"), chunk_size=2)
-    first = file.open()
-    assert await anext(first) == b"ab"
+    # The state is the stream's: a raw stream given to two methods is
+    # wrapped in two IOFiles.
+    stream = io.BytesIO(b"abcd")
+    first = IOFile(stream, chunk_size=2)
+    second = first if files == "one" else IOFile(stream, chunk_size=2)
+    reading = first.open()
+    assert isinstance(reading, AsyncGenerator)
+    assert await anext(reading) == b"ab"
 
-    with pytest.raises(RuntimeError, match="concurrently"):
-        await anext(file.open())
+    with pytest.raises(RuntimeError, match="already being read"):
+        await anext(second.open())
 
-    await first.aclose()
+    await reading.aclose()
 
-    assert await read_all(file) == b"abcd"
+    assert await read_all(second) == b"abcd"
 
 
 async def test_non_seekable_io_file_reads_once() -> None:

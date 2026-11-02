@@ -100,9 +100,11 @@ from ai_api.session.base import (
 )
 from ai_api.types.base import (
     BaseAPIType,
+    BaseAPITypeExtra,
 )
 from ai_api.types.files import (
     BytesFile,
+    ChunkedFile,
     InputFile,
     IOFile,
     PathFile,
@@ -141,6 +143,7 @@ __all__ = [
     "BaseAPI",
     "BaseAPIMethod",
     "BaseAPIType",
+    "BaseAPITypeExtra",
     "BaseClient",
     "BaseErrorResolver",
     "BaseProviderClient",
@@ -151,6 +154,7 @@ __all__ = [
     "BillingError",
     "BodyFormat",
     "BytesFile",
+    "ChunkedFile",
     "CompletedEvent",
     "ConflictError",
     "ContentTooLargeError",

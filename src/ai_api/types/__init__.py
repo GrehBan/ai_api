@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from ai_api.types.base import (
     BaseAPIType,
+    BaseAPITypeExtra,
 )
 from ai_api.types.files import (
     BytesFile,
+    ChunkedFile,
     InputFile,
     IOFile,
     PathFile,
@@ -33,9 +35,11 @@ from ai_api.types.unknown import (
 __all__ = [
     "AnyOf",
     "BaseAPIType",
+    "BaseAPITypeExtra",
     "BaseMatcher",
     "BaseUnknown",
     "BytesFile",
+    "ChunkedFile",
     "DONE",
     "DONE_MARKER",
     "EventTypes",

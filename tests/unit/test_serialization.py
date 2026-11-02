@@ -15,9 +15,9 @@ from typing import Any
 import pytest
 from pydantic import Field
 
-from ai_api._traversal import MAX_DEPTH
 from ai_api.serialization.json import dumps, loads
 from ai_api.serialization.normalize import BodyNormalizer
+from ai_api.serialization.traversal import MAX_DEPTH
 from ai_api.serialization.values import (
     BaseValueFormatter,
     Temporal,
