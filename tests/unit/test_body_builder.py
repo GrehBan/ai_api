@@ -26,7 +26,6 @@ from aiohttp import BytesPayload, FormData
 from ai_api.enums import BodyFormat
 from ai_api.http.exceptions.transport import APIRequestError
 from ai_api.serialization.json import JsonDumps, dumps, loads
-from ai_api.serialization.normalize import BodyNormalizer
 from ai_api.serialization.protocols import IValueFormatter
 from ai_api.serialization.traversal import MAX_DEPTH
 from ai_api.serialization.values import BaseValueFormatter
@@ -57,17 +56,6 @@ def build(
     return builder.build(
         body, body_format, formatter, uploads=AsyncExitStack()
     )
-
-
-class KeepNone(BodyNormalizer):
-    """Normalizer that keeps top-level ``None`` values."""
-
-    def normalize_mapping(
-        self,
-        body: Mapping[str, Any],
-        formatter: IValueFormatter,
-    ) -> dict[str, Any]:
-        return dict(body)
 
 
 async def empty() -> AsyncIterator[bytes]:
@@ -113,7 +101,7 @@ def test_json_is_normalized(builder: AiohttpBodyBuilder) -> None:
         "color": Color.RED,
         "point": Point(x=1),
         "at": at,
-        "skip": None,
+        "nothing": None,
         "items": [1, None, "a"],
     }
 
@@ -121,6 +109,7 @@ def test_json_is_normalized(builder: AiohttpBodyBuilder) -> None:
         "color": "red",
         "point": {"x": 1},
         "at": "2026-01-02T03:04:05Z",
+        "nothing": None,
         "items": [1, None, "a"],
     }
 
@@ -428,9 +417,13 @@ def test_form_lists_it_cannot_express_are_rejected(
         build(builder, {"tags": value}, body_format, ISO)
 
 
-def test_none_fields_are_skipped() -> None:
-    builder = AiohttpBodyBuilder(normalizer=KeepNone())
-
-    form = form_of(build(builder, {"a": None, "b": "1"}, BodyFormat.FORM, ISO))
-
-    assert urlencoded(form) == [("b", "1")]
+@pytest.mark.parametrize(
+    "body_format", [BodyFormat.FORM, BodyFormat.MULTIPART]
+)
+def test_none_in_a_form_is_refused(
+    builder: AiohttpBodyBuilder,
+    body_format: BodyFormat,
+) -> None:
+    # A form has no null; skipping the field would send another request.
+    with pytest.raises(ValueError, match="Form field 'a' cannot send None"):
+        build(builder, {"a": None, "b": "1"}, body_format, ISO)

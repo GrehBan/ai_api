@@ -6,6 +6,7 @@ Two rules decide what is shared:
 
 - A shared type holds only what every provider has. Provider-only data stays in the provider's own types and is reached through `raw`, which always holds the provider's whole response or event.
 - Nothing is dropped silently. A shared request that a provider cannot take raises `RequestValidationError` before anything is sent.
+- Nothing is invented either. An optional field that is not given is not sent to the provider at all, not even as `null`; the shared fields take no `None`.
 
 `tests/docs/test_unification.py` checks this page against the code: every field of the shared types has a row here, and every case in [Errors](#errors) raises the error it names.
 
@@ -17,9 +18,9 @@ Two rules decide what is shared:
 | --- | --- | --- | --- |
 | `GenerationRequest.model` | `model` | `model` | Sent as given; the provider rejects an unknown model with an `APIStatusError`. |
 | `GenerationRequest.input` | `input`: a text as is; a list of turns as `EasyInputMessage` items (`role`, `content`) | `messages`: a text as one `user` turn; a list of turns as they are | A list must not be empty and must end with a `user` turn: Anthropic rejects an assistant prefill on current models, and OpenAI gives a last assistant turn another meaning. Images, files, tool calls and results are not shared. |
-| `GenerationRequest.instructions` | `instructions` | `system` | System and developer turns are not shared: instructions go here. |
-| `GenerationRequest.max_output_tokens` | `max_output_tokens`, at least 16, reasoning included; without it, the model's limit | `max_tokens`, thinking included; required, so without it the adapter's `default_max_tokens` (1024) | Must be positive. Below 16 raises for OpenAI. |
-| `GenerationRequest.metadata` | `metadata`: up to 16 pairs, keys up to 64 and values up to 512 characters | `metadata.user_id` only, up to 512 characters | A key other than `user_id` raises for Anthropic instead of being dropped; OpenAI's limits raise too. |
+| `GenerationRequest.instructions` | `instructions` | `system` | System and developer turns are not shared: instructions go here. Not sent when not given. |
+| `GenerationRequest.max_output_tokens` | `max_output_tokens`, at least 16, reasoning included; without it, the model's limit | `max_tokens`, thinking included; required, so without it the adapter's `default_max_tokens` (1024) | Must be positive. Below 16 raises for OpenAI. Not sent to OpenAI when not given. |
+| `GenerationRequest.metadata` | `metadata`: up to 16 pairs, keys up to 64 and values up to 512 characters | `metadata.user_id` only, up to 512 characters | A key other than `user_id` raises for Anthropic instead of being dropped; OpenAI's limits raise too. Not sent when not given. |
 
 ## Response
 

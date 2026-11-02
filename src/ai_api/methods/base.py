@@ -13,7 +13,13 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel, ConfigDict, PydanticUserError, TypeAdapter
+from pydantic import (
+    MISSING,
+    BaseModel,
+    ConfigDict,
+    PydanticUserError,
+    TypeAdapter,
+)
 
 from ai_api.enums import BodyFormat, ResponseFormat
 from ai_api.http.headers import Headers
@@ -22,6 +28,7 @@ from ai_api.methods.fields import (
     has_one_shot_file,
     is_container_type,
     is_mapping_type,
+    nested_models,
     query_value,
     wrap_streams,
 )
@@ -35,6 +42,7 @@ from ai_api.response.parse.sse import ServerSentEvent
 from ai_api.response.parse.stream import StreamResponseParser
 from ai_api.serialization.protocols import IValueFormatter
 from ai_api.serialization.values import BaseValueFormatter
+from ai_api.types.base import REQUEST_CONTEXT
 from ai_api.types.protocols import IEventMatcher
 
 _FORMAT_BY_TYPE: Final[dict[type[Any], ResponseFormat]] = {
@@ -109,6 +117,15 @@ class BaseMethod[ResponseT](BaseModel, ABC):
     and dunder class attributes describe the HTTP request. Subclass
     ``BaseAPIMethod`` or ``BaseStreamMethod`` rather than this class.
 
+    A field is sent as it is declared: one without a default is
+    required, ``None`` is sent as ``null``, and a field that defaults
+    to ``MISSING`` is left out of the request until it is given, so
+    ``x: int | None | MISSING = MISSING`` can be absent, ``null`` or a
+    number. A default of ``None`` is a ``TypeError`` at class definition
+    (it would send ``null`` for a field nobody set), and so is a model
+    with such a field inside a field's type: describe nested request
+    data with a ``TypedDict``, whose ``NotRequired`` keys are left out.
+
     The generic argument determines ``__returning__`` and
     ``__response_format__``, unless a subclass sets them explicitly.
 
@@ -174,6 +191,7 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         cls._init_query_params()
         cls._init_path_params()
         cls._check_body_fields()
+        cls._check_none_defaults()
         cls._init_response_type()
 
         # A parametrized class such as BaseStreamMethod[Event] is created
@@ -195,7 +213,8 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             TypeError: If the template is malformed, names a missing
                 field, a placeholder is also a query parameter, or its
                 field is annotated as a mapping, a model or a collection,
-                which has no single path segment.
+                which has no single path segment, or defaults to
+                ``MISSING``: a path has every segment.
         """
         template = cls.__dict__.get("__request_path__")
 
@@ -224,10 +243,18 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             )
 
         for name in sorted(cls.__request_path_params__):
-            if is_container_type(cls.model_fields[name].annotation):
+            field = cls.model_fields[name]
+
+            if is_container_type(field.annotation):
                 raise TypeError(
                     f"{cls.__name__}: path parameter {name!r} must be a "
                     "scalar, not a mapping, a model or a collection"
+                )
+
+            if field.default is MISSING:
+                raise TypeError(
+                    f"{cls.__name__}: path parameter {name!r} cannot "
+                    "default to MISSING: a path cannot leave a segment out"
                 )
 
     @classmethod
@@ -288,6 +315,46 @@ class BaseMethod[ResponseT](BaseModel, ABC):
                 "body; add them to __request_query__ or set "
                 "__request_body_format__"
             )
+
+    @classmethod
+    def _check_none_defaults(cls) -> None:
+        """Reject defaults of ``None``, which would be sent as ``null``.
+
+        ``None`` is sent as ``null``, so a field that defaults to it
+        would send ``null`` for a value nobody gave; a field left out
+        until given defaults to ``MISSING``. The models a field's type
+        can hold are checked too, at any depth, since a model's own
+        defaults are dumped with it. Fields excluded from dumps are
+        never sent and not checked.
+
+        Raises:
+            TypeError: If a field defaults to ``None``, or its type can
+                hold a model with a field that does.
+        """
+        for name, field in cls.model_fields.items():
+            if field.exclude:
+                continue
+
+            if field.default is None:
+                raise TypeError(
+                    f"{cls.__name__}: field {name!r} defaults to None, "
+                    "which is sent as null; default to MISSING to leave "
+                    "the field out until it is given"
+                )
+
+            for model in nested_models(field.annotation):
+                if nulls := sorted(
+                    key
+                    for key, inner in model.model_fields.items()
+                    if inner.default is None and not inner.exclude
+                ):
+                    raise TypeError(
+                        f"{cls.__name__}: field {name!r} can hold "
+                        f"{model.__name__}, whose fields {nulls} default "
+                        "to None, which is sent as null; describe request "
+                        "data with a TypedDict (NotRequired for a key "
+                        "left out)"
+                    )
 
     @classmethod
     def _init_response_type(cls) -> None:
@@ -466,18 +533,19 @@ class BaseMethod[ResponseT](BaseModel, ABC):
             (booleans as ``"true"``/``"false"``, dates through
             ``value_formatter``) or, for lists, tuples and sets, to lists
             of strings; ``None`` if the method has no query parameters.
+            A field left ``MISSING`` is not sent.
 
         Raises:
             TypeError: If a value is an object or contains one.
-            ValueError: If a list contains ``None``, or a value is NaN or
-                infinite or rejected by the formatter.
+            ValueError: If a value is ``None`` or a list contains it (a
+                query has no ``null``), or a value is NaN or infinite or
+                rejected by the formatter.
         """
         if not self.__request_query__:
             return None
 
         data = self.model_dump(
             include=set(self.__request_query__),
-            exclude_none=True,
             by_alias=True,
             mode="python",
         )
@@ -491,14 +559,17 @@ class BaseMethod[ResponseT](BaseModel, ABC):
         """Return the body fields.
 
         Returns:
-            All fields except path and query parameters and ``None``
-            values, keyed by alias.
+            All fields except path and query parameters, keyed by alias:
+            a field left ``MISSING`` is not sent, and ``None`` is sent as
+            ``null``, also nested. A model of this library put into the
+            body at run time leaves out its fields that hold ``None`` by
+            default (see ``REQUEST_CONTEXT``).
         """
         return self.model_dump(
             exclude=set(self.__request_query__ | self.__request_path_params__),
-            exclude_none=True,
             by_alias=True,
             mode="python",
+            context=REQUEST_CONTEXT,
         )
 
 

@@ -47,6 +47,52 @@ Methods are validated by Pydantic when they are created, before anything is sent
 - Fields can be given by name or by alias.
 - Any Pydantic constraint works, e.g. `temperature: float = Field(ge=0, le=2)`.
 
+## Optional fields: `MISSING` and `None`
+
+A field is sent as it is declared. JSON tells a field that is absent from one that is `null`, and an API may treat them differently (`null` can mean "clear the value"), so a method has a separate way to say each:
+
+| Declaration | Not given | `None` given |
+|---|---|---|
+| `x: int` | required | `ValidationError` |
+| `x: int \| None` | required | sent as `"x": null` |
+| `x: int \| MISSING = MISSING` | left out | `ValidationError` |
+| `x: int \| None \| MISSING = MISSING` | left out | sent as `"x": null` |
+
+`MISSING` is Pydantic's sentinel (`from pydantic import MISSING`): a field that holds it is left out of the request, in the body and in the query. Write the type after the provider's schema: `None` in the type where the schema allows `null`, a `MISSING` default where the field is optional.
+
+A default of `None` raises `TypeError` at class definition. It would send `null` for a field nobody set, which some APIs reject and others take as a request to clear a value; `= MISSING` is what leaves a field out. Fields with `exclude=True` are never sent and are not checked.
+
+The same goes for nested request data: a model whose field defaults to `None`, anywhere inside a field's type, raises `TypeError` too. Describe nested data with a `TypedDict`, as the provider SDKs do: a key marked `NotRequired` is left out until given, and a plain dict literal type-checks against it:
+
+```python title="optional_fields.py"
+from typing import NotRequired, TypedDict
+
+from pydantic import MISSING
+
+
+class Filter(TypedDict):
+    field: str
+    value: NotRequired[str | None]    # left out, a string or null
+
+
+class Search(BaseAPIMethod[ModelList]):
+    __request_path__ = "/search"
+    __request_method__ = "POST"
+    __request_body_format__ = BodyFormat.JSON
+
+    query: str
+    limit: int | MISSING = MISSING             # left out until given
+    cursor: str | None | MISSING = MISSING     # left out, a string or null
+    filters: list[Filter] | MISSING = MISSING
+
+
+Search(query="cats").get_body_map()   # {"query": "cats"}
+Search(query="cats", cursor=None).get_body_map()
+# {"query": "cats", "cursor": None}, sent as "cursor": null
+```
+
+A model of this library that a field typed `Any` holds at run time, such as a response item sent back in the next request, keeps the shape it came in: its fields that hold `None` by default (absent in the response) are left out, and the rest are sent as they are.
+
 Response models are the opposite on purpose: a field the provider adds tomorrow does not break today's client. `BaseAPIType` uses `extra="ignore"` and drops such a field; `BaseAPITypeExtra` uses `extra="allow"` and keeps it in `model_extra`. The provider types derive from `BaseAPITypeExtra`, so whatever the provider sent and the library does not model is still in `raw`, e.g. `response.raw.model_extra["service_tier"]`.
 
 ## Result type and response format
@@ -86,14 +132,14 @@ A method without a body sends every field as a path or query parameter. A field 
 
 Before encoding, the values are normalized:
 
-- **`None`** fields are dropped, at the top level and in nested models, but kept as `null` inside lists and dicts, where the position or key matters.
+- **`None`** is sent as `null`, at any depth; a field left `MISSING` is not in the body at all (see [Optional fields](#optional-fields-missing-and-none)).
 - **Nested models** (`BaseAPIType`) are dumped to dicts, by their wire names.
 - **Enums** are sent as their values, also as dict keys. Two keys that give the same value, such as `Color.RED` and `"red"`, raise `ValueError`, since one of the values would be lost.
 - **Dates, times and durations** are written by the method's formatter, in ISO 8601 by default (see [Dates, times and durations](#dates-times-and-durations)).
 - **Text streams** are refused: uploads are bytes, so open the file in binary mode. A method given one raises `ValidationError` when it is created.
 - **Circular references** and nesting deeper than 253 levels raise `ValueError`, instead of an encoder error: orjson refuses deeper data.
 
-In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`. A repeated field can express neither `null` nor nesting, so `None` in a list raises `ValueError` and a list inside a list raises `TypeError`.
+In `FORM` and `MULTIPART` bodies a list sends its field once per item, a dict is sent as a JSON string and a boolean as `"true"` or `"false"`. A form can express neither `null` nor nesting, so a field that is `None`, or `None` in a list, raises `ValueError` (leave the field `MISSING` to leave it out), and a list inside a list raises `TypeError`.
 
 ## Dates, times and durations
 
@@ -151,15 +197,15 @@ class ListModels(BaseAPIMethod[ModelList]):
     __request_method__ = "GET"
     __request_query__ = {"limit"}
 
-    limit: int | None = None          # sent as ?limit=...
+    limit: int | MISSING = MISSING    # sent as ?limit=... when given
 ```
 
-A list, tuple or set is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`; `None` in the list raises `ValueError`, since a repeated key has no `null` and dropping it would shift the other items. Booleans become `true` and `false`, enums their values, and dates as in [Dates, times and durations](#dates-times-and-durations); NaN and infinity raise `ValueError`. A value with no text form, such as a class, raises `TypeError`. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
+A field left `MISSING` is not sent. A query has no `null`, so `None` raises `ValueError` when the request is built: skipping it would send another request than the one asked for. A list, tuple or set is sent as a repeated key: `ids=["a", "b"]` becomes `?ids=a&ids=b`; `None` in the list raises `ValueError` too, since dropping it would shift the other items. Booleans become `true` and `false`, enums their values, and dates as in [Dates, times and durations](#dates-times-and-durations); NaN and infinity raise `ValueError`. A value with no text form, such as a class, raises `TypeError`. A mapping or a model cannot be a query parameter, since there is no standard way to put it in a URL; such a field in `__request_query__` raises `TypeError` at class definition.
 
 To send a field under another name, use `validation_alias` and `serialization_alias` rather than `alias`. The constructor then takes the field name in both mypy and pyright; with `alias`, mypy wants the field name and pyright the alias. At runtime both names are accepted.
 
 ```python title="aliases.py"
-from pydantic import Field
+from pydantic import MISSING, Field
 
 
 class ListFiles(BaseAPIMethod[ModelList]):
@@ -167,8 +213,8 @@ class ListFiles(BaseAPIMethod[ModelList]):
     __request_method__ = "GET"
     __request_query__ = {"page_size"}
 
-    page_size: int | None = Field(
-        default=None,
+    page_size: int | MISSING = Field(
+        default=MISSING,
         validation_alias="pageSize",
         serialization_alias="pageSize",
     )
@@ -196,7 +242,7 @@ RetrieveModel(model_id="example-1").request_path   # "/models/example-1"
 - **`build_url` gets an encoded path.** Join it without encoding it again, e.g. with `URL.joinpath(..., encoded=True)` as `BaseAPI` does. yarl's `/` operator would turn `%2F` into `%252F`, and the server would see a different identifier.
 - **Rejected values.** `None`, NaN, infinity, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
 - **Identifiers with slashes.** For values such as `meta-llama/Llama-3`, set `__request_path_safe__ = "/"` on that method. Each segment is still checked for `.` and `..`.
-- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__` and a field annotated as a list, set, dict or model (it has no single segment) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
+- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__` a field annotated as a list, set, dict or model (it has no single segment) and a field that defaults to `MISSING` (a path cannot leave a segment out) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
 
 ## Describing an API
 

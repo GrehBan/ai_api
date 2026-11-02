@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import TEMPORAL_TYPES, format_temporal
-from ai_api.types.base import BaseAPIType
+from ai_api.types.base import REQUEST_CONTEXT, BaseAPIType
 from ai_api.types.files import InputFile
 
 if TYPE_CHECKING:
@@ -62,8 +62,10 @@ class BodyNormalizer:
 
     Nested models are dumped by alias, enums (also dict keys) are
     unwrapped, and dates, times and durations are written by the method's
-    ``IValueFormatter``. ``None`` fields are dropped from the body and
-    from nested models, but kept as ``null`` inside lists and dicts.
+    ``IValueFormatter``. ``None`` is kept everywhere, for the encoder to
+    send as ``null``; a field the request leaves out is not in the body
+    at all. A model of this library leaves out its fields that hold
+    ``None`` by default, as in a method's body (``REQUEST_CONTEXT``).
     Files and binary streams are passed through unchanged for the body
     builder to handle.
     """
@@ -73,23 +75,22 @@ class BodyNormalizer:
         body: Mapping[str, Any],
         formatter: IValueFormatter,
     ) -> dict[str, Any]:
-        """Normalize the fields of a body, dropping ``None`` results.
+        """Normalize the fields of a body.
 
         Args:
             body: Body fields of a request.
             formatter: Writes the dates, times and durations.
 
         Returns:
-            A new dict with normalized values.
+            A new dict with normalized values; ``None`` stays ``None``.
 
         Raises:
             TypeError: If a value is a text stream.
             ValueError: If a value cannot be normalized.
         """
         return {
-            key: normalized
+            key: self.normalize(value, formatter)
             for key, value in body.items()
-            if (normalized := self.normalize(value, formatter)) is not None
         }
 
     def normalize(self, value: Any, formatter: IValueFormatter) -> Any:
@@ -148,8 +149,8 @@ class BodyNormalizer:
                 value.model_dump(
                     mode="python",
                     by_alias=True,
-                    exclude_none=True,
                     warnings=False,
+                    context=REQUEST_CONTEXT,
                 ),
                 formatter,
                 parents,

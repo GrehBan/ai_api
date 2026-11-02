@@ -10,6 +10,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import MISSING
 from pytest_aiohttp import AiohttpServer
 
 from ai_api.http.auth import BearerAuth
@@ -91,7 +92,7 @@ def test_make_method_declares_fields() -> None:
     method_cls = make_method(
         BaseAPIMethod[str],
         path="/items/{item_id}",
-        fields={"item_id": str, "q": (int | None, None)},
+        fields={"item_id": str, "q": (int | MISSING, MISSING)},
         __request_query__={"q"},
     )
 

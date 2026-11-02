@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import io
 import types
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
     Final,
+    TypeAliasType,
     Union,
     get_args,
     get_origin,
+    get_type_hints,
+    is_typeddict,
 )
 
 from pydantic import BaseModel
@@ -86,6 +89,68 @@ def is_container_type(annotation: Any) -> bool:
     )
 
 
+def nested_models(annotation: Any) -> Iterator[type[BaseModel]]:
+    """Find the Pydantic models an annotation can hold, at any depth.
+
+    Unions, ``Annotated``, generic containers, type aliases, the keys of
+    a ``TypedDict`` and the fields of the models found are looked into;
+    each model is yielded once, so a recursive model ends.
+
+    Args:
+        annotation: The annotation of a field.
+
+    Returns:
+        An iterator over every model class the annotation names,
+        directly or nested.
+    """
+    return _nested_models(annotation, set())
+
+
+def _nested_models(
+    annotation: Any,
+    seen: set[int],
+) -> Iterator[type[BaseModel]]:
+    """Find the Pydantic models an annotation can hold, at any depth.
+
+    Args:
+        annotation: An annotation or a part of one.
+        seen: Identities of the models and ``TypedDict`` classes already
+            looked into.
+
+    Yields:
+        Every model class not seen before.
+    """
+    if isinstance(annotation, TypeAliasType):
+        yield from _nested_models(annotation.__value__, seen)
+        return
+
+    if is_typeddict(annotation):
+        if id(annotation) not in seen:
+            seen.add(id(annotation))
+            hints = get_type_hints(annotation, include_extras=True)
+
+            for hint in hints.values():
+                yield from _nested_models(hint, seen)
+        return
+
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if id(annotation) not in seen:
+            seen.add(id(annotation))
+            yield annotation
+
+            for field in annotation.model_fields.values():
+                yield from _nested_models(field.annotation, seen)
+        return
+
+    origin = get_origin(annotation)
+
+    if isinstance(origin, TypeAliasType):
+        yield from _nested_models(origin, seen)
+
+    for arg in get_args(annotation):
+        yield from _nested_models(arg, seen)
+
+
 def _query_item(name: str, value: Any, formatter: IValueFormatter) -> str:
     """Convert one dumped query value to a string.
 
@@ -127,10 +192,17 @@ def query_value(
 
     Raises:
         TypeError: If the value is an object or contains one.
-        ValueError: If a list contains ``None``, which a repeated key
-            cannot express (dropping it would shift the other items), a
-            value is NaN or infinite, or the formatter rejects one.
+        ValueError: If the value is ``None`` or a list contains it: a
+            query has no ``null`` (dropping it would send another
+            request, or shift the other items of a repeated key); also
+            if a value is NaN or infinite, or the formatter rejects one.
     """
+    if value is None:
+        raise ValueError(
+            f"Query parameter {name!r} cannot send None: a query has no "
+            "null; leave the field MISSING to leave it out"
+        )
+
     if isinstance(value, _SEQUENCES):
         if any(item is None for item in value):
             raise ValueError(

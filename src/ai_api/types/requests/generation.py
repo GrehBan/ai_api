@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Self
 
-from pydantic import ConfigDict, Field
+from pydantic import MISSING, ConfigDict, Field
 
 from ai_api.enums import Role
 from ai_api.types.base import BaseAPIType
@@ -68,9 +68,13 @@ class GenerationRequest(BaseRequest):
             adapter checks it and raises ``RequestValidationError``
             otherwise.
         instructions: Instructions for the model given apart from the
-            input, such as a system prompt; none if ``None``.
+            input, such as a system prompt.
         max_output_tokens: Upper bound on generated tokens; positive.
         metadata: Free-form key-value pairs stored with the request.
+
+    An optional field is left out until it is given; ``None`` is not
+    taken (it would mean ``null``, which not every provider accepts),
+    so leave a field out rather than set it to ``None``.
 
     Example:
         >>> GenerationRequest(
@@ -85,11 +89,6 @@ class GenerationRequest(BaseRequest):
         Annotated[str, Field(min_length=1)]
         | Annotated[list[Turn], Field(min_length=1)]
     )
-    instructions: str | None = None
-
-    max_output_tokens: int | None = Field(
-        default=None,
-        gt=0,
-    )
-
-    metadata: dict[str, str] | None = None
+    instructions: str | MISSING = MISSING
+    max_output_tokens: int | MISSING = Field(default=MISSING, gt=0)
+    metadata: dict[str, str] | MISSING = MISSING

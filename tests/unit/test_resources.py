@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from pydantic import (
+    MISSING,
     PydanticSchemaGenerationError,
     TypeAdapter,
     ValidationError,
@@ -454,10 +455,24 @@ def test_adapters_are_abstract(base: type[Any]) -> None:
 
 
 def test_request_keeps_instructions() -> None:
-    assert REQUEST.instructions is None
+    assert REQUEST.instructions is MISSING
     request = GenerationRequest(model="m", input="i", instructions="Be brief")
 
     assert request.instructions == "Be brief"
+
+
+@pytest.mark.parametrize(
+    "field", ["instructions", "max_output_tokens", "metadata"]
+)
+def test_request_takes_no_none(field: str) -> None:
+    # None would mean null, which not every provider takes; an optional
+    # field is left out instead.
+    with pytest.raises(ValidationError, match=field):
+        GenerationRequest.model_validate(
+            {"model": "m", "input": "i", field: None}
+        )
+
+    assert field not in GenerationRequest(model="m", input="i").model_dump()
 
 
 def test_request_rejects_unknown_fields_and_bad_limits() -> None:

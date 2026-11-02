@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, Union
 
 import pytest
-from pydantic import Field, PlainSerializer, ValidationError
+from pydantic import MISSING, Field, PlainSerializer, ValidationError
 
 from ai_api.enums import BodyFormat
 from ai_api.http.headers import Headers
@@ -34,18 +34,18 @@ class ListItems(BaseAPIMethod[bytes]):
     __request_query__ = {"limit", "page_size", "order", "deleted", "after"}
 
     org: str
-    limit: int | None = None
-    page_size: int | None = Field(
-        default=None,
+    limit: int | MISSING = MISSING
+    page_size: int | MISSING = Field(
+        default=MISSING,
         validation_alias="pageSize",
         serialization_alias="pageSize",
     )
-    order: Order | None = None
-    deleted: bool | None = None
-    after: str | None = None
-    name: str | None = None
-    display_name: str | None = Field(
-        default=None,
+    order: Order | MISSING = MISSING
+    deleted: bool | MISSING = MISSING
+    after: str | MISSING = MISSING
+    name: str | MISSING = MISSING
+    display_name: str | MISSING = Field(
+        default=MISSING,
         validation_alias="displayName",
         serialization_alias="displayName",
     )
@@ -56,7 +56,7 @@ class Upload(BaseAPIMethod[bytes]):
     __request_method__ = "POST"
     __request_body_format__ = BodyFormat.MULTIPART
 
-    payload: Any = None
+    payload: Any = MISSING
 
 
 class Attachment(BaseAPIType):
@@ -105,10 +105,10 @@ class Search(BaseAPIMethod[bytes]):
     __request_method__ = "GET"
     __request_query__ = {"ids", "tags", "flags", "raw"}
 
-    ids: list[str] | None = None
-    tags: tuple[Order, ...] | None = None
-    flags: set[bool] | None = None
-    raw: Any = None
+    ids: list[str] | MISSING = MISSING
+    tags: tuple[Order, ...] | MISSING = MISSING
+    flags: set[bool] | MISSING = MISSING
+    raw: Any = MISSING
 
 
 def test_lists_become_repeated_keys() -> None:
@@ -148,11 +148,11 @@ class Dated(BaseAPIMethod[bytes]):
     __request_query__ = {"since", "ttl", "ratio", "raw"}
 
     day: datetime.date = datetime.date(2026, 1, 2)
-    since: datetime.datetime | None = None
-    ttl: datetime.timedelta | None = None
-    ratio: float | None = None
-    raw: Any = None
-    at: datetime.datetime | None = None
+    since: datetime.datetime | MISSING = MISSING
+    ttl: datetime.timedelta | MISSING = MISSING
+    ratio: float | MISSING = MISSING
+    raw: Any = MISSING
+    at: datetime.datetime | MISSING = MISSING
 
 
 def test_dates_are_written_in_iso_8601_everywhere() -> None:
@@ -388,7 +388,7 @@ def test_annotated_mapping_query_field_is_rejected() -> None:
 
 
 class Holder(BaseAPIType):
-    payload: Any = None
+    payload: Any = MISSING
 
 
 def test_a_stream_in_a_nested_model_is_wrapped_in_a_copy() -> None:
@@ -548,14 +548,14 @@ def test_fields_a_bodiless_method_would_drop_are_rejected() -> None:
         make_method(
             BaseAPIMethod[bytes],
             path="/models",
-            fields={"limit": (int | None, None)},
+            fields={"limit": (int | MISSING, MISSING)},
             __request_method__="GET",
         )
 
 
 def test_bases_without_a_path_are_not_checked() -> None:
     class Paged(BaseAPIMethod[bytes]):
-        limit: int | None = None
+        limit: int | MISSING = MISSING
 
     class ListModels(Paged):
         __request_path__ = "/models"

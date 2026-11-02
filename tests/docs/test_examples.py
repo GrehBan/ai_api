@@ -89,6 +89,7 @@ BLOCKS, PROBLEMS = collect()
 QUICK_START: Final = "quick_start.py"
 INHERITANCE: Final = "inheritance.py"
 DATES: Final = "dates.py"
+OPTIONAL_FIELDS: Final = "optional_fields.py"
 QUERY: Final = "query.py"
 ALIASES: Final = "aliases.py"
 PATH_PARAMS: Final = "path_params.py"
@@ -110,6 +111,7 @@ TESTED: Final = (
     QUICK_START,
     INHERITANCE,
     DATES,
+    OPTIONAL_FIELDS,
     QUERY,
     ALIASES,
     PATH_PARAMS,
@@ -300,6 +302,18 @@ async def test_dates_and_their_formatter(
     assert recorder.last.body == (
         b'{"run_at":"1767323045","timeout":"PT30S","expires_at":1767323045}'
     )
+
+
+async def test_optional_fields(examples: Examples) -> None:
+    *_, absent, given = await examples.run(QUICK_START, OPTIONAL_FIELDS)
+
+    assert absent == {"query": "cats"}
+    assert given == {"query": "cats", "cursor": None}
+    nested = examples.Search(query="q", filters=[{"field": "f"}])
+    assert nested.get_body_map() == {
+        "query": "q",
+        "filters": [{"field": "f"}],
+    }
 
 
 async def test_query_parameters(

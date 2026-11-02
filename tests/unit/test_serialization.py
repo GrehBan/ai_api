@@ -84,22 +84,39 @@ def normalizer() -> BodyNormalizer:
     return BodyNormalizer()
 
 
-def test_none_is_dropped_only_from_fields(
-    normalizer: BodyNormalizer,
-) -> None:
+def test_none_is_kept_as_null(normalizer: BodyNormalizer) -> None:
+    # A field the request leaves out is never in the body, so a None
+    # that reaches the normalizer was given and is sent as null.
     body = {
         "a": None,
         "b": {"c": None, "d": 1},
         "e": [None, 2, {"f": None}],
         "g": (None,),
-        "h": Inner(name="n"),
     }
 
     assert normalizer.normalize_mapping(body, ISO) == {
+        "a": None,
         "b": {"c": None, "d": 1},
         "e": [None, 2, {"f": None}],
         "g": [None],
-        "h": {"name": "n"},
+    }
+
+
+def test_a_model_leaves_out_its_unset_defaults(
+    normalizer: BodyNormalizer,
+) -> None:
+    # A response model sent back keeps the shape it came in: a field
+    # that is None by default was absent, a set one is kept.
+    body = {
+        "absent": Inner(name="n"),
+        "given": Inner(name="m", note="x"),
+        "nested": [{"inner": Inner(name="k")}],
+    }
+
+    assert normalizer.normalize_mapping(body, ISO) == {
+        "absent": {"name": "n"},
+        "given": {"name": "m", "note": "x"},
+        "nested": [{"inner": {"name": "k"}}],
     }
 
 
