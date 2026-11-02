@@ -41,12 +41,17 @@ jobs:
         # Every CPython the package supports (requires-python >= 3.13);
         # 3.13, the oldest, is also what .python-version pins locally.
         python: ["3.13", "3.14", "3.15"]
+    env:
+      # For every uv command of the job: with only `uv sync --python`,
+      # `uv run` would take .python-version's 3.13 and rebuild the
+      # environment without the test group.
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
-      - run: uv sync --all-groups --locked --python ${{ matrix.python }}
+      - run: uv sync --all-groups --locked
       - run: >-
           uv run pytest --cov --cov-branch --cov-report=xml
           --html=report.html --self-contained-html
