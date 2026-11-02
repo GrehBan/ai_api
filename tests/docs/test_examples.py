@@ -551,7 +551,7 @@ async def test_error_resolver(examples: Examples) -> None:
 
     assert type(quota) is QuotaExceededError
     assert quota.transient is False
-    assert quota.provider == "openai"
+    assert quota.provider == "generic"
     assert type(rate) is RateLimitError
 
 

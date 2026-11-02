@@ -110,7 +110,7 @@ from ai_api import APIStatusError, Provider, QuotaExceededError
 
 
 class ExampleErrorResolver(BaseErrorResolver):
-    provider = Provider.OPENAI
+    provider = Provider.GENERIC                    # Provider is closed
     error_statuses = {"insufficient_quota": 429}   # in a stream, too
 
     def classify_status(

@@ -20,7 +20,7 @@ Defaults that protect the API key and the request:
 - **Leaking keys on redirects.** Redirects are off; when enabled, they never leave the origin of the request.
 - **Environment proxies.** Ignored unless `trust_env=True`.
 - **TLS.** Certificates are verified against the `certifi` CA bundle, the same on every operating system. A certificate that fails verification raises `APITLSError`, which is not retried; a handshake that breaks off is an `APIConnectionError`, retried like other connection failures.
-- **Secrets in logs.** `BearerAuth` and `APIKeyAuth` keep the token out of `repr`, and reject whitespace that could inject another header.
+- **Secrets in logs.** `BearerAuth` and `APIKeyAuth` keep the token out of `repr`, and reject whitespace that could inject another header. The library's own logs carry no token, header, body, query string, path parameter value, error message or note, or file name, at any level (see [Logging](sessions.md#logging)).
 - **Untrusted servers.** `max_body_size` (off by default), `max_line_size` and `max_event_size` (on by default) limit what is held in memory, and an SSE stream with another `Content-Type` is rejected instead of being read as empty.
 - **Invalid values.** NaN and infinity are rejected in every part of the request, rather than sent as `null`, `nan` or `None`.
 
@@ -33,7 +33,7 @@ The main choices, and the reasons for them. Details are in the sections above.
 - **Async only.** AI calls take seconds to minutes and are often streamed, so they are run concurrently. A synchronous wrapper can be built on top of an async core; the opposite works poorly.
 - **Protocols between the parts.** The session depends on `IAPI`, `IAuth`, `IErrorResolver`, `IHeaders` and the parser protocols, not on concrete classes. Each part can be replaced without inheritance, and tests use simple fakes.
 - **The transport is isolated.** All logic is in `BaseSession`, and aiohttp is imported only by `*/aiohttp.py` modules. Another HTTP client behaves the same, and `import ai_api` does not import aiohttp.
-- **One flag decides retries.** Errors carry `transient`, set by the error resolver or the transport mapping. The retry loop knows no statuses, and a provider changes retry behavior by overriding `classify`.
+- **One flag decides retries.** Errors carry `transient`, set by the error resolver or the transport mapping. The retry loop knows no statuses, and a provider changes retry behavior by overriding the resolver's `classify_status` (the base `classify` keeps the rule that an in-band failure is never transient).
 - **Retries are opt-in.** Repeating a non-idempotent generation can cost money; only the author of a method can say it is safe.
 - **Streams are not retried once started**, and not resumed: see [Interrupted streams](streaming.md#interrupted-streams).
 - **Errors by what came back.** Status, transport and response errors are separate branches, because they call for different handling: an API error, a network problem, a broken answer.

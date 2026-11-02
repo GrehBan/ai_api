@@ -28,4 +28,5 @@ stream(method)
 Two things follow from this design:
 
 - **The status check is inside the retried attempt.** Whether to retry is decided by the `transient` flag of the error raised there, so the error resolver alone decides which statuses are retried.
+- **A success status can still be a failure.** A body or a stream event that reports a failure after a 2xx (OpenAI's `failed` response, an `error` event) raises an `APIStatusError` too, from the parser; such an in-band failure is never transient, so it is not retried. See [Error resolvers](errors.md#error-resolvers).
 - **Only opening a stream is retried.** Once your code has received items, the library cannot resend the request without duplicating them. See [Interrupted streams](streaming.md#interrupted-streams).

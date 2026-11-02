@@ -1,0 +1,1 @@
+A contributing guide, `CONTRIBUTING.md` (also the site's Contributing page): setting up with pip or uv, the checks, the docs, changelog fragments, what CI requires, and directives for contributors who work with Claude.

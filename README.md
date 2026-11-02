@@ -93,7 +93,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-This sends `POST https://api.example.com/v1/completions` with the body `{"model": "example-1", "messages": [{"role": "user", "content": "Hello!"}]}`. `temperature` is `None`, so it is not sent at all. The response is validated into `Completion`, and type checkers know that `completion` is a `Completion`.
+This sends `POST https://api.example.com/v1/completions` with the body `{"model": "example-1", "messages": [{"role": "user", "content": "Hello!"}]}`. `temperature` was not given, so it stays `MISSING` and is not sent at all (`None` would be sent as `null`). The response is validated into `Completion`, and type checkers know that `completion` is a `Completion`.
 <!-- --8<-- [end:intro] -->
 
 ## Documentation
