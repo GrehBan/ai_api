@@ -42,6 +42,10 @@ CI (`.github/workflows/tests.yml`) runs the checks, `mkdocs build --strict` and 
 
 Offline provider documentation (OpenAI, Anthropic, OpenRouter, Gemini: endpoints, JSON schemas, stream contracts, fixtures; its `docs-lite` folder is also the source of the contract snapshot) comes from the `unified-api-docs` MCP server in `.mcp.json`, enabled in `.claude/settings.json`. It runs `docs-suite-mcp` from the private repository `GrehBan/docs-lite-mcp`, expected at `/home/user/docs-lite-mcp` (cloud sessions); elsewhere set `DOCS_SUITE_MCP_DIR` to its `docs-suite-mcp` folder. `.mcp.json` is never committed.
 
+## Skills
+
+The project's workflows are skills in `.claude/skills/`: `ai-api-release` (version bump, CHANGELOG, commit and PR rules; tags are never created), `ai-api-endpoint` (a new endpoint or field of an existing provider, from the upstream schema to the wire contracts), `ai-api-provider` (a new provider package) and `ai-api-docs` (guide pages, docstrings and tested examples). They follow this file; when a skill and this file disagree, this file wins and the skill is fixed.
+
 ## Architecture
 
 The guide pages (`docs/guide/`) describe the behaviour for users; read the code for the details. What follows are the invariants that are easy to break.
