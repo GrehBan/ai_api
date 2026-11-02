@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from ai_api._traversal import guard_traversal
+from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import TEMPORAL_TYPES, format_temporal
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import InputFile

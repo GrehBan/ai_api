@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+
+### Added
+
+- `BaseAPITypeExtra` (`ai_api`, `ai_api.types`): a payload base with
+  `extra="allow"`. The provider response types derive from it, so the
+  fields the library does not model are kept in `model_extra`, reached
+  through `raw` (`response.raw.model_extra["service_tier"]`).
+- `ChunkedFile` (`ai_api`, `ai_api.types`): the base of `PathFile` and
+  `IOFile`, for a source of your own read piece by piece.
+- `MAX_LINE_SIZE` and `MAX_EVENT_SIZE` (`ai_api.response.parse.stream`):
+  the default stream limits.
+
+### Changed
+
+- **Breaking:** `StreamResponseParser` limits a line and the data of an
+  SSE event to 32 Mi characters by default (`MAX_LINE_SIZE`,
+  `MAX_EVENT_SIZE`); a longer one raises `APIResponseError`, and `None`
+  lifts a limit. They are large because a generated image comes as
+  base64 in one line.
+- **Breaking:** nothing may follow a declared terminal: an error event
+  after it raises `APIResponseError` too, where it raised the
+  `APIStatusError` of the error.
+- **Breaking:** `IBodyBuilder.build()` takes a keyword-only `uploads`
+  (`contextlib.AsyncExitStack`), the stack of the attempt, on which the
+  upload readers are registered; `AiohttpStreamResponse` takes it as
+  well and closes it with the response.
+- **Breaking:** `MAX_DEPTH` moved from `ai_api.serialization.normalize`
+  to `ai_api.serialization.traversal`, with `guard_traversal`, the one
+  cycle and depth guard of the body normalizer and of the file helpers
+  of methods. A circular reference reads "Circular reference detected".
+- `InputFile.open()` may return any async iterator: it is closed when an
+  attempt ends, by `aclose()` if it has one, else by `close()` (awaited
+  when its result is awaitable). A source that fails to close raises
+  `APIRequestError`.
+- Matchers read an object that is neither a mapping nor a model without
+  running its code: slots and plain attributes are read, a property, a
+  method or another descriptor counts as no field.
+- Markdown files are checked with rumdl (`docs` dependency group).
+
+### Fixed
+
+- A method field holding a value that contains itself (through `Any`, a
+  list, a dict or a nested model) ended in `RecursionError` when the
+  method was created; it is a `ValidationError` now, as a field nested
+  deeper than `MAX_DEPTH` is.
+- A retryable method with a field nested exactly `MAX_DEPTH` deep raised
+  `ValueError` from `retryable`: the method itself was counted as a
+  level.
+- A retry after a connection that broke mid-upload, or after an answer
+  that came before the body was read, sends the whole file again. The
+  session now closes the readers of every attempt; aiohttp leaves them
+  suspended.
+- Two uploads reading one stream at once (two requests in
+  `asyncio.gather`, or one raw stream given to two methods) took chunks
+  from under each other and sent mixed files without an error; the
+  second one raises `APIRequestError` now.
+- A `chunk_size` below one sent an empty file (`read(0)` gives `b""`);
+  it raises `ValueError` now.
+- An SSE `retry` field with more digits than Python turns into a number
+  (4300 by default) raised a bare `ValueError` from the stream; it is an
+  `APIResponseError` now.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added
@@ -580,7 +643,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/GrehBan/ai_api/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/GrehBan/ai_api/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GrehBan/ai_api/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/GrehBan/ai_api/compare/2b58dfc...v0.1.0

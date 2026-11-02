@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+from contextlib import AsyncExitStack
 from typing import Any, Final, Self, TypedDict
 
 import certifi
@@ -32,7 +33,11 @@ from ai_api.http.headers import (
 )
 from ai_api.http.protocols import IAPI, HeadersType, IAuth
 from ai_api.methods.protocols import IAPIMethod, IBaseMethod, IStreamMethod
-from ai_api.response.aiohttp import AiohttpStreamResponse, read_body
+from ai_api.response.aiohttp import (
+    AiohttpStreamResponse,
+    read_body,
+    wait_for_writer,
+)
 from ai_api.response.buffered import BufferedResponse
 from ai_api.response.protocols import IStreamResponse
 from ai_api.serialization.json import JsonDumps, JsonLoads, dumps, loads
@@ -346,26 +351,30 @@ class AiohttpSession(BaseSession):
             APIResponseError: If the body is larger than
                 ``max_body_size``.
         """
-        response = await self._request(
-            method,
-            headers=headers,
-            timeout=(
-                self._timeout
-                if timeout is None
-                else _replace_timeout(self._timeout, total=timeout)
-            ),
-        )
-
-        async with response:
-            with body_errors():
-                raw = await read_body(response, self._max_body_size)
-
-            return BufferedResponse(
-                status=response.status,
-                headers=response.headers.copy(),
-                body=raw,
-                charset=response.charset,
+        # Closed after the response: the upload readers of this attempt
+        # are closed before a retry opens the files again.
+        async with AsyncExitStack() as uploads:
+            response = await self._request(
+                method,
+                headers=headers,
+                timeout=(
+                    self._timeout
+                    if timeout is None
+                    else _replace_timeout(self._timeout, total=timeout)
+                ),
+                uploads=uploads,
             )
+
+            async with response:
+                with body_errors():
+                    raw = await read_body(response, self._max_body_size)
+
+                return BufferedResponse(
+                    status=response.status,
+                    headers=response.headers.copy(),
+                    body=raw,
+                    charset=response.charset,
+                )
 
     async def _open_stream(
         self,
@@ -389,16 +398,29 @@ class AiohttpSession(BaseSession):
         Raises:
             APITransportError: If the request could not be sent.
         """
-        response = await self._request(
-            method,
-            headers=headers,
-            timeout=(
-                self._stream_timeout
-                if timeout is None
-                else _replace_timeout(self._stream_timeout, sock_read=timeout)
-            ),
+        # Closed with the stream, or here if the request fails.
+        uploads = AsyncExitStack()
+
+        try:
+            response = await self._request(
+                method,
+                headers=headers,
+                timeout=(
+                    self._stream_timeout
+                    if timeout is None
+                    else _replace_timeout(
+                        self._stream_timeout, sock_read=timeout
+                    )
+                ),
+                uploads=uploads,
+            )
+        except BaseException:
+            await uploads.aclose()
+            raise
+
+        return AiohttpStreamResponse(
+            response, self._max_body_size, uploads=uploads
         )
-        return AiohttpStreamResponse(response, self._max_body_size)
 
     async def _request(
         self,
@@ -406,6 +428,7 @@ class AiohttpSession(BaseSession):
         *,
         headers: HeadersType | None,
         timeout: ClientTimeout,
+        uploads: AsyncExitStack,
     ) -> ClientResponse:
         """Send the HTTP request for a method.
 
@@ -421,6 +444,9 @@ class AiohttpSession(BaseSession):
                 sent.
             headers: Headers for this request only.
             timeout: Timeout of this request.
+            uploads: The stack of the attempt. The upload readers are
+                registered on it, and once there is a response, waiting
+                for aiohttp to stop writing the body, which runs first.
 
         Returns:
             The response with its body not yet read.
@@ -442,6 +468,7 @@ class AiohttpSession(BaseSession):
             method.get_body_map(),
             method.request_body_format,
             method.value_formatter,
+            uploads=uploads,
         )
 
         redirects: dict[str, Any] = (
@@ -469,6 +496,8 @@ class AiohttpSession(BaseSession):
             raise APIRequestError(
                 f"Cannot follow the redirect: {exc}"
             ) from exc
+
+        uploads.push_async_callback(wait_for_writer, response)
 
         if response.status in REDIRECT_STATUSES:
             location = response.headers.get(LOCATION, "")

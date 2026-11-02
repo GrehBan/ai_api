@@ -16,7 +16,11 @@ from ai_api.http.exceptions.response import APIResponseError
 from ai_api.http.exceptions.status import APIStatusError
 from ai_api.methods.base import BaseStreamMethod
 from ai_api.response.parse.sse import ServerSentEvent
-from ai_api.response.parse.stream import StreamResponseParser
+from ai_api.response.parse.stream import (
+    MAX_EVENT_SIZE,
+    MAX_LINE_SIZE,
+    StreamResponseParser,
+)
 from ai_api.serialization.json import JsonLoads, loads
 from ai_api.types.base import BaseAPIType
 from ai_api.types.matchers import FieldValues
@@ -434,6 +438,35 @@ async def test_event_over_the_limit_is_a_response_error() -> None:
         await collect(
             parser.parse(method, response, loads, BaseErrorResolver())
         )
+
+
+async def test_a_retry_too_long_to_convert_is_a_response_error() -> None:
+    method = make_method(BaseStreamMethod[ServerSentEvent])()
+    body = sse("retry: " + "9" * 5000 + "\ndata: x")
+    response = FakeStreamResponse([body], headers=SSE_HEADERS)
+
+    with pytest.raises(APIResponseError, match="5000 digits"):
+        await collect(
+            StreamResponseParser().parse(
+                method, response, loads, BaseErrorResolver()
+            )
+        )
+
+
+async def test_the_default_limits_take_a_large_event() -> None:
+    # A generated image comes as base64 in one data line; a limit of
+    # 1 Mi characters would refuse a normal event.
+    method = make_method(BaseStreamMethod[ServerSentEvent])()
+    data = "x" * (2 * 1024 * 1024)
+    response = FakeStreamResponse([sse(f"data: {data}")], headers=SSE_HEADERS)
+    parser = StreamResponseParser()
+
+    (event,) = await collect(
+        parser.parse(method, response, loads, BaseErrorResolver())
+    )
+
+    assert event.data == data
+    assert MAX_EVENT_SIZE == MAX_LINE_SIZE == 32 * 1024 * 1024
 
 
 def test_bad_charset_fails_when_the_stream_opens() -> None:

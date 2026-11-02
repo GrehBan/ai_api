@@ -12,6 +12,7 @@ import pytest
 
 from ai_api.enums import BodyFormat
 from ai_api.http.exceptions.status import ServiceUnavailableError
+from ai_api.http.exceptions.transport import APIRequestError
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.session.aiohttp import AiohttpSession
 from ai_api.types.files import (
@@ -205,3 +206,83 @@ async def test_stream_file_is_sent_once(
         await session.send_request(method)
 
     assert len(recorder.requests) == 1
+
+
+class Chunks:
+    """An async iterator that is not a generator and cannot be closed."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self.chunks = list(chunks)
+        self.calls: list[str] = []
+
+    def __aiter__(self) -> Chunks:
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self.chunks:
+            raise StopAsyncIteration
+        return self.chunks.pop(0)
+
+
+class SyncClosed(Chunks):
+    def close(self) -> None:
+        self.calls.append("close")
+
+
+class BothClosed(Chunks):
+    def close(self) -> None:
+        self.calls.append("close")
+
+    async def aclose(self) -> None:
+        self.calls.append("aclose")
+
+
+class FailingClose(Chunks):
+    async def aclose(self) -> None:
+        raise OSError("disk gone")
+
+
+class Source(InputFile):
+    """A file whose ``open()`` returns a given iterator, of any kind."""
+
+    def __init__(self, iterator: AsyncIterator[bytes]) -> None:
+        super().__init__("a.bin")
+        self.iterator = iterator
+
+    def open(self) -> AsyncIterator[bytes]:
+        return self.iterator
+
+
+@pytest.mark.parametrize(
+    ("source", "calls"),
+    [
+        (Chunks(b"a", b"b"), []),
+        (SyncClosed(b"a", b"b"), ["close"]),
+        (BothClosed(b"a", b"b"), ["aclose"]),
+    ],
+    ids=["no-close", "close", "both"],
+)
+async def test_any_source_is_sent_and_closed_once(
+    session: AiohttpSession,
+    recorder: Recorder,
+    source: Chunks,
+    calls: list[str],
+) -> None:
+    # open() may return any async iterator; aclose() wins over close().
+    recorder.reply(Reply())
+
+    await session.send_request(Upload(file=Source(source)))
+
+    (part,) = [part for part in recorder.last.parts if part.name == "file"]
+    assert part.data == b"ab"
+    assert source.calls == calls
+
+
+async def test_a_source_that_fails_to_close_is_a_request_error(
+    session: AiohttpSession,
+) -> None:
+    # The upload may be incomplete: such a failure is never dropped.
+    method = Upload(file=Source(FailingClose(b"a")))
+
+    with pytest.raises(APIRequestError, match="disk gone"):
+        await session.send_request(method)

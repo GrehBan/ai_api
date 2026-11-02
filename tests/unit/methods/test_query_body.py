@@ -12,11 +12,11 @@ from typing import Annotated, Any, Union
 import pytest
 from pydantic import Field, PlainSerializer, ValidationError
 
-from ai_api._traversal import MAX_DEPTH
 from ai_api.enums import BodyFormat
 from ai_api.http.headers import Headers
 from ai_api.methods.base import BaseAPIMethod
 from ai_api.methods.fields import has_one_shot_file
+from ai_api.serialization.traversal import MAX_DEPTH
 from ai_api.serialization.values import BaseValueFormatter
 from ai_api.types.base import BaseAPIType
 from ai_api.types.files import BytesFile, InputFile, IOFile, StreamFile
@@ -470,6 +470,14 @@ def _nested(depth: int) -> list[Any]:
 
 def test_a_field_nested_up_to_the_limit_is_taken() -> None:
     assert Upload(payload=_nested(MAX_DEPTH)).payload is not None
+
+
+def test_a_field_nested_up_to_the_limit_is_retryable() -> None:
+    # The method itself is not one of the levels.
+    class RetryableUpload(Upload):
+        __retryable__ = True
+
+    assert RetryableUpload(payload=_nested(MAX_DEPTH)).retryable
 
 
 def test_a_field_nested_deeper_than_the_limit_is_rejected() -> None:

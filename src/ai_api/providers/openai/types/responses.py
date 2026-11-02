@@ -179,8 +179,8 @@ class Response(BaseAPITypeExtra):
 
     Only the fields needed to read a generation are modeled; the request
     settings echoed back (tools, reasoning, truncation and so on) are
-    ignored. ``status`` is a plain string for the same reason as
-    ``ResponseError.code``.
+    kept in ``model_extra``. ``status`` is a plain string for the same
+    reason as ``ResponseError.code``.
 
     Attributes:
         id: Response identifier.

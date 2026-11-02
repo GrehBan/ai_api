@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ai_api.enums import BodyFormat
@@ -19,6 +20,8 @@ class IBodyBuilder(Protocol):
         body: Mapping[str, Any],
         body_format: BodyFormat,
         formatter: IValueFormatter,
+        *,
+        uploads: AsyncExitStack,
     ) -> Mapping[str, Any]:
         """Encode the body.
 
@@ -27,6 +30,10 @@ class IBodyBuilder(Protocol):
             body_format: How the body must be encoded.
             formatter: The method's ``value_formatter``, which writes the
                 dates, times and durations.
+            uploads: The stack of the attempt: whatever the body reads
+                from (an upload source) is registered on it, and the
+                session closes it when the attempt ends, so a retry can
+                read the source again.
 
         Returns:
             Keyword arguments for the HTTP client's request call.

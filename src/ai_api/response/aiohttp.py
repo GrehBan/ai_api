@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AsyncExitStack
 
 from aiohttp import ClientResponse
 
@@ -45,6 +47,21 @@ async def read_body(response: ClientResponse, max_size: int | None) -> bytes:
     return bytes(body)
 
 
+async def wait_for_writer(response: ClientResponse) -> None:
+    """Wait until aiohttp has stopped writing the request body.
+
+    ``release()`` cancels the task that writes the body but does not
+    wait for it, and an upload reader cannot be closed while that task
+    still runs it. A failure of the task after the response has come
+    does not change the response; aiohttp drops it as well.
+
+    Args:
+        response: The response of the request.
+    """
+    with contextlib.suppress(Exception):
+        await response.wait_for_close()
+
+
 class AiohttpStreamResponse:
     """``IStreamResponse`` over an open ``aiohttp.ClientResponse``."""
 
@@ -52,6 +69,8 @@ class AiohttpStreamResponse:
         self,
         response: ClientResponse,
         max_body_size: int | None = None,
+        *,
+        uploads: AsyncExitStack,
     ) -> None:
         """Wrap a response whose body has not been read.
 
@@ -59,10 +78,13 @@ class AiohttpStreamResponse:
             response: The open aiohttp response.
             max_body_size: Largest body ``read()`` accepts, in bytes;
                 ``None`` for no limit.
+            uploads: The stack of the attempt, closed with the response,
+                so its upload readers are closed when the stream is.
         """
         self._response = response
         self._headers = response.headers.copy()
         self._max_body_size = max_body_size
+        self._uploads = uploads
 
     @property
     def status(self) -> int:
@@ -108,9 +130,10 @@ class AiohttpStreamResponse:
             return await read_body(self._response, self._max_body_size)
 
     async def aclose(self) -> None:
-        """Release the connection.
+        """Release the connection and close the upload readers.
 
         A partially read body makes aiohttp close the connection instead
         of returning it to the pool.
         """
         self._response.release()
+        await self._uploads.aclose()

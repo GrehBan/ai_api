@@ -16,7 +16,12 @@ from ai_api.http.exceptions.status import APIStatusError
 from ai_api.http.exceptions.transport import APIStreamInterruptedError
 from ai_api.http.headers import CONTENT_TYPE, EVENT_STREAM_CONTENT_TYPE
 from ai_api.response.parse.lines import LineDecoder, LineTooLongError
-from ai_api.response.parse.sse import SSE_DONE, EventTooLargeError, SSEDecoder
+from ai_api.response.parse.sse import (
+    SSE_DONE,
+    EventTooLargeError,
+    RetryTooLongError,
+    SSEDecoder,
+)
 from ai_api.response.protocols import IStreamResponse
 from ai_api.serialization.json import JsonLoads, loads
 from ai_api.types.matchers import DONE_MARKER, EventTypes, TopLevelError
@@ -25,15 +30,22 @@ from ai_api.types.protocols import IEventMatcher
 if TYPE_CHECKING:
     from ai_api.methods.protocols import IStreamMethod
 
-# Because when a server sends an endless stream of data
-#  without event delimiters,
-# both LineDecoder and SSEDecoder may expand
-# their internal buffers without any defined limit.
-# Let’s leave this decision to the user.
-MAX_LINE_SIZE: Final[int] = 1024 * 1024
-"""Maximum number of characters in a line of an SSE or NDJSON stream."""
-MAX_EVENT_SIZE: Final[int] = 4 * 1024 * 1024
-"""Maximum number of characters in an SSE event data."""
+MAX_LINE_SIZE: Final[int] = 32 * 1024 * 1024
+"""Default longest line of an SSE or NDJSON stream, in characters.
+
+A server that never ends a line would otherwise make the decoder buffer
+without bound. The limit is on by default; ``None`` lifts it, which is
+the caller's decision. It is large because a normal event can be large:
+OpenAI sends a generated image as base64 in one ``data`` line, and the
+final event repeats the whole response.
+"""
+
+MAX_EVENT_SIZE: Final[int] = MAX_LINE_SIZE
+"""Default largest data of one SSE event, in characters.
+
+The same as ``MAX_LINE_SIZE``: a JSON event is almost always one
+``data`` line, so a smaller line limit would always stop it first.
+"""
 
 ERROR_EVENTS: Final = EventTypes("error") | TopLevelError()
 """Default ``error_events`` of ``StreamResponseParser``.
@@ -119,9 +131,11 @@ class StreamResponseParser:
 
         Args:
             max_line_size: Longest SSE or NDJSON line accepted, in
-                characters; defaults to 1 MiB, ``None`` for no limit.
+                characters; ``MAX_LINE_SIZE`` (32 Mi) by default,
+                ``None`` for no limit.
             max_event_size: Largest SSE event data accepted, in
-                characters; defaults to 4 MiB, ``None`` for no limit.
+                characters; ``MAX_EVENT_SIZE`` (32 Mi) by default,
+                ``None`` for no limit.
             require_event_stream: Whether an SSE response must have
                 ``Content-Type: text/event-stream``. A proxy or captive
                 portal answering 200 with an HTML page would otherwise
@@ -386,7 +400,7 @@ class _EventReader[T]:
         async for line in self._iter_lines():
             try:
                 event = decoder.decode(line)
-            except EventTooLargeError as exc:
+            except (EventTooLargeError, RetryTooLongError) as exc:
                 raise APIResponseError(
                     str(exc),
                     status=self._response.status,
@@ -401,9 +415,7 @@ class _EventReader[T]:
 
                 continue
 
-            # check open before resolving error,
-            # because of BaseStreamMethod.__stream_terminal__ contract
-            # say: Any subsequent event must result in an APIResponseError.
+            # Nothing may follow the terminal, an error event included.
             ending.check_open()
             if event.event == "error":
                 raise self._resolve(self._loads_or_none(event.data))
@@ -446,9 +458,7 @@ class _EventReader[T]:
 
         async for line in self._iter_lines():
             if line.strip():
-                # check open before resolving error,
-                # because of BaseStreamMethod.__stream_terminal__ contract
-                # say: Any subsequent event must result in an APIResponseError.
+                # Nothing may follow the terminal, an error line included.
                 ending.check_open()
                 body = self._decode(line)
                 item = self._validate(line, body)

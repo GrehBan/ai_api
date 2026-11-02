@@ -7,8 +7,9 @@ import errno
 import io
 import mimetypes
 import os
+import weakref
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, AsyncIterable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Final, Self, cast
 
@@ -20,6 +21,18 @@ DEFAULT_CHUNK_SIZE: Final[int] = 64 * 1024
 """Number of bytes read from disk or a stream at a time."""
 
 type BinaryStream = io.BufferedIOBase | io.RawIOBase
+
+_READERS: Final[weakref.WeakKeyDictionary[BinaryStream, IOFile]] = (
+    weakref.WeakKeyDictionary()
+)
+"""The ``IOFile`` reading each stream now.
+
+A stream has one position, so two reads at once would take chunks from
+under each other and send both uploads cut and mixed. The state belongs
+to the stream, not to the ``IOFile``: one raw stream given to two
+methods becomes two ``IOFile``s. Weak keys keep a stream whose reader
+was never closed from living for ever.
+"""
 
 
 def guess_content_type(filename: str | None) -> str | None:
@@ -88,7 +101,7 @@ class InputFile(ABC):
         """
 
     @abstractmethod
-    def open(self) -> AsyncGenerator[bytes]:
+    def open(self) -> AsyncIterator[bytes]:
         """Read the content from its beginning.
 
         Called once per upload attempt.
@@ -187,11 +200,10 @@ class InputFile(ABC):
 
 
 class ChunkedFile(InputFile):
-    """Content read in chunks from disk or a stream.
+    """Content read in chunks, never held in memory as a whole.
 
-    The content is read in chunks of a given size, which is the default
-    for files on disk and streams. The whole content is not held in
-    memory.
+    The base of ``PathFile`` and ``IOFile``, and of a file of your own
+    that reads its source piece by piece.
 
     Attributes:
         chunk_size: Number of bytes read at a time.
@@ -209,12 +221,14 @@ class ChunkedFile(InputFile):
             filename: File name sent in the multipart part.
             content_type: MIME type; guessed from ``filename`` if omitted.
             chunk_size: Number of bytes read at a time.
+
+        Raises:
+            ValueError: If ``chunk_size`` is below one: ``read(0)`` gives
+                ``b""``, which would end the upload before it starts.
         """
-        # Validate the chunk size before
-        # calling the superclass constructor, so that
-        # the exception is raised before the file is used in a request.
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
+
         super().__init__(filename, content_type)
         self.chunk_size = chunk_size
 
@@ -245,7 +259,7 @@ class BytesFile(InputFile):
         super().__init__(filename, content_type)
         self.data = data
 
-    async def open(self) -> AsyncGenerator[bytes]:
+    async def open(self) -> AsyncIterator[bytes]:
         """Yield the whole content.
 
         Yields:
@@ -306,7 +320,7 @@ class PathFile(ChunkedFile):
                 str(self.path),
             )
 
-    async def open(self) -> AsyncGenerator[bytes]:
+    async def open(self) -> AsyncIterator[bytes]:
         """Read the file from the beginning.
 
         Yields:
@@ -360,34 +374,43 @@ class IOFile(ChunkedFile):
         self.file = file
         self._start = file.tell() if file.seekable() else None
         self._opened = False
-        self._reading = False
 
     @property
     def reusable(self) -> bool:
         """Whether the stream is seekable."""
         return self._start is not None
 
-    async def open(self) -> AsyncGenerator[bytes]:
+    async def open(self) -> AsyncIterator[bytes]:
         """Read the stream from its start position.
 
-        Blocking reads run in a worker thread.
+        Blocking reads run in a worker thread. The stream counts as being
+        read until the iterator ends or is closed; the session closes it
+        after every attempt, so a retry can read it again.
 
         Yields:
             Chunks of at most ``chunk_size`` bytes.
 
         Raises:
-            RuntimeError: If a non-seekable stream is read a second time.
+            RuntimeError: If the stream is being read by another upload at
+                the moment, or a non-seekable stream is read a second time.
             BlockingIOError: If the stream is non-blocking and has no data
                 ready: its ``read()`` returns ``None``, which is not the
                 end of the stream, so the upload would be cut short.
         """
-        if self._reading:
-            raise RuntimeError("IOFile cannot be read concurrently")
+        reader = _READERS.get(self.file)
+
+        if reader is not None:
+            message = (
+                f"The stream is already being read by {reader!r}; "
+                "two uploads cannot read one stream at once"
+            )
+            raise RuntimeError(message)
+
         if self._start is None and self._opened:
             raise RuntimeError("Non-seekable stream can be read only once")
 
+        _READERS[self.file] = self
         self._opened = True
-        self._reading = True
 
         try:
             if self._start is not None:
@@ -409,7 +432,7 @@ class IOFile(ChunkedFile):
 
                 yield chunk
         finally:
-            self._reading = False
+            del _READERS[self.file]
 
 
 class StreamFile(InputFile):
@@ -443,7 +466,7 @@ class StreamFile(InputFile):
         """Always ``False``: the iterator cannot be restarted."""
         return False
 
-    async def open(self) -> AsyncGenerator[bytes]:
+    async def open(self) -> AsyncIterator[bytes]:
         """Forward the iterator's chunks.
 
         Yields:

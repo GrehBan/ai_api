@@ -13,6 +13,15 @@ class EventTooLargeError(ValueError):
     """The data of an event is larger than the decoder's limit."""
 
 
+class RetryTooLongError(ValueError):
+    """A ``retry`` field has more digits than Python turns into an ``int``.
+
+    The HTML standard puts no bound on the field, but Python refuses to
+    convert a string of more than ``sys.get_int_max_str_digits()`` digits
+    (4300 by default); no reconnection time needs that many.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class ServerSentEvent:
     r"""One server-sent event.
@@ -76,6 +85,8 @@ class SSEDecoder:
         Raises:
             EventTooLargeError: If the event data exceeds
                 ``max_event_size``.
+            RetryTooLongError: If a ``retry`` field has more digits than
+                Python converts.
         """
         if not line:
             return self._dispatch()
@@ -106,7 +117,14 @@ class SSEDecoder:
             case "id" if "\0" not in value:
                 self._last_id = value
             case "retry" if value.isascii() and value.isdigit():
-                self._retry = int(value)
+                try:
+                    self._retry = int(value)
+                except ValueError as exc:
+                    message = (
+                        f"The retry field has {len(value)} digits, "
+                        "more than Python converts to a number"
+                    )
+                    raise RetryTooLongError(message) from exc
             case _:
                 pass
 

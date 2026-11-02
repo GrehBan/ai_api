@@ -15,6 +15,7 @@ import io
 import json
 import math
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl
@@ -22,12 +23,12 @@ from urllib.parse import parse_qsl
 import pytest
 from aiohttp import BytesPayload, FormData
 
-from ai_api._traversal import MAX_DEPTH
 from ai_api.enums import BodyFormat
 from ai_api.http.exceptions.transport import APIRequestError
 from ai_api.serialization.json import JsonDumps, dumps, loads
 from ai_api.serialization.normalize import BodyNormalizer
 from ai_api.serialization.protocols import IValueFormatter
+from ai_api.serialization.traversal import MAX_DEPTH
 from ai_api.serialization.values import BaseValueFormatter
 from ai_api.session.body.aiohttp import AiohttpBodyBuilder
 from ai_api.types.base import BaseAPIType
@@ -44,6 +45,18 @@ class Point(BaseAPIType):
 
 
 ISO = BaseValueFormatter()
+
+
+def build(
+    builder: AiohttpBodyBuilder,
+    body: Mapping[str, Any],
+    body_format: BodyFormat,
+    formatter: IValueFormatter,
+) -> dict[str, Any]:
+    """Build a body outside a session, with a stack of its own."""
+    return builder.build(
+        body, body_format, formatter, uploads=AsyncExitStack()
+    )
 
 
 class KeepNone(BodyNormalizer):
@@ -86,12 +99,12 @@ def urlencoded(form: FormData) -> list[tuple[str, str]]:
 
 
 def test_none_format_sends_nothing(builder: AiohttpBodyBuilder) -> None:
-    assert builder.build({}, BodyFormat.NONE, ISO) == {}
+    assert build(builder, {}, BodyFormat.NONE, ISO) == {}
 
 
 def test_none_format_refuses_a_body(builder: AiohttpBodyBuilder) -> None:
     with pytest.raises(ValueError, match="without a body cannot send: a"):
-        builder.build({"a": 1}, BodyFormat.NONE, ISO)
+        build(builder, {"a": 1}, BodyFormat.NONE, ISO)
 
 
 def test_json_is_normalized(builder: AiohttpBodyBuilder) -> None:
@@ -104,7 +117,7 @@ def test_json_is_normalized(builder: AiohttpBodyBuilder) -> None:
         "items": [1, None, "a"],
     }
 
-    assert json_of(builder.build(body, BodyFormat.JSON, ISO)) == {
+    assert json_of(build(builder, body, BodyFormat.JSON, ISO)) == {
         "color": "red",
         "point": {"x": 1},
         "at": "2026-01-02T03:04:05Z",
@@ -127,7 +140,7 @@ def test_dates_are_written_by_the_given_formatter(
     body_format: BodyFormat,
 ) -> None:
     at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
-    kwargs = builder.build({"at": at}, body_format, Unix())
+    kwargs = build(builder, {"at": at}, body_format, Unix())
 
     if body_format is BodyFormat.JSON:
         assert json_of(kwargs) == {"at": "1767323045"}
@@ -146,7 +159,7 @@ def test_form_writes_dates_and_durations_in_iso_8601(
         "ttl": datetime.timedelta(seconds=30),
     }
 
-    assert urlencoded(form_of(builder.build(body, BodyFormat.FORM, ISO))) == [
+    assert urlencoded(form_of(build(builder, body, BodyFormat.FORM, ISO))) == [
         ("at", "2026-01-02T03:04:05Z"),
         ("on", "2026-01-02"),
         ("ttl", "PT30S"),
@@ -160,7 +173,7 @@ def test_naive_datetime_is_rejected_in_every_format(
 
     for body_format in (BodyFormat.JSON, BodyFormat.FORM):
         with pytest.raises(ValueError, match="timezone-aware"):
-            builder.build({"at": naive}, body_format, ISO)
+            build(builder, {"at": naive}, body_format, ISO)
 
 
 def test_json_takes_the_deepest_accepted_nesting(
@@ -173,7 +186,7 @@ def test_json_takes_the_deepest_accepted_nesting(
     for _ in range(MAX_DEPTH - 1):
         value = [value]
 
-    assert json_of(builder.build({"a": value}, BodyFormat.JSON, ISO))
+    assert json_of(build(builder, {"a": value}, BodyFormat.JSON, ISO))
 
 
 def test_enum_keys_are_sent_as_their_values(
@@ -181,7 +194,7 @@ def test_enum_keys_are_sent_as_their_values(
 ) -> None:
     body = {"meta": {Color.RED: 1}}
 
-    assert json_of(builder.build(body, BodyFormat.JSON, ISO)) == {
+    assert json_of(build(builder, body, BodyFormat.JSON, ISO)) == {
         "meta": {"red": 1}
     }
 
@@ -189,7 +202,7 @@ def test_enum_keys_are_sent_as_their_values(
 def test_json_uses_the_custom_encoder() -> None:
     builder = AiohttpBodyBuilder(json_dumps=lambda value: b'"custom"')
 
-    assert json_of(builder.build({"a": 1}, BodyFormat.JSON, ISO)) == "custom"
+    assert json_of(build(builder, {"a": 1}, BodyFormat.JSON, ISO)) == "custom"
 
 
 @pytest.mark.parametrize(
@@ -208,7 +221,7 @@ def test_non_finite_floats_are_rejected(
     body_format: BodyFormat,
 ) -> None:
     with pytest.raises(ValueError, match="NaN and infinity"):
-        builder.build({"meta": {"v": value}}, body_format, ISO)
+        build(builder, {"meta": {"v": value}}, body_format, ISO)
 
 
 @pytest.mark.parametrize(
@@ -227,7 +240,7 @@ def test_unsupported_json_values_are_rejected(
     body_format: BodyFormat,
 ) -> None:
     with pytest.raises(TypeError, match="cannot be encoded as JSON"):
-        builder.build({"meta": {"v": value}}, body_format, ISO)
+        build(builder, {"meta": {"v": value}}, body_format, ISO)
 
 
 def test_missing_upload_file_is_rejected(
@@ -237,7 +250,7 @@ def test_missing_upload_file_is_rejected(
     missing = tmp_path / "missing.txt"
 
     with pytest.raises(APIRequestError, match="missing.txt") as info:
-        builder.build({"f": PathFile(missing)}, BodyFormat.MULTIPART, ISO)
+        build(builder, {"f": PathFile(missing)}, BodyFormat.MULTIPART, ISO)
 
     assert info.value.transient is False
     assert isinstance(info.value.__cause__, FileNotFoundError)
@@ -248,7 +261,7 @@ def test_directory_upload_is_rejected(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(APIRequestError, match="Is a directory") as info:
-        builder.build({"f": PathFile(tmp_path)}, BodyFormat.MULTIPART, ISO)
+        build(builder, {"f": PathFile(tmp_path)}, BodyFormat.MULTIPART, ISO)
 
     assert isinstance(info.value.__cause__, IsADirectoryError)
 
@@ -257,7 +270,7 @@ def test_json_dumps_returning_str_is_encoded() -> None:
     # json.dumps returns str; the type only promises bytes.
     builder = AiohttpBodyBuilder(json_dumps=cast(JsonDumps, json.dumps))
 
-    assert json_of(builder.build({"a": "é"}, BodyFormat.JSON, ISO)) == {
+    assert json_of(build(builder, {"a": "é"}, BodyFormat.JSON, ISO)) == {
         "a": "é"
     }
 
@@ -272,7 +285,7 @@ def test_forms_produce_form_data(
     body_format: BodyFormat,
     multipart: bool,
 ) -> None:
-    form = form_of(builder.build({"a": "1"}, body_format, ISO))
+    form = form_of(build(builder, {"a": "1"}, body_format, ISO))
 
     assert form.is_multipart is multipart
 
@@ -287,12 +300,14 @@ def test_multipart_accepts_files(builder: AiohttpBodyBuilder) -> None:
         "name": "n",
     }
 
-    assert form_of(builder.build(body, BodyFormat.MULTIPART, ISO)).is_multipart
+    assert form_of(
+        build(builder, body, BodyFormat.MULTIPART, ISO)
+    ).is_multipart
 
 
 def test_unknown_format_is_rejected(builder: AiohttpBodyBuilder) -> None:
     with pytest.raises(ValueError, match="Unsupported body format"):
-        builder.build({"a": 1}, cast(BodyFormat, "xml"), ISO)
+        build(builder, {"a": 1}, cast(BodyFormat, "xml"), ISO)
 
 
 @pytest.mark.parametrize(
@@ -321,7 +336,7 @@ def test_binary_data_in_json_is_rejected(
     body: dict[str, Any],
 ) -> None:
     with pytest.raises(TypeError, match="cannot be sent as JSON"):
-        builder.build(body, BodyFormat.JSON, ISO)
+        build(builder, body, BodyFormat.JSON, ISO)
 
 
 @pytest.mark.parametrize(
@@ -334,7 +349,7 @@ def test_files_in_urlencoded_form_are_rejected(
     value: Any,
 ) -> None:
     with pytest.raises(TypeError, match="Files require multipart"):
-        builder.build({"f": value}, BodyFormat.FORM, ISO)
+        build(builder, {"f": value}, BodyFormat.FORM, ISO)
 
 
 @pytest.mark.parametrize(
@@ -347,14 +362,14 @@ def test_text_stream_is_rejected(
     body_format: BodyFormat,
 ) -> None:
     with pytest.raises(TypeError, match="Only binary streams"):
-        builder.build({"f": io.StringIO("text")}, body_format, ISO)
+        build(builder, {"f": io.StringIO("text")}, body_format, ISO)
 
 
 def test_binary_data_inside_form_mapping_is_rejected(
     builder: AiohttpBodyBuilder,
 ) -> None:
     with pytest.raises(TypeError, match="cannot be sent as JSON"):
-        builder.build({"meta": {"raw": b"x"}}, BodyFormat.MULTIPART, ISO)
+        build(builder, {"meta": {"raw": b"x"}}, BodyFormat.MULTIPART, ISO)
 
 
 def test_form_field_encoding(builder: AiohttpBodyBuilder) -> None:
@@ -368,7 +383,7 @@ def test_form_field_encoding(builder: AiohttpBodyBuilder) -> None:
         "text": "plain",
     }
 
-    form = form_of(builder.build(body, BodyFormat.FORM, ISO))
+    form = form_of(build(builder, body, BodyFormat.FORM, ISO))
 
     assert urlencoded(form) == [
         ("tags", "a"),
@@ -385,7 +400,7 @@ def test_form_field_encoding(builder: AiohttpBodyBuilder) -> None:
 def test_custom_json_dumps_for_form_mappings() -> None:
     builder = AiohttpBodyBuilder(json_dumps=lambda value: b"<json>")
 
-    form = form_of(builder.build({"meta": {"a": 1}}, BodyFormat.FORM, ISO))
+    form = form_of(build(builder, {"meta": {"a": 1}}, BodyFormat.FORM, ISO))
 
     assert urlencoded(form) == [("meta", "<json>")]
 
@@ -410,12 +425,12 @@ def test_form_lists_it_cannot_express_are_rejected(
 ) -> None:
     # A repeated field has no null, and nested lists would be flattened.
     with pytest.raises(error, match=match):
-        builder.build({"tags": value}, body_format, ISO)
+        build(builder, {"tags": value}, body_format, ISO)
 
 
 def test_none_fields_are_skipped() -> None:
     builder = AiohttpBodyBuilder(normalizer=KeepNone())
 
-    form = form_of(builder.build({"a": None, "b": "1"}, BodyFormat.FORM, ISO))
+    form = form_of(build(builder, {"a": None, "b": "1"}, BodyFormat.FORM, ISO))
 
     assert urlencoded(form) == [("b", "1")]

@@ -17,7 +17,7 @@ from typing import (
 
 from pydantic import BaseModel
 
-from ai_api._traversal import guard_traversal
+from ai_api.serialization.traversal import guard_traversal
 from ai_api.serialization.values import scalar_text
 from ai_api.types.files import InputFile, IOFile
 
@@ -182,7 +182,8 @@ def wrap_streams(value: Any) -> Any:
         with the wrapped fields, never changed in place.
 
     Raises:
-        ValueError: If a text stream is found.
+        ValueError: If a text stream is found, or the value contains
+            itself or is nested deeper than ``MAX_DEPTH``.
         TypeError: If a stream sits in a container this cannot rebuild
             (a subclass of ``list``, ``tuple`` or ``dict``, another
             mapping): left raw, Pydantic would dump it lazily.
@@ -206,7 +207,8 @@ def _wrap_streams(
         with the wrapped fields, never changed in place.
 
     Raises:
-        ValueError: If a text stream is found.
+        ValueError: If a text stream is found, or the value contains
+            itself or is nested deeper than ``MAX_DEPTH``.
         TypeError: If a stream sits in a container this cannot rebuild
             (a subclass of ``list``, ``tuple`` or ``dict``, another
             mapping): left raw, Pydantic would dump it lazily.
@@ -227,6 +229,7 @@ def _wrap_streams(
             key: _wrap_streams(item, ancestors)
             for key, item in children.items()
         }
+
     changed = {
         key: item for key, item in wrapped.items() if item is not children[key]
     }
@@ -258,6 +261,10 @@ def has_one_shot_file(value: Any) -> bool:
 
     Returns:
         ``True`` if any nested ``InputFile`` is not reusable.
+
+    Raises:
+        ValueError: If the value contains itself or is nested deeper than
+            ``MAX_DEPTH``.
     """
     return _has_one_shot_file(value, set())
 
@@ -271,11 +278,16 @@ def _has_one_shot_file(value: Any, ancestors: set[int]) -> bool:
 
     Returns:
         ``True`` if any nested ``InputFile`` is not reusable.
+
+    Raises:
+        ValueError: If the value contains itself or is nested deeper than
+            ``MAX_DEPTH``.
     """
     if isinstance(value, InputFile):
         return not value.reusable
 
     children = _children(value)
+
     if children is None:
         return False
 
