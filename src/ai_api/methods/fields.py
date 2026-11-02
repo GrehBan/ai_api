@@ -17,6 +17,7 @@ from typing import (
 
 from pydantic import BaseModel
 
+from ai_api._traversal import guard_traversal
 from ai_api.serialization.values import scalar_text
 from ai_api.types.files import InputFile, IOFile
 
@@ -186,6 +187,30 @@ def wrap_streams(value: Any) -> Any:
             (a subclass of ``list``, ``tuple`` or ``dict``, another
             mapping): left raw, Pydantic would dump it lazily.
     """
+    return _wrap_streams(value, set())
+
+
+def _wrap_streams(
+    value: Any,
+    ancestors: set[int],
+) -> Any:
+    """Wrap raw binary streams into ``IOFile``, recursing into containers.
+
+    Args:
+        value: A field value of a method.
+        ancestors: Identities of containers in the current recursion path.
+
+    Returns:
+        The value with every binary stream replaced by an ``IOFile``;
+        the same object if it contains no streams. A model is copied
+        with the wrapped fields, never changed in place.
+
+    Raises:
+        ValueError: If a text stream is found.
+        TypeError: If a stream sits in a container this cannot rebuild
+            (a subclass of ``list``, ``tuple`` or ``dict``, another
+            mapping): left raw, Pydantic would dump it lazily.
+    """
     if isinstance(value, (io.BufferedIOBase, io.RawIOBase)):
         return IOFile(value)
 
@@ -197,7 +222,11 @@ def wrap_streams(value: Any) -> Any:
     if children is None:
         return value
 
-    wrapped = {key: wrap_streams(item) for key, item in children.items()}
+    with guard_traversal(value, ancestors):
+        wrapped = {
+            key: _wrap_streams(item, ancestors)
+            for key, item in children.items()
+        }
     changed = {
         key: item for key, item in wrapped.items() if item is not children[key]
     }
@@ -230,11 +259,27 @@ def has_one_shot_file(value: Any) -> bool:
     Returns:
         ``True`` if any nested ``InputFile`` is not reusable.
     """
+    return _has_one_shot_file(value, set())
+
+
+def _has_one_shot_file(value: Any, ancestors: set[int]) -> bool:
+    """Check whether a value contains a file that can be read only once.
+
+    Args:
+        value: A method, model, container or field value.
+        ancestors: Identities of containers in the current recursion path.
+
+    Returns:
+        ``True`` if any nested ``InputFile`` is not reusable.
+    """
     if isinstance(value, InputFile):
         return not value.reusable
 
     children = _children(value)
+    if children is None:
+        return False
 
-    return children is not None and any(
-        has_one_shot_file(item) for item in children.values()
-    )
+    with guard_traversal(value, ancestors):
+        return any(
+            _has_one_shot_file(item, ancestors) for item in children.values()
+        )

@@ -12,11 +12,11 @@ from ai_api.providers.openai.types.responses import (
     OutputItem,
     Response,
 )
-from ai_api.types.base import BaseAPIType
+from ai_api.types.base import BaseAPITypeExtra
 from ai_api.types.unknown import UNKNOWN, BaseUnknown, by_type
 
 
-class BaseResponseStreamEvent(BaseAPIType):
+class BaseResponseStreamEvent(BaseAPITypeExtra):
     """Fields every event of a response stream has.
 
     Attributes:

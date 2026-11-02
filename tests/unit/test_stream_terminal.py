@@ -156,7 +156,7 @@ async def test_an_error_event_after_the_terminal_is_raised() -> None:
     error = {"type": "error", "error": {"message": "late"}}
     body = sse(data(STOP), data(error))
 
-    with pytest.raises(APIStatusError, match="late"):
+    with pytest.raises(APIResponseError):
         await collect(parse([body]))
 
 

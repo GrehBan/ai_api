@@ -221,6 +221,33 @@ async def test_io_file_reads_from_initial_position_every_time() -> None:
     assert file.reusable is True
 
 
+@pytest.mark.parametrize("size", [0, -1])
+def test_a_chunk_size_below_one_is_rejected(
+    tmp_path: Path,
+    size: int,
+) -> None:
+    # read(0) gives b"", which would end the upload before it starts.
+    with pytest.raises(ValueError, match="chunk_size must be positive"):
+        PathFile(tmp_path / "a.bin", chunk_size=size)
+
+    with pytest.raises(ValueError, match="chunk_size must be positive"):
+        IOFile(io.BytesIO(b"x"), chunk_size=size)
+
+
+async def test_an_io_file_is_not_read_twice_at_once() -> None:
+    # Both reads would move the one stream position under each other.
+    file = IOFile(io.BytesIO(b"abcd"), chunk_size=2)
+    first = file.open()
+    assert await anext(first) == b"ab"
+
+    with pytest.raises(RuntimeError, match="concurrently"):
+        await anext(file.open())
+
+    await first.aclose()
+
+    assert await read_all(file) == b"abcd"
+
+
 async def test_non_seekable_io_file_reads_once() -> None:
     file = IOFile(io.BufferedReader(OneWayStream(b"once")))
 

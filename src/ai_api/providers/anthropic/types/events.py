@@ -13,11 +13,11 @@ from ai_api.providers.anthropic.types.messages import (
     OutputTokensDetails,
     StopDetails,
 )
-from ai_api.types.base import BaseAPIType
+from ai_api.types.base import BaseAPITypeExtra
 from ai_api.types.unknown import UNKNOWN, BaseUnknown, by_type
 
 
-class MessageStartEvent(BaseAPIType):
+class MessageStartEvent(BaseAPITypeExtra):
     """The stream started: a message without content yet.
 
     Attributes:
@@ -32,7 +32,7 @@ class MessageStartEvent(BaseAPIType):
     message: Message
 
 
-class ContentBlockStartEvent(BaseAPIType):
+class ContentBlockStartEvent(BaseAPITypeExtra):
     """A content block started.
 
     Attributes:
@@ -48,7 +48,7 @@ class ContentBlockStartEvent(BaseAPIType):
     content_block: ContentBlock
 
 
-class TextDelta(BaseAPIType):
+class TextDelta(BaseAPITypeExtra):
     """New text of a ``text`` block.
 
     Attributes:
@@ -77,7 +77,7 @@ type ContentDelta = Annotated[
 """A delta of a content block, told apart by ``type``."""
 
 
-class ContentBlockDeltaEvent(BaseAPIType):
+class ContentBlockDeltaEvent(BaseAPITypeExtra):
     """A part of a content block.
 
     Attributes:
@@ -93,7 +93,7 @@ class ContentBlockDeltaEvent(BaseAPIType):
     delta: ContentDelta
 
 
-class ContentBlockStopEvent(BaseAPIType):
+class ContentBlockStopEvent(BaseAPITypeExtra):
     """A content block is complete.
 
     Attributes:
@@ -107,7 +107,7 @@ class ContentBlockStopEvent(BaseAPIType):
     index: int
 
 
-class MessageDelta(BaseAPIType):
+class MessageDelta(BaseAPITypeExtra):
     """Top-level changes to the message.
 
     Attributes:
@@ -123,7 +123,7 @@ class MessageDelta(BaseAPIType):
     stop_details: StopDetails | None = None
 
 
-class MessageDeltaUsage(BaseAPIType):
+class MessageDeltaUsage(BaseAPITypeExtra):
     """Token counts so far; cumulative, not an increment.
 
     Attributes:
@@ -143,7 +143,7 @@ class MessageDeltaUsage(BaseAPIType):
     output_tokens_details: OutputTokensDetails | None = None
 
 
-class MessageDeltaEvent(BaseAPIType):
+class MessageDeltaEvent(BaseAPITypeExtra):
     """Top-level changes to the message, such as the stop reason.
 
     Attributes:
@@ -159,7 +159,7 @@ class MessageDeltaEvent(BaseAPIType):
     usage: MessageDeltaUsage | None = None
 
 
-class MessageStopEvent(BaseAPIType):
+class MessageStopEvent(BaseAPITypeExtra):
     """The stream is complete.
 
     Attributes:
@@ -171,7 +171,7 @@ class MessageStopEvent(BaseAPIType):
     type: Literal["message_stop"] = "message_stop"
 
 
-class PingEvent(BaseAPIType):
+class PingEvent(BaseAPITypeExtra):
     """Keeps the connection alive; carries nothing.
 
     Attributes:

@@ -22,10 +22,11 @@ from urllib.parse import parse_qsl
 import pytest
 from aiohttp import BytesPayload, FormData
 
+from ai_api._traversal import MAX_DEPTH
 from ai_api.enums import BodyFormat
 from ai_api.http.exceptions.transport import APIRequestError
 from ai_api.serialization.json import JsonDumps, dumps, loads
-from ai_api.serialization.normalize import MAX_DEPTH, BodyNormalizer
+from ai_api.serialization.normalize import BodyNormalizer
 from ai_api.serialization.protocols import IValueFormatter
 from ai_api.serialization.values import BaseValueFormatter
 from ai_api.session.body.aiohttp import AiohttpBodyBuilder

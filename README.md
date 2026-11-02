@@ -603,6 +603,7 @@ The three branches answer the question "what came back?":
 - **`APIResponseError`**: an answer came back, but it cannot be used. It is not valid HTTP, it is larger than `max_body_size`, or it does not decode or validate.
 
 An `APIStatusError` carries:
+
 - `status`, `code`, `error_type` and `request_id`;
 - `provider`, from the error resolver;
 - `retry_after`, from the `Retry-After` header;
