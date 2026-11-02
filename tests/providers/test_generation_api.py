@@ -14,12 +14,12 @@ from typing import Any, get_overloads, get_type_hints
 import pytest
 from pydantic import ValidationError
 
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.client import session_factory as openai_factory
-from ai_api.resources import GenerationResource, IGenerationResource
-from ai_api.session.aiohttp import AiohttpSession, AiohttpSessionOptions
-from ai_api.types.requests import GenerationRequest
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.client import session_factory as openai_factory
+from aiollm.resources import GenerationResource, IGenerationResource
+from aiollm.session.aiohttp import AiohttpSession, AiohttpSessionOptions
+from aiollm.types.requests import GenerationRequest
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 from tests.providers.test_openai_responses import RESPONSE, STREAM, frame
 

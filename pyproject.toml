@@ -1,6 +1,6 @@
 
 [project]
-name = "ai-api"
+name = "aiollm"
 dynamic = ["version"]
 description = "Async-first toolkit for building typed HTTP API clients"
 readme = "README.md"
@@ -72,10 +72,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/ai_api/__meta__.py"
+path = "src/aiollm/__meta__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ai_api"]
+packages = ["src/aiollm"]
 
 [dependency-groups]
 dev = [
@@ -175,7 +175,7 @@ max-complexity = 10
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ai_api"]
+known-first-party = ["aiollm"]
 required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.format]
@@ -203,7 +203,7 @@ filterwarnings = ["error"]
 # (CHANGES/+redirect-log.fixed.md). `towncrier build --version X.Y.Z`
 # turns them into the CHANGELOG section of a release; the sections are
 # Keep a Changelog's, in its order.
-package = "ai_api"
+package = "aiollm"
 package_dir = "src"
 directory = "CHANGES"
 filename = "CHANGELOG.md"
@@ -246,7 +246,7 @@ showcontent = true
 
 [tool.coverage.run]
 branch = true
-source = ["ai_api"]
+source = ["aiollm"]
 
 [tool.coverage.report]
 show_missing = true

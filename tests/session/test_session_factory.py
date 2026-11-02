@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ai_api.http.auth import BearerAuth
-from ai_api.providers.openai.api import OPENAI_API
-from ai_api.providers.openai.resolver import OpenAIErrorResolver
-from ai_api.session.factory import SessionFactory
+from aiollm.http.auth import BearerAuth
+from aiollm.providers.openai.api import OPENAI_API
+from aiollm.providers.openai.resolver import OpenAIErrorResolver
+from aiollm.session.factory import SessionFactory
 from tests.conftest import FakeTransport
 
 

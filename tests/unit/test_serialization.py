@@ -15,16 +15,16 @@ from typing import Any
 import pytest
 from pydantic import Field
 
-from ai_api.serialization.json import dumps, loads
-from ai_api.serialization.normalize import BodyNormalizer
-from ai_api.serialization.traversal import MAX_DEPTH
-from ai_api.serialization.values import (
+from aiollm.serialization.json import dumps, loads
+from aiollm.serialization.normalize import BodyNormalizer
+from aiollm.serialization.traversal import MAX_DEPTH
+from aiollm.serialization.values import (
     BaseValueFormatter,
     Temporal,
     scalar_text,
 )
-from ai_api.types.base import BaseAPIType
-from ai_api.types.files import BytesFile
+from aiollm.types.base import BaseAPIType
+from aiollm.types.files import BytesFile
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,9 @@
-# ai_api.providers.openai
+# aiollm.providers.openai
 
-::: ai_api.providers.openai
+::: aiollm.providers.openai
 
-::: ai_api.providers.openai.methods
+::: aiollm.providers.openai.methods
 
-::: ai_api.providers.openai.adapters
+::: aiollm.providers.openai.adapters
 
-::: ai_api.providers.openai.types
+::: aiollm.providers.openai.types

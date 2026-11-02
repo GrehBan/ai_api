@@ -31,19 +31,19 @@ from pytest_mock import MockerFixture
 from tenacity import RetryCallState
 from yarl import URL
 
-from ai_api.http import headers as http_headers
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.protocols import IErrorResolver
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.headers import CONTENT_TYPE
-from ai_api.http.protocols import IAPI, HeadersType, IAuth, Query
-from ai_api.methods.base import BaseMethod
-from ai_api.methods.protocols import IAPIMethod, IStreamMethod
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session import aiohttp as session_aiohttp
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.session.base import BaseSession
-from ai_api.session.protocols import Timeout
+from aiollm.http import headers as http_headers
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.protocols import IErrorResolver
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.headers import CONTENT_TYPE
+from aiollm.http.protocols import IAPI, HeadersType, IAuth, Query
+from aiollm.methods.base import BaseMethod
+from aiollm.methods.protocols import IAPIMethod, IStreamMethod
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session import aiohttp as session_aiohttp
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.session.base import BaseSession
+from aiollm.session.protocols import Timeout
 
 TEST_TOKEN = "test-token"
 
@@ -69,7 +69,7 @@ def no_retry_wait(mocker: MockerFixture) -> MagicMock:
         return 0.0
 
     mock = mocker.patch(
-        "ai_api.session.base.calculate_wait",
+        "aiollm.session.base.calculate_wait",
         autospec=True,
         side_effect=wait,
     )

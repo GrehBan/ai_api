@@ -15,7 +15,7 @@ from typing import Annotated, Literal, assert_type
 
 from pydantic import Field
 
-from ai_api import (
+from aiollm import (
     BaseAPI,
     BaseAPIMethod,
     BaseAPIType,
@@ -32,31 +32,31 @@ from ai_api import (
     ServerSentEvent,
     Stream,
 )
-from ai_api.adapters import (
+from aiollm.adapters import (
     BaseAdapter,
     BaseCompositeAdapter,
     IConversion,
 )
-from ai_api.adapters import Stop as GenerationStop
-from ai_api.client import IClient
-from ai_api.http import IAPI, BearerAuth
-from ai_api.methods import IAPIMethod, IStreamMethod
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.methods import (
+from aiollm.adapters import Stop as GenerationStop
+from aiollm.client import IClient
+from aiollm.http import IAPI, BearerAuth
+from aiollm.methods import IAPIMethod, IStreamMethod
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.methods import (
     CreateMessage,
     MessageParam,
     StreamMessage,
 )
-from ai_api.providers.anthropic.types import Message, MessageStreamEvent
-from ai_api.providers.anthropic.types.messages import Usage
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.client import session_factory
-from ai_api.providers.openai.methods import CreateResponse, StreamResponse
-from ai_api.providers.openai.types import Response, ResponseStreamEvent
-from ai_api.providers.openai.types.responses import ResponseUsage
-from ai_api.resources import (
+from aiollm.providers.anthropic.types import Message, MessageStreamEvent
+from aiollm.providers.anthropic.types.messages import Usage
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.client import session_factory
+from aiollm.providers.openai.methods import CreateResponse, StreamResponse
+from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.providers.openai.types.responses import ResponseUsage
+from aiollm.resources import (
     AdapterStreamUseCase,
     AdapterUseCase,
     BaseResource,
@@ -67,11 +67,11 @@ from ai_api.resources import (
     IStreamUseCase,
     IUseCase,
 )
-from ai_api.response import map_stream
-from ai_api.session import ISession, ISessionFactory
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import (
+from aiollm.response import map_stream
+from aiollm.session import ISession, ISessionFactory
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.responses import (
     GenerationEvent,
     GenerationResponse,
     OtherEvent,

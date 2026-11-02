@@ -24,12 +24,12 @@ from pydantic import (
 )
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-from ai_api.enums import BodyFormat
-from ai_api.methods.base import BaseAPIMethod
-from ai_api.methods.fields import names_missing
-from ai_api.serialization.normalize import BodyNormalizer
-from ai_api.serialization.values import BaseValueFormatter
-from ai_api.types.base import BaseAPIType
+from aiollm.enums import BodyFormat
+from aiollm.methods.base import BaseAPIMethod
+from aiollm.methods.fields import names_missing
+from aiollm.serialization.normalize import BodyNormalizer
+from aiollm.serialization.values import BaseValueFormatter
+from aiollm.types.base import BaseAPIType
 from tests.conftest import make_method
 
 if TYPE_CHECKING:

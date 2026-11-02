@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from ai_api.response.parse.sse import ServerSentEvent
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import (
+from aiollm.response.parse.sse import ServerSentEvent
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import (
     DONE,
     DONE_MARKER,
     AnyOf,

@@ -19,7 +19,7 @@ from typing import Any, Final
 
 import pytest
 
-from ai_api import (
+from aiollm import (
     APIConnectionError,
     APIRedirectError,
     APIStreamInterruptedError,
@@ -31,14 +31,14 @@ from ai_api import (
     ResponseFormat,
     ServiceUnavailableError,
 )
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.client import (
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.client import (
     session_factory as anthropic_session_factory,
 )
-from ai_api.providers.openai.client import session_factory
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.base import BaseAPIType
-from ai_api.types.requests import GenerationRequest
+from aiollm.providers.openai.client import session_factory
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.base import BaseAPIType
+from aiollm.types.requests import GenerationRequest
 from tests.conftest import LocalAPI, Recorder, Reply
 
 ROOT = Path(__file__).parents[2]

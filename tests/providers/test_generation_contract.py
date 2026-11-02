@@ -19,33 +19,33 @@ from typing import Any
 import pytest
 from aiohttp import ClientTimeout
 
-from ai_api.enums import IncompleteReason, Provider
-from ai_api.exceptions import RequestValidationError
-from ai_api.http.exceptions.status import (
+from aiollm.enums import IncompleteReason, Provider
+from aiollm.exceptions import RequestValidationError
+from aiollm.http.exceptions.status import (
     BadRequestError,
     QuotaExceededError,
     ServiceUnavailableError,
 )
-from ai_api.http.exceptions.transport import (
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIStreamInterruptedError,
     APITimeoutError,
 )
-from ai_api.methods.base import BaseStreamMethod
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.client import (
+from aiollm.methods.base import BaseStreamMethod
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.client import (
     session_factory as anthropic_factory,
 )
-from ai_api.providers.anthropic.methods import StreamMessage
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.client import session_factory as openai_factory
-from ai_api.providers.openai.methods import StreamResponse
-from ai_api.resources import GenerationResource, IGenerationResource
-from ai_api.response.stream import Stream
-from ai_api.session.factory import SessionFactory
-from ai_api.session.protocols import ISession
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import (
+from aiollm.providers.anthropic.methods import StreamMessage
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.client import session_factory as openai_factory
+from aiollm.providers.openai.methods import StreamResponse
+from aiollm.resources import GenerationResource, IGenerationResource
+from aiollm.response.stream import Stream
+from aiollm.session.factory import SessionFactory
+from aiollm.session.protocols import ISession
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.responses import (
     CompletedEvent,
     TextDeltaEvent,
     TokenUsage,

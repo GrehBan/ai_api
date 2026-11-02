@@ -1,11 +1,11 @@
 ---
 name: ai-api-endpoint
-description: Add or change an endpoint of an existing ai_api provider (OpenAI, Anthropic) - read the upstream schema from the unified-api-docs MCP, write method fields by the MISSING/None rule, response types with __upstream_schema__, the wire-contract snapshot and Case, adapters and shared-layer mapping, docs and tests. Use it in the ai_api repository whenever the owner asks for a new provider endpoint or resource (models, embeddings, files, tools, structured output...), a new request field on an existing method, or to follow an upstream schema change.
+description: Add or change an endpoint of an existing aiollm provider (OpenAI, Anthropic) - read the upstream schema from the unified-api-docs MCP, write method fields by the MISSING/None rule, response types with __upstream_schema__, the wire-contract snapshot and Case, adapters and shared-layer mapping, docs and tests. Use it in the aiollm repository whenever the owner asks for a new provider endpoint or resource (models, embeddings, files, tools, structured output...), a new request field on an existing method, or to follow an upstream schema change.
 ---
 
-# ai_api endpoint
+# aiollm endpoint
 
-Every provider type and method in ai_api mirrors the provider's own schema,
+Every provider type and method in aiollm mirrors the provider's own schema,
 and tests hold it there. An endpoint is done when the snapshot, the types, the
 method fields and the shared layer all agree with upstream - not when a
 request happens to work.

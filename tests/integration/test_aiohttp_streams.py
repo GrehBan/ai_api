@@ -10,16 +10,16 @@ from typing import Any
 import pytest
 from aiohttp import ClientTimeout
 
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.status import NotFoundError
-from ai_api.http.exceptions.transport import (
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import NotFoundError
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIStreamInterruptedError,
     APITimeoutError,
 )
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
 pytestmark = pytest.mark.integration

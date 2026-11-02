@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from ai_api.enums import Provider
-from ai_api.http.exceptions.status import (
+from aiollm.enums import Provider
+from aiollm.http.exceptions.status import (
     APIStatusError,
     BadRequestError,
     ContentTooLargeError,
@@ -23,12 +23,12 @@ from ai_api.http.exceptions.status import (
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.methods.base import BaseAPIMethod
-from ai_api.providers.anthropic import (
+from aiollm.methods.base import BaseAPIMethod
+from aiollm.providers.anthropic import (
     AnthropicClient,
     AnthropicErrorResolver,
 )
-from ai_api.providers.anthropic.client import session_factory
+from aiollm.providers.anthropic.client import session_factory
 from tests.conftest import (
     TEST_TOKEN,
     LocalAPI,

@@ -13,16 +13,16 @@ import pytest
 from pydantic import MISSING
 from pytest_aiohttp import AiohttpServer
 
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.status import (
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import (
     InternalServerError,
     ServiceUnavailableError,
 )
-from ai_api.http.exceptions.transport import APIConnectionError
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.http.exceptions.transport import APIConnectionError
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,

@@ -1,4 +1,4 @@
-# ai-api
+# aiollm
 
 An async-first toolkit for building typed HTTP API clients, aimed at AI providers.
 
@@ -38,7 +38,7 @@ import asyncio
 
 from pydantic import MISSING
 
-from ai_api import (
+from aiollm import (
     BaseAPI,
     BaseAPIMethod,
     BaseAPIType,
@@ -46,7 +46,7 @@ from ai_api import (
     BearerAuth,
     BodyFormat,
 )
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.session.aiohttp import AiohttpSession
 
 API = BaseAPI("https://api.example.com", "v1")
 

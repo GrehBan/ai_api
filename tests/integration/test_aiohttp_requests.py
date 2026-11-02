@@ -22,24 +22,24 @@ from pytest_aiohttp import AiohttpServer
 from pytest_mock import MockerFixture
 from yarl import URL
 
-from ai_api.enums import BodyFormat
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.status import (
+from aiollm.enums import BodyFormat
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import (
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.http.exceptions.transport import (
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APITimeoutError,
     APITLSError,
 )
-from ai_api.http.headers import SERVER_SOFTWARE, Headers
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.serialization.values import BaseValueFormatter
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.base import BaseAPIType
+from aiollm.http.headers import SERVER_SOFTWARE, Headers
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.serialization.values import BaseValueFormatter
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
 pytestmark = pytest.mark.integration
@@ -548,7 +548,7 @@ async def test_client_session_is_created_lazily_and_recreated(
 ) -> None:
     recorder.reply(*[Reply()] * 3)
     created = mocker.patch(
-        "ai_api.session.aiohttp.ClientSession",
+        "aiollm.session.aiohttp.ClientSession",
         wraps=ClientSession,
     )
     session = make_session(api)

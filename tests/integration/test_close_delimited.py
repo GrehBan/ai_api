@@ -17,14 +17,14 @@ from typing import Literal
 import pytest
 from yarl import URL
 
-from ai_api.enums import ResponseFormat
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.transport import APIStreamInterruptedError
-from ai_api.methods.base import BaseStreamMethod
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import EventTypes
+from aiollm.enums import ResponseFormat
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.transport import APIStreamInterruptedError
+from aiollm.methods.base import BaseStreamMethod
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import EventTypes
 from tests.conftest import TEST_TOKEN, LocalAPI
 
 pytestmark = pytest.mark.integration

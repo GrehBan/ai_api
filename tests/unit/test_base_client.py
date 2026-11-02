@@ -13,30 +13,30 @@ from typing import Any
 
 import pytest
 
-from ai_api import SessionMismatchWarning
-from ai_api.adapters.base import BaseAdapter, BaseCompositeAdapter
-from ai_api.client.base import BaseClient, BaseProviderClient
-from ai_api.client.validators import (
+from aiollm import SessionMismatchWarning
+from aiollm.adapters.base import BaseAdapter, BaseCompositeAdapter
+from aiollm.client.base import BaseClient, BaseProviderClient
+from aiollm.client.validators import (
     check_same_provider,
     provider_of,
     providers_of,
 )
-from ai_api.enums import Provider
-from ai_api.http.auth import APIKeyAuth, BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.headers import AUTHORIZATION
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.resolver import AnthropicErrorResolver
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.api import OPENAI_API
-from ai_api.providers.openai.client import OpenAIClient
-from ai_api.providers.openai.resolver import OpenAIErrorResolver
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.session.factory import SessionFactory
-from ai_api.types.requests import GenerationRequest
-from ai_api.types.responses import GenerationResponse
+from aiollm.enums import Provider
+from aiollm.http.auth import APIKeyAuth, BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.headers import AUTHORIZATION
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.resolver import AnthropicErrorResolver
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.api import OPENAI_API
+from aiollm.providers.openai.client import OpenAIClient
+from aiollm.providers.openai.resolver import OpenAIErrorResolver
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.session.factory import SessionFactory
+from aiollm.types.requests import GenerationRequest
+from aiollm.types.responses import GenerationResponse
 from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,

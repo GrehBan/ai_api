@@ -19,16 +19,16 @@ from typing import Any
 
 import pytest
 
-from ai_api.enums import BodyFormat
-from ai_api.http.exceptions.transport import (
+from aiollm.enums import BodyFormat
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIRequestError,
     APIStreamInterruptedError,
 )
-from ai_api.response.stream import Stream
-from ai_api.serialization.values import BaseValueFormatter
-from ai_api.session.body.aiohttp import AiohttpBodyBuilder
-from ai_api.types.files import (
+from aiollm.response.stream import Stream
+from aiollm.serialization.values import BaseValueFormatter
+from aiollm.session.body.aiohttp import AiohttpBodyBuilder
+from aiollm.types.files import (
     IOFile,
     PathFile,
     StreamFile,
@@ -654,7 +654,7 @@ class SlowStream(io.RawIOBase):
 async def test_the_next_read_waits_for_a_cancelled_one(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("DEBUG", logger="ai_api")
+    caplog.set_level("DEBUG", logger="aiollm")
     content = bytes(range(100))
     stream = SlowStream(content)
     file = IOFile(stream, filename="passport-scan.pdf", chunk_size=10)

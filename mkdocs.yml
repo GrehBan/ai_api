@@ -1,4 +1,4 @@
-site_name: ai-api
+site_name: aiollm
 site_description: Async-first toolkit for building typed HTTP API clients.
 site_url: https://grehban.github.io/ai_api/
 repo_url: https://github.com/GrehBan/ai_api
@@ -99,7 +99,7 @@ nav:
       - Extending: guide/extending.md
       - Design: guide/design.md
   - Reference:
-      - ai_api: reference/index.md
+      - aiollm: reference/index.md
       - types: reference/types.md
       - methods: reference/methods.md
       - http: reference/http.md

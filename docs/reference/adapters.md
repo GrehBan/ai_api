@@ -1,3 +1,3 @@
-# ai_api.adapters
+# aiollm.adapters
 
-::: ai_api.adapters
+::: aiollm.adapters

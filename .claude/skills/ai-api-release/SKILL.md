@@ -1,9 +1,9 @@
 ---
 name: ai-api-release
-description: Changelog fragments and releases of ai_api with towncrier - every feature or fix PR adds a fragment to CHANGES/ and never touches the version; a separate release PR picks the SemVer version from the fragments (before 1.0 a breaking change bumps the minor), builds the CHANGELOG section, bumps __meta__.py, README and CLAUDE.md and the compare links. Use it in the ai_api repository whenever a change is about to be committed or put in a PR (to write its fragment), when the owner says «релиз», «выпусти версию», «подними версию», asks which version the pending changes need or what the next release holds. Tags are never created.
+description: Changelog fragments and releases of aiollm with towncrier - every feature or fix PR adds a fragment to CHANGES/ and never touches the version; a separate release PR picks the SemVer version from the fragments (before 1.0 a breaking change bumps the minor), builds the CHANGELOG section, bumps __meta__.py, README and CLAUDE.md and the compare links. Use it in the aiollm repository whenever a change is about to be committed or put in a PR (to write its fragment), when the owner says «релиз», «выпусти версию», «подними версию», asks which version the pending changes need or what the next release holds. Tags are never created.
 ---
 
-# ai_api changelog and releases
+# aiollm changelog and releases
 
 The project uses towncrier so that parallel pull requests never fight over
 `CHANGELOG.md`: a change carries its own note as a file in `CHANGES/`, and
@@ -43,7 +43,7 @@ Preview what the next release holds: `uv run towncrier build --draft`.
 ### 1. Pick the version
 
 - Start from fresh `master` on a branch `release-X.Y.Z`.
-- Read the current version in `src/ai_api/__meta__.py` and the pending
+- Read the current version in `src/aiollm/__meta__.py` and the pending
   fragments (`uv run towncrier build --draft --version next`).
 - Before 1.0: any `**Breaking:**` fragment → **minor** (0.6.0 → 0.7.0);
   otherwise **patch** (0.6.0 → 0.6.1). From 1.0: major/minor/patch.
@@ -60,7 +60,7 @@ Preview what the next release holds: `uv run towncrier build --draft`.
 - Compare links at the bottom of `CHANGELOG.md`: `[Unreleased]:
   .../compare/vX.Y.Z...HEAD` and a new `[X.Y.Z]:
   .../compare/v<previous>...vX.Y.Z`.
-- `src/ai_api/__meta__.py`: `__version__ = "X.Y.Z"`.
+- `src/aiollm/__meta__.py`: `__version__ = "X.Y.Z"`.
 - `README.md`: the status line `> **Status: pre-alpha (X.Y.Z).**`.
 - `CLAUDE.md`: `pre-alpha (X.Y.Z)` in the Project section.
 

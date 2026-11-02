@@ -10,19 +10,19 @@ from typing import Any
 
 import pytest
 
-from ai_api.enums import ResponseFormat
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.transport import (
+from aiollm.enums import ResponseFormat
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIStreamInterruptedError,
     APITimeoutError,
     APITransportError,
 )
-from ai_api.methods.base import BaseStreamMethod
-from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.response.stream import Stream, map_stream, transform_stream
-from ai_api.serialization.json import loads
+from aiollm.methods.base import BaseStreamMethod
+from aiollm.response.parse.stream import StreamResponseParser
+from aiollm.response.stream import Stream, map_stream, transform_stream
+from aiollm.serialization.json import loads
 from tests.conftest import FakeStreamResponse, make_method
 
 

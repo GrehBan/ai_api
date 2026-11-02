@@ -47,7 +47,7 @@ A status error's message starts with the class's fixed description and ends with
 One more library error is raised before anything is sent: `RequestValidationError` (a `ValueError`), for a shared request that a provider cannot take; see [Shared generation](generation.md).
 
 ```python title="handling.py"
-from ai_api import APIStatusError, APITransportError, RateLimitError
+from aiollm import APIStatusError, APITransportError, RateLimitError
 
 
 async def ask(prompt: str) -> str | None:
@@ -106,7 +106,7 @@ A failure the API reports after a successful status (a stream's error event, a r
 Subclass the resolver to handle a provider's specifics: set `provider` and `error_statuses`, and override `get_error_code` or `classify_status`, which picks the class and transience of a status (the in-band rule stays the base class's):
 
 ```python title="resolver.py"
-from ai_api import APIStatusError, Provider, QuotaExceededError
+from aiollm import APIStatusError, Provider, QuotaExceededError
 
 
 class ExampleErrorResolver(BaseErrorResolver):

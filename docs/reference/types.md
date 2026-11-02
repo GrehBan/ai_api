@@ -1,7 +1,7 @@
-# ai_api.types
+# aiollm.types
 
-::: ai_api.types
+::: aiollm.types
 
-::: ai_api.types.requests
+::: aiollm.types.requests
 
-::: ai_api.types.responses
+::: aiollm.types.responses

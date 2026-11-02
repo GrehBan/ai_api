@@ -16,17 +16,17 @@ from typing import Any, get_args
 import pytest
 from pydantic import BaseModel, ValidationError
 
-import ai_api
-from ai_api.enums import Provider
-from ai_api.exceptions import RequestValidationError
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.types import Message
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.client import session_factory
-from ai_api.providers.openai.types import Response
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import (
+import aiollm
+from aiollm.enums import Provider
+from aiollm.exceptions import RequestValidationError
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.types import Message
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.client import session_factory
+from aiollm.providers.openai.types import Response
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.responses import (
     CompletedEvent,
     GenerationEvent,
     GenerationResponse,
@@ -172,14 +172,14 @@ def raises(case: str) -> type[BaseException]:
         case: The case.
 
     Returns:
-        The class, from ``ai_api``, pydantic or the builtins.
+        The class, from ``aiollm``, pydantic or the builtins.
     """
     name = ERRORS[case][2].strip("`")
     if name == "ValidationError":
         return ValidationError
     if name == "ValueError":
         return ValueError
-    error: type[BaseException] = getattr(ai_api, name)
+    error: type[BaseException] = getattr(aiollm, name)
     return error
 
 

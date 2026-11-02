@@ -21,7 +21,7 @@
 | `follow_redirects` | `False` | Follow redirects within the origin of the request |
 | `loop` | `None` | Event loop the session is bound to; `None` binds the loop of its first use |
 
-The connection pool is created lazily, on the first request or on `async with`. It uses the `certifi` CA bundle, caches DNS answers for an hour and sends `User-Agent: Python/3.x ai_api/<version>`.
+The connection pool is created lazily, on the first request or on `async with`. It uses the `certifi` CA bundle, caches DNS answers for an hour and sends `User-Agent: Python/3.x aiollm/<version>`.
 
 ## Lifecycle
 
@@ -130,23 +130,23 @@ aiohttp connections belong to the loop that created them, and using them from an
 
 ## Logging
 
-The library logs through the standard `logging` module, under the `ai_api` logger and one child per module that logs (`ai_api.session.base`, `ai_api.session.aiohttp`, ...). It sets up nothing itself: `ai_api` has only a `NullHandler`, as the logging HOWTO advises libraries, so nothing is printed until your application configures logging.
+The library logs through the standard `logging` module, under the `aiollm` logger and one child per module that logs (`aiollm.session.base`, `aiollm.session.aiohttp`, ...). It sets up nothing itself: `aiollm` has only a `NullHandler`, as the logging HOWTO advises libraries, so nothing is printed until your application configures logging.
 
 ```text
 logging.basicConfig(level=logging.WARNING)           # retries
-logging.getLogger("ai_api").setLevel(logging.DEBUG)  # every attempt
+logging.getLogger("aiollm").setLevel(logging.DEBUG)  # every attempt
 ```
 
 Each layer logs only its own part, so nothing is said twice. A retried call looks like this:
 
 ```text
-DEBUG   ai_api.session.base     Starting CreateResponse
-DEBUG   ai_api.session.aiohttp  Sending POST /responses
-DEBUG   ai_api.session.aiohttp  HTTP attempt finished: status=429 duration=0.212s
-WARNING ai_api.session.base     Retrying request after RateLimitError: attempt=2, delay=1.50s
-DEBUG   ai_api.session.aiohttp  Sending POST /responses
-DEBUG   ai_api.session.aiohttp  HTTP attempt finished: status=200 duration=1.874s
-DEBUG   ai_api.session.base     Completed CreateResponse
+DEBUG   aiollm.session.base     Starting CreateResponse
+DEBUG   aiollm.session.aiohttp  Sending POST /responses
+DEBUG   aiollm.session.aiohttp  HTTP attempt finished: status=429 duration=0.212s
+WARNING aiollm.session.base     Retrying request after RateLimitError: attempt=2, delay=1.50s
+DEBUG   aiollm.session.aiohttp  Sending POST /responses
+DEBUG   aiollm.session.aiohttp  HTTP attempt finished: status=200 duration=1.874s
+DEBUG   aiollm.session.base     Completed CreateResponse
 ```
 
 ### What is logged, and what is not

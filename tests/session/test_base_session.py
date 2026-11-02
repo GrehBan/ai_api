@@ -11,32 +11,32 @@ import pytest
 from pydantic import MISSING
 from tenacity import RetryCallState
 
-from ai_api.enums import BodyFormat, ResponseFormat
-from ai_api.http.exceptions.protocols import (
+from aiollm.enums import BodyFormat, ResponseFormat
+from aiollm.http.exceptions.protocols import (
     IErrorResolver,
 )
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import (
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import (
     APIStatusError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.http.exceptions.transport import (
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIStreamInterruptedError,
     APITLSError,
 )
-from ai_api.http.headers import Headers
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.methods.protocols import IAPIMethod, IStreamMethod
-from ai_api.response.buffered import BufferedResponse
-from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.response.protocols import IStreamResponse
-from ai_api.serialization.json import JsonLoads, loads
-from ai_api.types.base import BaseAPIType
-from ai_api.types.files import StreamFile
+from aiollm.http.headers import Headers
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.methods.protocols import IAPIMethod, IStreamMethod
+from aiollm.response.buffered import BufferedResponse
+from aiollm.response.parse.stream import StreamResponseParser
+from aiollm.response.protocols import IStreamResponse
+from aiollm.serialization.json import JsonLoads, loads
+from aiollm.types.base import BaseAPIType
+from aiollm.types.files import StreamFile
 from tests.conftest import FakeStreamResponse, FakeTransport, make_method
 
 

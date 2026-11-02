@@ -14,13 +14,13 @@ from pydantic import (
     ValidationError,
 )
 
-from ai_api.adapters.base import (
+from aiollm.adapters.base import (
     BaseAdapter,
     BaseCompositeAdapter,
     BaseStreamAdapter,
 )
-from ai_api.adapters.protocols import ICompositeAdapter
-from ai_api.enums import (
+from aiollm.adapters.protocols import ICompositeAdapter
+from aiollm.enums import (
     BodyFormat,
     GenerationEventType,
     IncompleteReason,
@@ -28,17 +28,17 @@ from ai_api.enums import (
     ResponseFormat,
     Role,
 )
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.transport import APIStreamInterruptedError
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.resources.base import BaseResource, BaseSessionAccess
-from ai_api.resources.generation import GenerationResource
-from ai_api.resources.protocols import (
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.transport import APIStreamInterruptedError
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.resources.base import BaseResource, BaseSessionAccess
+from aiollm.resources.generation import GenerationResource
+from aiollm.resources.protocols import (
     ICompositeUseCase,
     IGenerationResource,
     IResource,
 )
-from ai_api.resources.usecases import (
+from aiollm.resources.usecases import (
     AdapterCompositeUseCase,
     AdapterStreamUseCase,
     AdapterUseCase,
@@ -46,19 +46,19 @@ from ai_api.resources.usecases import (
     BaseStreamUseCase,
     BaseUseCase,
 )
-from ai_api.response.buffered import BufferedResponse
-from ai_api.response.stream import Stream, map_stream
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import EventTypes
-from ai_api.types.requests.generation import GenerationRequest, Turn
-from ai_api.types.responses.events import (
+from aiollm.response.buffered import BufferedResponse
+from aiollm.response.stream import Stream, map_stream
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import EventTypes
+from aiollm.types.requests.generation import GenerationRequest, Turn
+from aiollm.types.responses.events import (
     GENERATION_TERMINAL,
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
     TextDeltaEvent,
 )
-from ai_api.types.responses.generation import GenerationResponse, TokenUsage
+from aiollm.types.responses.generation import GenerationResponse, TokenUsage
 from tests.conftest import FakeStreamResponse, FakeTransport
 
 

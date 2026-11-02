@@ -1,9 +1,9 @@
 ---
 name: ai-api-provider
-description: Add a new AI provider package to ai_api (e.g. OpenRouter, Gemini) - api.py with PROVIDER, resolver.py with the error table, client.py with SessionFactory and BaseProviderClient, the first endpoints, and the shared generation/client contract cases. Use it in the ai_api repository whenever the owner asks to support a new provider or vendor, or asks what adding one would take. For a new endpoint of an existing provider use ai-api-endpoint instead.
+description: Add a new AI provider package to aiollm (e.g. OpenRouter, Gemini) - api.py with PROVIDER, resolver.py with the error table, client.py with SessionFactory and BaseProviderClient, the first endpoints, and the shared generation/client contract cases. Use it in the aiollm repository whenever the owner asks to support a new provider or vendor, or asks what adding one would take. For a new endpoint of an existing provider use ai-api-endpoint instead.
 ---
 
-# ai_api provider
+# aiollm provider
 
 A provider is a flat package built from the same parts as `providers/openai/`
 and `providers/anthropic/`; the steps are in `docs/guide/extending.md` and
@@ -18,7 +18,7 @@ propose it (`change-proposal`) with what upstream offers (from the
 `compare_providers`), the auth scheme, error format and stream format, and
 which shared resources it will support. Code starts on the owner's go.
 
-## 1. Package skeleton (`src/ai_api/providers/<name>/`)
+## 1. Package skeleton (`src/aiollm/providers/<name>/`)
 
 1. `api.py`: `BaseAPI(base_url, version)` and `PROVIDER: Final =
    Provider.<NAME>`; add the member to `Provider` in `enums.py`.

@@ -12,16 +12,16 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import Strict
 
-from ai_api.enums import ResponseFormat
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import APIStatusError
-from ai_api.methods.base import BaseAPIMethod
-from ai_api.response.buffered import BufferedResponse
-from ai_api.response.parse.buffered import BufferedResponseParser
-from ai_api.serialization.json import loads
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import FieldValues
+from aiollm.enums import ResponseFormat
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import APIStatusError
+from aiollm.methods.base import BaseAPIMethod
+from aiollm.response.buffered import BufferedResponse
+from aiollm.response.parse.buffered import BufferedResponseParser
+from aiollm.serialization.json import loads
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import FieldValues
 from tests.conftest import make_method
 
 

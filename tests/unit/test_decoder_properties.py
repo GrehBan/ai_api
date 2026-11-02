@@ -12,8 +12,8 @@ import re
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from ai_api.response.parse.lines import LineDecoder
-from ai_api.response.parse.sse import ServerSentEvent, SSEDecoder
+from aiollm.response.parse.lines import LineDecoder
+from aiollm.response.parse.sse import ServerSentEvent, SSEDecoder
 
 NEWLINES = st.sampled_from(["\n", "\r\n", "\r"])
 

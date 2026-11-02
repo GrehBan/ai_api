@@ -14,11 +14,11 @@ from typing import Any
 
 import pytest
 
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.resources.generation import GenerationResource
-from ai_api.types.requests.generation import GenerationRequest
-from ai_api.types.responses.events import TextDeltaEvent
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.resources.generation import GenerationResource
+from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.responses.events import TextDeltaEvent
 from tests.conftest import FakeStreamResponse, FakeTransport
 from tests.providers.test_wire_contracts import load
 

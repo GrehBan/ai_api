@@ -1,3 +1,3 @@
-# ai_api.resources
+# aiollm.resources
 
-::: ai_api.resources
+::: aiollm.resources

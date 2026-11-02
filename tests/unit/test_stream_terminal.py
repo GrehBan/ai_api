@@ -15,18 +15,18 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import Field
 
-from ai_api.enums import ResponseFormat
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import APIStatusError
-from ai_api.http.exceptions.transport import APIStreamInterruptedError
-from ai_api.methods.base import BaseStreamMethod
-from ai_api.response.parse.sse import ServerSentEvent
-from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.serialization.json import loads
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import DONE, BaseMatcher, EventTypes
-from ai_api.types.protocols import IEventMatcher
+from aiollm.enums import ResponseFormat
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import APIStatusError
+from aiollm.http.exceptions.transport import APIStreamInterruptedError
+from aiollm.methods.base import BaseStreamMethod
+from aiollm.response.parse.sse import ServerSentEvent
+from aiollm.response.parse.stream import StreamResponseParser
+from aiollm.serialization.json import loads
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import DONE, BaseMatcher, EventTypes
+from aiollm.types.protocols import IEventMatcher
 from tests.conftest import FakeStreamResponse, make_method
 
 

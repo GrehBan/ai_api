@@ -7,17 +7,17 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from tenacity import AsyncRetrying, RetryCallState
 
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import (
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import (
     APIStatusError,
     NotFoundError,
     ServiceUnavailableError,
 )
-from ai_api.http.exceptions.transport import (
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APITLSError,
 )
-from ai_api.session.retry import (
+from aiollm.session.retry import (
     calculate_wait,
     retry_condition,
     should_retry,

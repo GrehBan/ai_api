@@ -8,12 +8,12 @@ from typing import Annotated, Any, ClassVar, Literal, TypeVar
 import pytest
 from pydantic import Field
 
-from ai_api.enums import ResponseFormat
-from ai_api.methods.base import BaseAPIMethod, BaseMethod, BaseStreamMethod
-from ai_api.response.parse.buffered import BufferedResponseParser
-from ai_api.response.parse.sse import ServerSentEvent
-from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.types.base import BaseAPIType
+from aiollm.enums import ResponseFormat
+from aiollm.methods.base import BaseAPIMethod, BaseMethod, BaseStreamMethod
+from aiollm.response.parse.buffered import BufferedResponseParser
+from aiollm.response.parse.sse import ServerSentEvent
+from aiollm.response.parse.stream import StreamResponseParser
+from aiollm.types.base import BaseAPIType
 from tests.conftest import make_method
 
 

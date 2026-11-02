@@ -10,14 +10,14 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import Field
 
-from ai_api.enums import BodyFormat, ResponseFormat
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.status import APIStatusError
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.response.parse.sse import ServerSentEvent
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.base import BaseAPIType
+from aiollm.enums import BodyFormat, ResponseFormat
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import APIStatusError
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.response.parse.sse import ServerSentEvent
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
 pytestmark = pytest.mark.integration

@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping with ai-api. The library is pre-alpha: the public API can still change, and every change is welcome, from a typo to a new provider. For anything larger than a fix, open an issue first and describe the change, so that we agree on the design before you spend time on code.
+Thank you for helping with aiollm. The library is pre-alpha: the public API can still change, and every change is welcome, from a typo to a new provider. For anything larger than a fix, open an issue first and describe the change, so that we agree on the design before you spend time on code.
 
 The guide below walks through one change from start to finish. The rules it refers to are written down in [`CLAUDE.md`](https://github.com/GrehBan/ai_api/blob/master/CLAUDE.md), the project's profile: commands, architecture invariants and conventions. It is written for AI assistants, and it is the most complete description of the code base for people too.
 
@@ -39,7 +39,7 @@ uv run pre-commit install          # or: pre-commit install
 ## Project layout
 
 ```text
-src/ai_api/
+src/aiollm/
 ├── enums.py            Provider, BodyFormat, ResponseFormat, Role,
 │                       IncompleteReason, GenerationEventType
 ├── exceptions.py       AIAPIError (the root of all library errors),
@@ -62,7 +62,7 @@ src/ai_api/
     └── openai/         OpenAIClient and the Responses API: methods/, types/, adapters/
 ```
 
-The packages are layers, listed from the bottom up; a module imports only from the layers below it. Transport code lives only in `*/aiohttp.py` modules, so `import ai_api` does not import aiohttp. The tests mirror this: `tests/unit/`, `tests/session/`, `tests/integration/` (aiohttp against a local server), `tests/providers/` (every provider against shared scenarios and the upstream schemas), `tests/typing/` (static checks of the public API) and `tests/docs/` (the examples of these pages).
+The packages are layers, listed from the bottom up; a module imports only from the layers below it. Transport code lives only in `*/aiohttp.py` modules, so `import aiollm` does not import aiohttp. The tests mirror this: `tests/unit/`, `tests/session/`, `tests/integration/` (aiohttp against a local server), `tests/providers/` (every provider against shared scenarios and the upstream schemas), `tests/typing/` (static checks of the public API) and `tests/docs/` (the examples of these pages).
 
 ## Making changes in code
 

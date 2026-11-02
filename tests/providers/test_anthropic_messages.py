@@ -12,14 +12,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from ai_api.http.exceptions.status import ServiceUnavailableError
-from ai_api.providers.anthropic import API_VERSION, AnthropicErrorResolver
-from ai_api.providers.anthropic.methods import (
+from aiollm.http.exceptions.status import ServiceUnavailableError
+from aiollm.providers.anthropic import API_VERSION, AnthropicErrorResolver
+from aiollm.providers.anthropic.methods import (
     VERSION_HEADERS,
     CreateMessage,
     StreamMessage,
 )
-from ai_api.providers.anthropic.types import (
+from aiollm.providers.anthropic.types import (
     ContentBlockDeltaEvent,
     ContentBlockStartEvent,
     ContentBlockStopEvent,
@@ -34,7 +34,7 @@ from ai_api.providers.anthropic.types import (
     UnknownDelta,
     UnknownEvent,
 )
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import (
     FakeStreamResponse,
     FakeTransport,
