@@ -92,6 +92,24 @@ jobs:
           print("ai-api", ai_api.__version__, "imports from its wheel")
           EOF
 
+  changelog:
+    # A pull request adds a fragment to CHANGES/ (or, for a release,
+    # changes CHANGELOG.md itself); the "no changelog" label skips the
+    # check for a change no user sees.
+    name: changelog
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(github.event.pull_request.labels.*.name, 'no changelog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: >-
+          uv run --locked --only-group dev
+          towncrier check --compare-with origin/${{ github.base_ref }}
+
   audit:
     name: audit
     runs-on: ubuntu-latest

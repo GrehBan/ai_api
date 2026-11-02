@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`ai-api` is a pre-alpha (0.5.0), async-first, low-level toolkit for building typed HTTP API clients, aimed at AI providers. It ships the infrastructure, `OpenAIClient` (OpenAI's Responses API) and `AnthropicClient` (Anthropic's Messages API), both with the provider-neutral `client.generation`. The public surface is unstable.
+`ai-api` is a pre-alpha (0.6.0), async-first, low-level toolkit for building typed HTTP API clients, aimed at AI providers. It ships the infrastructure, `OpenAIClient` (OpenAI's Responses API) and `AnthropicClient` (Anthropic's Messages API), both with the provider-neutral `client.generation`. The public surface is unstable.
 
 **The code says what the library does; an agreed decision says what it should do.** This file, the README and the site describe the code and may lag. When they disagree, find the cause: a text that lags behind the code is fixed; code that contradicts an agreed decision is a bug, raised with the maintainer, never settled by declaring the code right. The user documentation is the MkDocs site in `docs/` (published at <https://grehban.github.io/ai_api/>); its reference pages are generated from the docstrings, so a docstring is user documentation too.
 
@@ -26,9 +26,11 @@ uv run mkdocs serve                  # the docs site at http://127.0.0.1:8000
 uv run mkdocs build --strict         # build it; any warning fails
 uv run rumdl check README.md CHANGELOG.md docs   # Markdown lint
 uv run pre-commit install            # once: hooks from .pre-commit-config.yaml
+uv run towncrier create +slug.fixed.md   # a changelog fragment in CHANGES/
+uv run towncrier build --draft       # preview the next CHANGELOG section
 ```
 
-CI (`.github/workflows/tests.yml`) runs the checks and `mkdocs build --strict` (job `lint and types`), pytest on Ubuntu and Windows × every supported CPython (3.13, 3.14, 3.15; the `tests` job sums up the matrix, so the branch ruleset needs one stable name), a wheel built and imported in a clean environment (`package`) and `uv audit` of the lockfile (`audit`); `.github/workflows/docs.yml` publishes the site to GitHub Pages on every push to `master`. Set `NO_MKDOCS_2_WARNING=1` to hide Material's notice about its end of life.
+CI (`.github/workflows/tests.yml`) runs the checks and `mkdocs build --strict` (job `lint and types`), pytest on Ubuntu and Windows × every supported CPython (3.13, 3.14, 3.15; the `tests` job sums up the matrix, so the branch ruleset needs one stable name), a wheel built and imported in a clean environment (`package`), `uv audit` of the lockfile (`audit`) and, on pull requests, `towncrier check` (`changelog`: a PR adds a fragment to `CHANGES/` or changes `CHANGELOG.md`; the `no changelog` label skips it); `.github/workflows/docs.yml` publishes the site to GitHub Pages on every push to `master`. Set `NO_MKDOCS_2_WARNING=1` to hide Material's notice about its end of life.
 
 ## Tests
 

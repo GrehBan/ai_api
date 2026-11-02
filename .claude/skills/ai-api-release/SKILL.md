@@ -1,6 +1,6 @@
 ---
 name: ai-api-release
-description: Bump the ai_api version and prepare its release commit and PR - SemVer before 1.0 (a breaking change bumps the minor, anything else the patch), the version in __meta__.py, README and CLAUDE.md, the CHANGELOG section with compare links, the full quality gate, a commit and PR without model names. Use it in the ai_api repository whenever a change is ready to ship, before any push of a significant change, when the owner says «подними версию», «релиз», «готовь PR», or asks which version a change needs. Tags are never created.
+description: Bump the ai_api version and prepare its release commit and PR - SemVer before 1.0 (a breaking change bumps the minor, anything else the patch), the version in __meta__.py, README and CLAUDE.md, the CHANGELOG section built by towncrier from the fragments in CHANGES/ with compare links, the full quality gate, a commit and PR without model names. Use it in the ai_api repository whenever a change is ready to ship, before any push of a significant change, when the owner says «подними версию», «релиз», «готовь PR», or asks which version a change needs. Tags are never created.
 ---
 
 # ai_api release
@@ -17,35 +17,45 @@ Read `src/ai_api/__meta__.py` for the current version.
   error type, import path, a removed name) bumps the **minor**: 0.5.0 → 0.6.0.
   Anything else bumps the **patch**: 0.5.0 → 0.5.1.
 - From 1.0: the usual major/minor/patch.
-- One release per merge: if the branch already holds an unreleased bump (the
-  version is ahead of `origin/master`), keep it and only extend its CHANGELOG
-  section; raise the level if a later commit made the change breaking.
+- The fragments in `CHANGES/` decide it: any `**Breaking:**` fragment means
+  a minor bump before 1.0. Preview with `uv run towncrier build --draft
+  --version X.Y.Z`.
 
-## 2. Edit the files
+## 2. Changelog fragments
+
+Every user-visible change has a fragment in `CHANGES/` (see
+`CHANGES/README.md`): `<PR>.<type>.md`, or `+<slug>.<type>.md` before the
+PR exists; types `added`, `changed`, `deprecated`, `removed`, `fixed`,
+`security`; one Markdown paragraph about what a user sees; a breaking one
+starts with `**Breaking:**` and says how to migrate. CI's `changelog` job
+fails a PR that adds no fragment and does not change `CHANGELOG.md`; the
+`no changelog` label skips it for changes no user sees.
+
+## 3. Edit the files
 
 - `src/ai_api/__meta__.py`: `__version__ = "X.Y.Z"`.
 - `README.md`: the status line `> **Status: pre-alpha (X.Y.Z).**`.
 - `CLAUDE.md`: `pre-alpha (X.Y.Z)` in the Project section.
-- `CHANGELOG.md` (Keep a Changelog):
-  - turn the content under `## [Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD`
-    (today's date), leaving an empty `## [Unreleased]` above it;
-  - sections in the order Added, Changed, Deprecated, Removed, Fixed,
-    Security; each breaking entry starts with `**Breaking:**` and says how to
-    migrate;
-  - entries describe what a user sees, not file names;
-  - at the bottom: `[Unreleased]: .../compare/vX.Y.Z...HEAD` and a new
-    `[X.Y.Z]: .../compare/v<previous>...vX.Y.Z` line.
+- `CHANGELOG.md`: `uv run towncrier build --version X.Y.Z --yes` writes
+  the section below `<!-- towncrier release notes start -->` (under the
+  empty `## [Unreleased]`) and removes the fragments; stage the fragments
+  with `git add CHANGES` first, so it can `git rm` them. Then add the
+  compare links at the bottom by hand: `[Unreleased]:
+  .../compare/vX.Y.Z...HEAD` and a new `[X.Y.Z]:
+  .../compare/v<previous>...vX.Y.Z` line. Then run
+  `uv run rumdl fmt CHANGELOG.md`: towncrier's Markdown template leaves a
+  double blank line before the previous release, which rumdl rejects.
 
 The files are CRLF on the owner's PC; edit them with the Edit tool, which
 keeps line endings.
 
-## 3. Gate
+## 4. Gate
 
 Run the full gate from `CLAUDE.md` (ruff check and format, mypy, pyright,
 typing tests, pytest with coverage at 100 %, rumdl, `mkdocs build --strict`).
 All green before any commit.
 
-## 4. Commit and PR - only on the owner's word
+## 5. Commit and PR - only on the owner's word
 
 - Branch from fresh `master` if not on a feature branch already.
 - `git add` by explicit paths only; never `.mcp.json`, never

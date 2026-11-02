@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- towncrier release notes start -->
+
+## [0.6.0] - 2026-11-02
+
+### Added
+
+- A Versioning section in the design guide: before 1.0 a breaking change
+  bumps the minor version and anything else the patch, and the public API
+  is what `ai_api` and the `__all__` of its packages export.
+- CI tests every supported CPython (3.13, 3.14 and 3.15) on Linux and
+  Windows, builds the wheel and imports it in a clean environment, and
+  audits the locked dependencies for known vulnerabilities.
+- `request_path_template` on every method: the path as declared, such as
+  `/files/{file_id}`, which holds none of the request's values and so is
+  safe to log.
+
+### Changed
+
+- **Breaking:** the method protocols (`IBaseMethod`, so `IAPIMethod` and
+  `IStreamMethod`) require a `request_path_template` property, the path as
+  declared with its placeholders kept. Methods derived from
+  `BaseAPIMethod` or `BaseStreamMethod` have it; a class of your own that
+  implements a protocol directly adds a property returning its path
+  template.
+- The logs no longer carry anything that may name a user's data. The
+  transport logs the path as declared (`Sending GET /files/{file_id}`),
+  not the values of its parameters; a followed redirect is logged without
+  the server's path; a retry names the failed attempt's error type and how
+  many notes it has, not their text; the body writer's failure after the
+  response came is logged by its type, without its message or traceback;
+  the wait for a cancelled upload read no longer names the file.
+
+### Fixed
+
+- On Python 3.14 and newer, a blocking call of an upload or a download
+  (a read, a write, a close) that failed after its caller was cancelled
+  was reported twice to the event loop's exception handler, once by
+  `asyncio.shield`; it is reported once.
+
 ## [0.5.0] - 2026-11-02
 
 ### Changed
@@ -824,7 +863,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/GrehBan/ai_api/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/GrehBan/ai_api/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/GrehBan/ai_api/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/GrehBan/ai_api/compare/v0.4.2...v0.4.3
