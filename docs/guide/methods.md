@@ -93,6 +93,12 @@ Search(query="cats", cursor=None).get_body_map()
 
 A model of this library that a field typed `Any` holds at run time, such as a response item sent back in the next request, keeps the shape it came in: its fields that hold `None` by default (absent in the response) are left out, and the rest are sent as they are.
 
+Some consequences that are easy to miss:
+
+- **Only `BaseAPIType` keeps its shape.** The rule lives in `BaseAPIType`'s serializer. A plain Pydantic `BaseModel` put into the body, or a model you dumped yourself with `model_dump()` and passed as a dict, sends every `None` field as `null`. A subclass of `BaseAPIType` that declares its own `@model_serializer` replaces the library's one (Pydantic keeps one per model), so it sends `null` too.
+- **`MISSING` is truthy.** `bool(MISSING)` is `True`, so `if request.instructions:` holds for a field that was not given. Compare with `is MISSING` (or `is not MISSING`), as the library's adapters do.
+- **No `null` by default.** A field cannot default to `None`, so a field that should send `null` unless told otherwise is declared without a default (`x: int | None`) and given `None` explicitly. That is deliberate: the request then shows that it sends `null`.
+
 Response models are the opposite on purpose: a field the provider adds tomorrow does not break today's client. `BaseAPIType` uses `extra="ignore"` and drops such a field; `BaseAPITypeExtra` uses `extra="allow"` and keeps it in `model_extra`. The provider types derive from `BaseAPITypeExtra`, so whatever the provider sent and the library does not model is still in `raw`, e.g. `response.raw.model_extra["service_tier"]`.
 
 ## Result type and response format
