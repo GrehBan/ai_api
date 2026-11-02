@@ -27,6 +27,7 @@ jobs:
       - run: uv run mypy src
       - run: uv run pyright
       - run: uv run pytest --mypy -m mypy tests/typing
+      - run: uv run rumdl check README.md CHANGELOG.md CONTRIBUTING.md docs
       - run: uv run mkdocs build --strict
         env:
           NO_MKDOCS_2_WARNING: "1"

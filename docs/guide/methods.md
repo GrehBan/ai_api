@@ -1,6 +1,6 @@
 # Methods
 
-A method class declares the HTTP request in its dunder class attributes. Its fields are the request parameters. Fields set to `None` are not sent, and unknown fields raise `ValidationError`, so a misspelled parameter is not sent silently.
+A method class declares the HTTP request in its dunder class attributes. Its fields are the request parameters. A field left `MISSING` is not sent, `None` is sent as `null` (see [Optional fields](#optional-fields-missing-and-none)), and unknown fields raise `ValidationError`, so a misspelled parameter is not sent silently.
 
 | Attribute | Default | Meaning |
 |---|---|---|
@@ -37,7 +37,7 @@ Why dunder class attributes rather than fields or a decorator:
 - **They describe the class, not an instance.** The configuration is checked once, when the class is defined: a bad path template, an unknown query field or a response format that contradicts the result type raises `TypeError` at import time, not at the first request.
 - **The design follows aiogram's `TelegramMethod`.** A request is data that knows its own endpoint and result type, so one generic `send_request` serves every endpoint, and adding an endpoint means adding one small class.
 
-Inside the library, these attributes are read only through regular properties (`request_path`, `request_method`, `request_headers`, `request_body_format`, `retryable`, `response_format`, `response_type`, `response_parser`, `stream_parser`), which is what the session and parsers see.
+Inside the library, these attributes are read only through regular properties (`request_path`, `request_path_template`, `request_method`, `request_headers`, `request_body_format`, `retryable`, `response_format`, `response_type`, `response_parser`, `stream_parser`), which is what the session and parsers see.
 
 ## Validation of parameters
 
@@ -247,7 +247,7 @@ RetrieveModel(model_id="example-1").request_path   # "/models/example-1"
 - **`build_url` gets an encoded path.** Join it without encoding it again, e.g. with `URL.joinpath(..., encoded=True)` as `BaseAPI` does. yarl's `/` operator would turn `%2F` into `%252F`, and the server would see a different identifier.
 - **Rejected values.** `None`, NaN, infinity, an empty string and the `.` / `..` segments raise `ValueError` when the request is built.
 - **Identifiers with slashes.** For values such as `meta-llama/Llama-3`, set `__request_path_safe__ = "/"` on that method. Each segment is still checked for `.` and `..`.
-- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__` a field annotated as a list, set, dict or model (it has no single segment) and a field that defaults to `MISSING` (a path cannot leave a segment out) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
+- **Checks at class definition.** A misspelled or missing field, a placeholder that is not a plain name (`{}`, `{a.b}`, `{a:>5}`, `{a!r}`), a field that is also in `__request_query__`, a field annotated as a list, set, dict or model (it has no single segment) and a field that defaults to `MISSING` (a path cannot leave a segment out) raise `TypeError` when the class is defined, not when the request is sent. Such a value in a field typed `Any` raises `TypeError` when the request is built. Write literal braces as `{{` and `}}`.
 
 ## Describing an API
 

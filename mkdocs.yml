@@ -112,5 +112,5 @@ nav:
       - providers.openai: reference/openai.md
       - providers.anthropic: reference/anthropic.md
   - Shared field mapping: unification.md
-  - Development: development.md
+  - Contributing: contributing.md
   - Changelog: changelog.md

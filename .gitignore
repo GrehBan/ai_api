@@ -17,3 +17,9 @@ report.html
 
 # The documentation site, built by mkdocs
 site/
+
+# Local agent and editor configuration
+.mcp.json
+.claude/settings.local.json
+.claude/launch.json
+.claude/worktrees/

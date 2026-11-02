@@ -53,7 +53,7 @@ Any object with a `header_name` and an `encode()` method is an `IAuth`; it does 
 `headers=Headers({...})` adds headers to every request, for example an API version header:
 
 ```text
-AiohttpSession(api, auth, resolver, headers=Headers({"anthropic-version": "2023-06-01"}))
+AiohttpSession(api, auth, resolver, headers=Headers({"x-api-version": "2024-01"}))
 ```
 
 They are read on every request, so a header added later with `session.headers.add(...)` is sent from the next request on.
