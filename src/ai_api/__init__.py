@@ -9,6 +9,8 @@ so importing ``ai_api`` does not import a transport.
 
 from __future__ import annotations
 
+import logging
+
 from ai_api.__meta__ import (
     __version__,
 )
@@ -124,6 +126,11 @@ from ai_api.types.responses.generation import (
     GenerationResponse,
     TokenUsage,
 )
+
+# The library configures no logging: its records reach the handlers
+# the application sets up, and without them nothing is printed (as
+# the logging HOWTO advises libraries).
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "AIAPIError",

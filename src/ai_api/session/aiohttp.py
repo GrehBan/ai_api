@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import ssl
+import time
 from contextlib import AsyncExitStack
 from typing import Any, Final, Self, TypedDict
 
@@ -49,6 +51,8 @@ from ai_api.session.retry import (
     DEFAULT_MAX_RETRY_AFTER,
     DEFAULT_RETRY_DEADLINE,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT: Final[ClientTimeout] = ClientTimeout(
     total=600,
@@ -134,6 +138,9 @@ def _same_origin(url: URL) -> ClientMiddlewareType:
             raise APIRedirectError(
                 f"Redirect to another origin is not followed: {request.url}"
             )
+
+        if request.url != url:
+            logger.debug("Following redirect to %s", request.url.path)
 
         return await handler(request)
 
@@ -293,6 +300,7 @@ class AiohttpSession(BaseSession):
         if client is not None and not client.closed:
             await client.close()
             await asyncio.sleep(_CLOSE_DELAY)
+            logger.debug("Closed the connection pool of %s", self.api.base_url)
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop | None:
@@ -324,6 +332,7 @@ class AiohttpSession(BaseSession):
                 trust_env=self._trust_env,
                 loop=self._loop,
             )
+            logger.debug("Opened a connection pool for %s", self.api.base_url)
 
         return self._client
 
@@ -483,6 +492,12 @@ class AiohttpSession(BaseSession):
         request_headers.update(method.request_headers.build(headers))
         request_headers[self.auth.header_name] = self.auth.encode()
 
+        # The path only: a query may carry a key; never headers or bodies.
+        logger.debug(
+            "Sending %s %s", method.request_method, method.request_path
+        )
+        started = time.perf_counter()
+
         try:
             with transport_errors():
                 response = await client.request(
@@ -500,6 +515,13 @@ class AiohttpSession(BaseSession):
             ) from exc
 
         uploads.push_async_callback(wait_for_writer, response)
+        # A diagnostic, whatever the status: an error status is raised, and
+        # so reported, a layer above. A stream's body is not read yet.
+        logger.debug(
+            "HTTP attempt finished: status=%d duration=%.3fs",
+            response.status,
+            time.perf_counter() - started,
+        )
 
         if response.status in REDIRECT_STATUSES:
             location = response.headers.get(LOCATION, "")

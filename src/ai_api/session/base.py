@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Self
 
-from tenacity import AsyncRetrying, stop_after_attempt, stop_before_delay
+from tenacity import (
+    AsyncRetrying,
+    RetryCallState,
+    stop_after_attempt,
+    stop_before_delay,
+)
 from tenacity.stop import stop_base
 
 from ai_api.http.exceptions.protocols import IErrorResolver
@@ -31,6 +37,29 @@ from ai_api.types.files import closing_source
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+logger = logging.getLogger(__name__)
+
+
+def _log_retry(state: RetryCallState) -> None:
+    """Log a retry before its wait: the next attempt, the wait, the cause.
+
+    The failed attempt's error is not logged elsewhere, since it is not
+    raised; its notes (a failing close of an upload, say) go with it.
+
+    Args:
+        state: Tenacity's state of the current retry loop.
+    """
+    exc = state.outcome.exception() if state.outcome else None
+    delay = state.next_action.sleep if state.next_action else 0.0
+    notes = "; ".join(getattr(exc, "__notes__", ()))
+    logger.warning(
+        "Retrying request after %s: attempt=%d, delay=%.2fs%s",
+        type(exc).__name__,
+        state.attempt_number + 1,
+        delay,
+        f", notes={notes}" if notes else "",
+    )
 
 
 class BaseSession(ABC):
@@ -155,7 +184,9 @@ class BaseSession(ABC):
             APITransportError: If the request could not be completed.
             APIResponseError: If the response body could not be parsed.
         """
-        return await self._with_retry(
+        name = type(method).__name__
+        logger.debug("Starting %s", name)
+        result = await self._with_retry(
             method.retryable,
             lambda: self._send_once(
                 method,
@@ -163,6 +194,8 @@ class BaseSession(ABC):
                 timeout=timeout,
             ),
         )
+        logger.debug("Completed %s", name)
+        return result
 
     @asynccontextmanager
     async def stream[T](
@@ -209,6 +242,8 @@ class BaseSession(ABC):
             >>> async with session.stream(Download()) as stream:
             ...     await stream.save("out.bin")
         """
+        name = type(method).__name__
+        logger.debug("Starting %s", name)
         response = await self._with_retry(
             method.retryable,
             lambda: self._open_stream_once(
@@ -232,6 +267,8 @@ class BaseSession(ABC):
 
             async with closing_source(stream, what="the stream"):
                 yield stream
+
+        logger.debug("Completed %s items=%d", name, stream.items_received)
 
     async def _with_retry[R](
         self,
@@ -272,6 +309,7 @@ class BaseSession(ABC):
             retry=retry_condition(self.max_retry_after),
             wait=calculate_wait,
             stop=stop,
+            before_sleep=_log_retry,
             reraise=True,
         )
         return await retrying(attempt)
@@ -339,19 +377,22 @@ class BaseSession(ABC):
         )
 
         if response.status >= HTTPStatus.BAD_REQUEST:
-            try:
+            # `response.aclose()` may raise an `APIRequestError` before
+            # `_raise_for_status()` is called. Consequently,
+            # the original HTTP status will
+            # not be included in the `APIStatusError`.
+            # so closing_source() can capture an APIStatusError
+            # and attach a cleanup error using add_note().
+            async with closing_source(response, what="the response"):
                 body = await response.read()
-            finally:
-                await response.aclose()
-
-            self._raise_for_status(
-                BufferedResponse(
-                    status=response.status,
-                    headers=response.headers,
-                    body=body,
-                    charset=response.charset,
+                self._raise_for_status(
+                    BufferedResponse(
+                        status=response.status,
+                        headers=response.headers,
+                        body=body,
+                        charset=response.charset,
+                    )
                 )
-            )
 
         return response
 

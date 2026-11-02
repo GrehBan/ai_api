@@ -321,3 +321,43 @@ async def test_a_failing_close_never_hides_the_streams_error() -> None:
     assert note.startswith("Closing the response also failed: APIRequestError")
     assert "close failed" in note
     assert source.closed == 1
+
+
+async def refuse_before_the_body(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """Answer 503 before reading the body, then hang up."""
+    await reader.readuntil(b"\r\n\r\n")
+    writer.write(
+        b"HTTP/1.1 503 Service Unavailable\r\n"
+        b"Content-Length: 4\r\nConnection: close\r\n\r\nbusy"
+    )
+    await writer.drain()
+    writer.close()
+
+
+async def test_a_failing_close_never_hides_the_error_status() -> None:
+    # The stream is refused while its upload is still open, and the
+    # upload's source fails to close: the status error is raised, with
+    # the close failure as a note, not the close failure instead of it.
+    server = await asyncio.start_server(refuse_before_the_body, "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()[:2]
+    source = Produce(close_fails=True)
+    method = StreamUpload(file=StreamFile(source, filename="a.bin"))
+
+    try:
+        async with AiohttpSession(
+            LocalAPI(URL(f"http://{host}:{port}/")),
+            BearerAuth(TEST_TOKEN),
+            BaseErrorResolver(),
+        ) as session:
+            with pytest.raises(ServiceUnavailableError) as info:
+                async with session.stream(method):
+                    pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    (note,) = info.value.__notes__
+    assert note.startswith("Closing the response also failed: APIRequestError")
+    assert source.closed == 1

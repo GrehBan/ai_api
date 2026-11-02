@@ -47,7 +47,7 @@ The main choices, and the reasons for them. Details are in the sections above.
 
 - **Streams are not resumed.** SSE `id` and `retry` are parsed and available on `ServerSentEvent` (both are the last value the stream set, as the HTML standard applies them), but a dropped stream is not reconnected on its own; the error reaches your code, which can open it again with `headers={"Last-Event-ID": ...}`. Planned: an opt-in reconnection for servers that replay events. See [Interrupted streams](streaming.md#interrupted-streams).
 - **No raw binary request body.** A file can only be uploaded as a multipart part, not as the whole body.
-- **No logging or hooks.** The library logs nothing and has no request or response hooks for metrics and tracing yet.
+- **No hooks.** The library logs (see [Logging](sessions.md#logging)), but has no request or response hooks for metrics and tracing yet.
 - **No synchronous API.**
 - **Providers.** OpenAI has only the Responses API and Anthropic only the Messages API, each with text in and text out. Request parameters the methods do not list, such as `tools` or `thinking`, cannot be sent (methods forbid unknown fields); images and other content parts go in the dict forms of `input`, `content` and `system`. Response fields the library does not model are kept in `raw`.
 - **Shared API.** Resources and use cases (`resources/`) and the shared request, response and event types (`types/requests/`, `types/responses/`) are the base of a provider-neutral API; `OpenAIClient.generation` and `AnthropicClient.generation` implement them.

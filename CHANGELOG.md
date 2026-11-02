@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-02
+
+### Added
+
+- Logging through the standard `logging` module, under `ai_api` and
+  one logger per module that logs, with only a `NullHandler` on
+  `ai_api`. An exception that reaches the caller is not logged; what
+  the library handles or swallows is: a call's start and end and
+  every attempt (sent; finished with status and duration) at DEBUG,
+  every retry at WARNING (with the failed attempt's error and its
+  notes, which are not raised), a suppressed error at DEBUG with its
+  traceback. Tokens, keys, headers, bodies and query strings are
+  never logged. See the Logging section of the sessions guide.
+- ruff's `G` and `LOG` rules, so log calls stay lazy.
+
+### Fixed
+
+- A stream refused with an error status while its upload was still
+  open, whose source then failed to close, raised the close error
+  instead of the status error; the status error is raised now,
+  with the close error as a note.
+- The body writer's failure after the answer came was suppressed
+  without a trace; it is logged at DEBUG, with its traceback.
+
 ## [0.4.3] - 2026-11-02
 
 ### Fixed
@@ -738,7 +762,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/GrehBan/ai_api/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/GrehBan/ai_api/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/GrehBan/ai_api/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/GrehBan/ai_api/compare/v0.4.0...v0.4.1
