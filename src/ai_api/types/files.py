@@ -6,6 +6,7 @@ import asyncio
 import errno
 import inspect
 import io
+import logging
 import mimetypes
 import os
 import weakref
@@ -23,6 +24,8 @@ from typing import Any, BinaryIO, Final, Literal, Self, cast
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CHUNK_SIZE: Final[int] = 64 * 1024
 """Number of bytes read from disk or a stream at a time."""
@@ -743,6 +746,7 @@ class IOFile(ChunkedFile):
                 )
                 raise RuntimeError(message)
 
+            logger.debug("Waiting for a cancelled read of %s", lease.reader)
             await lease.work.wait_idle()
 
         if self._start is None and self._opened:

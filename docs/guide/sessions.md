@@ -127,3 +127,51 @@ Redirects are not followed by default: API providers do not redirect, and aiohtt
 A session is bound to one event loop: the one passed as `loop=`, or else the loop of its first request (or `async with`). It can be created anywhere, even at module level, but using or closing it from another loop (such as a second `asyncio.run`) raises `RuntimeError`. The `session.loop` property only reports the bound loop (`None` before first use) and never binds one. Close the session before its loop ends, ideally with `async with`.
 
 aiohttp connections belong to the loop that created them, and using them from another loop fails with unclear errors such as `Event loop is closed` or a hang. Binding the session gives a clear error at the first wrong call instead.
+
+## Logging
+
+The library logs through the standard `logging` module, under the `ai_api` logger and one child per module that logs (`ai_api.session.base`, `ai_api.session.aiohttp`, ...). It sets up nothing itself: `ai_api` has only a `NullHandler`, as the logging HOWTO advises libraries, so nothing is printed until your application configures logging.
+
+```text
+logging.basicConfig(level=logging.WARNING)           # retries
+logging.getLogger("ai_api").setLevel(logging.DEBUG)  # every attempt
+```
+
+Each layer logs only its own part, so nothing is said twice. A retried call looks like this:
+
+```text
+DEBUG   ai_api.session.base     Starting CreateResponse
+DEBUG   ai_api.session.aiohttp  Sending POST /responses
+DEBUG   ai_api.session.aiohttp  HTTP attempt finished: status=429 duration=0.212s
+WARNING ai_api.session.base     Retrying request after RateLimitError: attempt=2, delay=1.50s
+DEBUG   ai_api.session.aiohttp  Sending POST /responses
+DEBUG   ai_api.session.aiohttp  HTTP attempt finished: status=200 duration=1.874s
+DEBUG   ai_api.session.base     Completed CreateResponse
+```
+
+### What is logged, and what is not
+
+An exception that reaches your code is not logged: you decide whether it is an error, and a log line next to your own would say it twice. So a 400, 401 or 404, retries that ran out, a body that does not parse and a cancellation are raised, never logged. What the library handles itself, and what it can give to nobody, is logged:
+
+| Level | When | Examples |
+|---|---|---|
+| DEBUG | the details of a call, a recovered or deliberately suppressed error | a call's start and end, every attempt (method, path, status, duration), an error the library swallows (with its traceback) |
+| INFO | a significant success, when it is worth it | none yet |
+| WARNING | an error handled by a retry or a fallback | a retry: the error of the failed attempt and its notes (that error is not raised, so this is where it shows), the attempt that follows and the wait |
+| ERROR | a failure that could not reach any caller | a read or a close that failed after its caller was cancelled, reported through the event loop's exception handler, which asyncio logs under its own `asyncio` logger |
+
+Every record, by logger:
+
+| Level | Logger | What |
+|---|---|---|
+| WARNING | `session.base` | a retry |
+| DEBUG | `session.base` | a call's start and end (`items=` for a stream) |
+| DEBUG | `session.aiohttp` | each attempt: sent (method and path), finished (status and duration; for a stream, when the headers came), a redirect followed, the connection pool opened and closed |
+| DEBUG | `session.retry` | an error not retried because its `Retry-After` is above `max_retry_after` |
+| DEBUG | `session.loop` | the event loop a session is bound to |
+| DEBUG | `response.aiohttp` | a failure of the body writer after the answer came, which aiohttp drops, with its traceback |
+| DEBUG | `types.unknown` | a `type` the library does not model yet, kept as an unknown item |
+| DEBUG | `types.files` | an upload waiting for a cancelled read of its stream |
+| DEBUG | `client.validators` | the environment variable an API key was read from |
+
+A request is logged by its method and path only. Query strings (which may carry a key), headers, bodies, tokens and API keys are never logged. The official SDKs log request bodies at DEBUG; this library does not, since a body holds the prompts.

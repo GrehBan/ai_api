@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Final
 
@@ -13,6 +14,8 @@ from tenacity import (
 
 from ai_api.http.exceptions.status import APIStatusError
 from ai_api.http.exceptions.transport import APITransportError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RETRY_AFTER: Final[float] = 60.0
 """Longest ``Retry-After`` the session waits for, in seconds."""
@@ -46,9 +49,21 @@ def should_retry(
         anything else and for a ``Retry-After`` above the limit.
     """
     if isinstance(exc, APIStatusError):
-        return exc.transient and (
-            exc.retry_after is None or exc.retry_after <= max_retry_after
-        )
+        if (
+            exc.transient
+            and exc.retry_after is not None
+            and exc.retry_after > max_retry_after
+        ):
+            logger.debug(
+                "Not retrying %s: the API asks to wait %s s, more than "
+                "max_retry_after (%s s)",
+                type(exc).__name__,
+                exc.retry_after,
+                max_retry_after,
+            )
+            return False
+
+        return exc.transient
 
     if isinstance(exc, APITransportError):
         return exc.transient

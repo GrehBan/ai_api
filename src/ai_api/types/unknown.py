@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from pydantic import ConfigDict
 
 from ai_api.types.base import BaseAPIType
+
+logger = logging.getLogger(__name__)
 
 UNKNOWN: Final = "unknown"
 """Tag of a value whose ``type`` the library does not know yet."""
@@ -56,6 +59,16 @@ def by_type(tags: Mapping[str, str]) -> Callable[[Any], str]:
             if isinstance(value, Mapping)
             else getattr(value, "type", None)
         )
-        return tags.get(kind, UNKNOWN) if isinstance(kind, str) else UNKNOWN
+        if not isinstance(kind, str):
+            return UNKNOWN
+
+        tag = tags.get(kind)
+
+        if tag is None:
+            # A type the library does not model yet, such as a new event.
+            logger.debug("Unknown type %r is kept as an unknown item", kind)
+            return UNKNOWN
+
+        return tag
 
     return discriminate

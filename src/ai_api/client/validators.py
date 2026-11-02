@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from ai_api.enums import Provider
 from ai_api.session.protocols import ISession
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_token(
@@ -44,8 +47,10 @@ def resolve_token(
     if token is None:
         token = os.environ.get(env) or None
 
-    if token is None:
-        raise ValueError(f"Provide a token or a session, or set {env}")
+        if token is None:
+            raise ValueError(f"Provide a token or a session, or set {env}")
+
+        logger.debug("Using the API key from %s", env)  # never the key
 
     return token
 

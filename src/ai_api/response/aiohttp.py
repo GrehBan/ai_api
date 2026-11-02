@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack
 
@@ -10,6 +10,8 @@ from aiohttp import ClientResponse
 
 from ai_api.http.exceptions.aiohttp import body_errors
 from ai_api.http.exceptions.response import APIResponseError
+
+logger = logging.getLogger(__name__)
 
 
 async def read_body(response: ClientResponse, max_size: int | None) -> bytes:
@@ -58,8 +60,13 @@ async def wait_for_writer(response: ClientResponse) -> None:
     Args:
         response: The response of the request.
     """
-    with contextlib.suppress(Exception):
+    try:
         await response.wait_for_close()
+    except Exception:  # noqa: BLE001 - logged, aiohttp drops it too
+        logger.debug(
+            "The request body writer failed after the response came",
+            exc_info=True,
+        )
 
 
 class AiohttpStreamResponse:

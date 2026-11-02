@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def bind_loop(
@@ -41,5 +44,8 @@ def bind_loop(
             f"{owner} is bound to another event loop; create one session "
             "per loop"
         )
+
+    if bound is None:
+        logger.debug("%s is bound to the event loop %r", owner, running)
 
     return running

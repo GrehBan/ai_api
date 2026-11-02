@@ -88,7 +88,9 @@ select = [
     "DTZ", # flake8-datetimez
     "E", # pycodestyle errors
     "F", # pyflakes
+    "G", # flake8-logging-format: lazy logging arguments
     "I", # isort
+    "LOG", # flake8-logging
     "PERF", # perflint
     "PL", # pylint
     "Q", # flake8-quotes
