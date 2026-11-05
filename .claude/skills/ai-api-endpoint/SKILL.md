@@ -25,9 +25,11 @@ provider's types and is reached through `raw`.
 ## 2. Snapshot and contract tests
 
 - `tests/providers/contracts/update.py`: add an `Endpoint(provider, name,
-  operation, stream, kind)` to `ENDPOINTS`, then refresh with
-  `uv run python -m tests.providers.contracts.update [DOCS_LITE_DIR]`. Review
-  the snapshot diff.
+  operation, stream, kind)` to `ENDPOINTS`, with `openapi=OpenAPIOperation(...)`
+  naming the request, response and stream components where the provider
+  publishes an official OpenAPI file (OpenAI), then refresh with
+  `OPENAI_OPENAPI=<openapi.yaml> uv run python -m tests.providers.contracts.update [DOCS_LITE_DIR]`.
+  Review the snapshot diff and `manifest.json` (its `rejected` examples).
 - `tests/providers/test_wire_contracts.py`: add a `Case` (methods, a request
   that sets every field, response model, event union, examples, adapter,
   model modules). The tests then check the request against the closed schema,

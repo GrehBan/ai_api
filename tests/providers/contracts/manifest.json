@@ -8,58 +8,20 @@
   "openai/responses": {
    "operation": "openai:post:688886f44f64cc",
    "stream_contract": "openai.responses",
+   "openapi": {
+    "file": "openai.openapi.yaml",
+    "sha256": "cf91be897ab55e4aefcfc44ec1eb7611eea1227509b67178be583244c2680ab3",
+    "openapi": "3.1.0",
+    "version": "2.3.0"
+   },
    "request": {
-    "file": "providers/openai/schemas/derived/080ec51f9714243a47ffeca107035cfb6d6facbac11eea55c5ec1b2f0f680b4e.json",
-    "sha256": "fcfdeba1c6e51e0f072127b4f1c96bc7a7fca36c77149747f0adc6170664c4e8",
-    "provenance": {
-     "api_version": null,
-     "kind": "official_sdk_derived",
-     "package": "openai",
-     "version": "3.41.0",
-     "source": "https://github.com/openai/openai-python/blob/v3.41.0/src/openai/resources/responses/responses.py",
-     "source_sha256": "b9a2ef1b61d33450318babc49e2b25f604628983804e7ebf4291f8802f372aee",
-     "class": "Responses",
-     "method": "create",
-     "transformation": "pydantic.TypeAdapter.json_schema(validation)",
-     "request_mode": "streaming and nonstreaming request variants; stream event types are separate contracts",
-     "documented_constraint_overlay": {
-      "context_management": {
-       "minItems": 1
-      },
-      "max_output_tokens": {
-       "minimum": 16
-      },
-      "safety_identifier": {
-       "maxLength": 128
-      }
-     },
-     "constraint_source": "providers/openai/api/reference/resources/responses/methods/create.md"
-    }
+    "component": "CreateResponse"
    },
    "response": {
-    "file": "providers/openai/schemas/derived/4690ac631f57a0f3bb7e8e46da165e084960c47c9251757c08f6a6e49f44681a.json",
-    "sha256": "0ff551484345bc6d70022a3d33fabf3979344e99e1a1d4b7175067251481347c",
-    "provenance": {
-     "api_version": null,
-     "kind": "official_sdk_derived",
-     "package": "openai",
-     "version": "3.41.0",
-     "source": "https://github.com/openai/openai-python/blob/v3.41.0/src/openai/resources/responses/responses.py",
-     "source_sha256": "b9a2ef1b61d33450318babc49e2b25f604628983804e7ebf4291f8802f372aee",
-     "class": "Responses",
-     "method": "create",
-     "transformation": "pydantic.TypeAdapter.json_schema(validation)",
-     "request_mode": "streaming and nonstreaming request variants; stream event types are separate contracts"
-    }
+    "component": "Response"
    },
    "stream": {
-    "file": "providers/openai/schemas/derived/stream-responses.json",
-    "provenance": {
-     "kind": "official_sdk_derived",
-     "type": "openai.types.responses.ResponseStreamEvent",
-     "package": "openai",
-     "version": "3.41.0"
-    }
+    "component": "ResponseStreamEvent"
    },
    "responses": 9,
    "events": 9,

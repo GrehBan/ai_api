@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final, get_args
+from typing import Any, Final, Literal, get_args, get_origin
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -182,7 +182,7 @@ def load(name: str, file: str) -> Any:
 def closed(schema: Any) -> Any:
     """Close every object of a schema that lists its properties.
 
-    The SDK-derived request schemas leave ``additionalProperties`` out,
+    The upstream request schemas leave ``additionalProperties`` out,
     which JSON Schema reads as "anything goes", while the APIs reject
     unknown fields.
 
@@ -386,6 +386,10 @@ def test_method_fields_match_the_request_schema(
         wire = field.serialization_alias or name
         where = f"{method.__name__}.{name}"
 
+        if get_origin(field.annotation) is Literal:
+            # A constant of the method itself, such as StreamResponse's
+            # stream: True; upstream's one schema serves both methods.
+            continue
         if wire not in properties:
             problems.append(f"{where}: not in the request schema")
             continue
@@ -576,7 +580,9 @@ def upstream_definitions(name: str) -> dict[str, Any]:
 
     Returns:
         Every ``$defs`` entry of the response and stream schemas, and
-        each root schema under its ``title`` (such as ``Response``).
+        each root schema under its ``title`` (such as ``Response``),
+        and every object written inline in a property under
+        ``<Owner>.<property>``.
     """
     definitions: dict[str, Any] = {}
 
@@ -586,6 +592,26 @@ def upstream_definitions(name: str) -> dict[str, Any]:
 
         if title := schema.get("title"):
             definitions.setdefault(title, schema)
+
+    # A nullable object (anyOf of it and null, as the official OpenAPI
+    # files write ResponseError) is checked as the object.
+    for key, definition in list(definitions.items()):
+        options = definition.get("anyOf", ())
+        objects = [o for o in options if o.get("type") != "null"]
+        if (
+            len(options) == 2
+            and len(objects) == 1
+            and ("properties" in objects[0])
+        ):
+            definitions[key] = objects[0]
+
+    # An object written inline in a property has no name upstream (the
+    # official OpenAPI files do this); it is named <Owner>.<property>.
+    for owner, definition in list(definitions.items()):
+        for prop, node in definition.get("properties", {}).items():
+            for option in [node, *node.get("anyOf", ())]:
+                if isinstance(option, dict) and "properties" in option:
+                    definitions.setdefault(f"{owner}.{prop}", option)
 
     return definitions
 

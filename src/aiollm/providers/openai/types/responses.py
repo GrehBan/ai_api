@@ -20,7 +20,7 @@ class OutputText(BaseAPITypeExtra):
         logprobs: Token log probabilities; ``None`` when not requested.
     """
 
-    __upstream_schema__ = "ResponseOutputText"
+    __upstream_schema__ = "OutputTextContent"
 
     type: Literal["output_text"] = "output_text"
     text: str
@@ -36,7 +36,7 @@ class OutputRefusal(BaseAPITypeExtra):
         refusal: The explanation of the refusal.
     """
 
-    __upstream_schema__ = "ResponseOutputRefusal"
+    __upstream_schema__ = "RefusalContent"
 
     type: Literal["refusal"] = "refusal"
     refusal: str
@@ -69,7 +69,7 @@ class OutputMessage(BaseAPITypeExtra):
         phase: ``"commentary"`` or ``"final_answer"``, if set.
     """
 
-    __upstream_schema__ = "ResponseOutputMessage"
+    __upstream_schema__ = "OutputMessage"
 
     type: Literal["message"] = "message"
     id: str
@@ -87,7 +87,7 @@ class ReasoningSummary(BaseAPITypeExtra):
         text: The summary.
     """
 
-    __upstream_schema__ = "Summary"
+    __upstream_schema__ = "SummaryTextContent"
 
     type: Literal["summary_text"] = "summary_text"
     text: str
@@ -106,7 +106,7 @@ class ReasoningItem(BaseAPITypeExtra):
         status: ``"in_progress"``, ``"completed"`` or ``"incomplete"``.
     """
 
-    __upstream_schema__ = "ResponseReasoningItem"
+    __upstream_schema__ = "ReasoningItem"
 
     type: Literal["reasoning"] = "reasoning"
     id: str
@@ -141,7 +141,7 @@ class InputTokensDetails(BaseAPITypeExtra):
         cache_write_tokens: Tokens written to the prompt cache.
     """
 
-    __upstream_schema__ = "InputTokensDetails"
+    __upstream_schema__ = "ResponseUsage.input_tokens_details"
 
     cached_tokens: int | None = None
     cache_write_tokens: int | None = None
@@ -154,7 +154,7 @@ class OutputTokensDetails(BaseAPITypeExtra):
         reasoning_tokens: Tokens spent on reasoning.
     """
 
-    __upstream_schema__ = "OutputTokensDetails"
+    __upstream_schema__ = "ResponseUsage.output_tokens_details"
 
     reasoning_tokens: int | None = None
 
@@ -207,7 +207,7 @@ class IncompleteDetails(BaseAPITypeExtra):
         reason: Such as ``"max_output_tokens"`` or ``"content_filter"``.
     """
 
-    __upstream_schema__ = "IncompleteDetails"
+    __upstream_schema__ = "Response.incomplete_details"
 
     reason: str | None = None
 
