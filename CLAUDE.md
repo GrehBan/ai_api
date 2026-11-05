@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`aiollm` is a pre-alpha (0.6.0), async-first, low-level toolkit for building typed HTTP API clients, aimed at AI providers. It ships the infrastructure, `OpenAIClient` (OpenAI's Responses API) and `AnthropicClient` (Anthropic's Messages API), both with the provider-neutral `client.generation`. The public surface is unstable.
+`aiollm` is a pre-alpha (0.7.0), async-first, low-level toolkit for building typed HTTP API clients, aimed at AI providers. It ships the infrastructure, `OpenAIClient` (OpenAI's Responses API) and `AnthropicClient` (Anthropic's Messages API), both with the provider-neutral `client.generation`. The public surface is unstable.
 
 **The code says what the library does; an agreed decision says what it should do.** This file, the README and the site describe the code and may lag. When they disagree, find the cause: a text that lags behind the code is fixed; code that contradicts an agreed decision is a bug, raised with the maintainer, never settled by declaring the code right. `CONTRIBUTING.md` (also the site's Contributing page) is the guide for contributors, with directives for those who work with Claude; keep it in step with this file. The user documentation is the MkDocs site in `docs/` (published at <https://grehban.github.io/aiollm/>); its reference pages are generated from the docstrings, so a docstring is user documentation too.
 
