@@ -1,1 +1,0 @@
-The resources guide's custom adapter example has the `with_options` that a `GenerationResource` adapter now needs (type checkers refused the example without it), and the design guide's limitations say that `client.generation` is text only.
