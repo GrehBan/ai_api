@@ -54,8 +54,13 @@ if TYPE_CHECKING:
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
-DEFAULT_MAX_TOKENS: Final = 1024
-"""``max_tokens`` sent when the request has no ``max_output_tokens``."""
+DEFAULT_MAX_TOKENS: Final = 16000
+"""``max_tokens`` sent when the request has no ``max_output_tokens``.
+
+Thinking is always on for the Claude 5.x models and counts toward
+``max_tokens``, so the default leaves room for it; 16000 is the value
+Anthropic's own examples send.
+"""
 
 METADATA_KEYS: Final = frozenset({"user_id"})
 """The only metadata keys Anthropic accepts."""

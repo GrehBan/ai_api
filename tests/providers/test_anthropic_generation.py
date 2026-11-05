@@ -96,12 +96,15 @@ def test_methods_take_the_request_fields() -> None:
 
 
 def test_max_tokens_falls_back_to_the_default() -> None:
+    # Thinking is always on for the 5.x models and counts toward
+    # max_tokens, so the default leaves room for it: Anthropic's own
+    # examples send 16000, and 1024 could end a reply in thinking.
     request = GenerationRequest(model=MODEL, input="Hi")
 
     assert adapter.to_method(request).get_body_map() == {
         "model": MODEL,
         "messages": [{"role": "user", "content": "Hi"}],
-        "max_tokens": 1024,
+        "max_tokens": 16000,
     }
     custom = AnthropicGenerationAdapter(default_max_tokens=8)
     assert custom.to_stream_method(request).max_tokens == 8
