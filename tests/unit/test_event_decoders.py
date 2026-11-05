@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ai_api.response.parse.lines import LineDecoder, LineTooLongError
-from ai_api.response.parse.sse import (
+from aiollm.response.parse.lines import LineDecoder, LineTooLongError
+from aiollm.response.parse.sse import (
     EventTooLargeError,
     RetryTooLongError,
     ServerSentEvent,

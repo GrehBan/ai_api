@@ -1,3 +1,3 @@
-# ai_api.client
+# aiollm.client
 
-::: ai_api.client
+::: aiollm.client

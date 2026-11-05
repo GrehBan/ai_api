@@ -19,33 +19,34 @@ from typing import Any
 import pytest
 from aiohttp import ClientTimeout
 
-from ai_api.enums import IncompleteReason, Provider
-from ai_api.exceptions import RequestValidationError
-from ai_api.http.exceptions.status import (
+from aiollm.enums import IncompleteReason, Provider
+from aiollm.exceptions import RequestValidationError
+from aiollm.http.exceptions.status import (
     BadRequestError,
     QuotaExceededError,
     ServiceUnavailableError,
 )
-from ai_api.http.exceptions.transport import (
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIStreamInterruptedError,
     APITimeoutError,
 )
-from ai_api.methods.base import BaseStreamMethod
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.client import (
+from aiollm.methods.base import BaseStreamMethod
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.client import (
     session_factory as anthropic_factory,
 )
-from ai_api.providers.anthropic.methods import StreamMessage
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.client import session_factory as openai_factory
-from ai_api.providers.openai.methods import StreamResponse
-from ai_api.resources import GenerationResource, IGenerationResource
-from ai_api.response.stream import Stream
-from ai_api.session.factory import SessionFactory
-from ai_api.session.protocols import ISession
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import (
+from aiollm.providers.anthropic.methods import StreamMessage
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.client import session_factory as openai_factory
+from aiollm.providers.openai.methods import StreamResponse
+from aiollm.resources import GenerationResource, IGenerationResource
+from aiollm.response.stream import Stream
+from aiollm.session.factory import SessionFactory
+from aiollm.session.protocols import ISession
+from aiollm.session.retry import RetryPolicy
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.responses import (
     CompletedEvent,
     TextDeltaEvent,
     TokenUsage,
@@ -525,6 +526,56 @@ async def test_transient_failures_are_retried(
     assert response.text == case.text
     assert completed.usage == case.stream_usage
     assert len(recorder.requests) == 4
+
+
+async def test_call_options_reach_the_session(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    unavailable = Reply(status=503, json={"error": {"message": "Busy"}})
+    recorder.reply(unavailable, unavailable)
+    once = RetryPolicy(max_attempts=1)
+
+    async with client:
+        with pytest.raises(ServiceUnavailableError):
+            await client.generation.create(
+                REQUEST, headers={"X-Trace": "t-1"}, retry_policy=once
+            )
+        with pytest.raises(ServiceUnavailableError):
+            async with client.generation.stream(
+                model="model-1",
+                input="Hi",
+                headers={"X-Trace": "t-2"},
+                retry_policy=once,
+            ):
+                pass  # pragma: no cover
+
+    assert [r.headers["X-Trace"] for r in recorder.requests] == ["t-1", "t-2"]
+
+
+async def test_a_call_timeout_limits_the_silence_of_a_stream(
+    case: Case,
+    client: Client,
+    recorder: Recorder,
+) -> None:
+    resume = asyncio.Event()
+    frames = [frame(payload) for payload in case.until_delta]
+    recorder.reply(
+        Reply(
+            chunks=[*frames, resume, frame(case.stream[-1])],
+            content_type="text/event-stream",
+        )
+    )
+
+    async with client, client.generation.stream(REQUEST, timeout=0.3) as s:
+        with pytest.raises(APIStreamInterruptedError) as caught:
+            async for _ in s:
+                pass
+
+    resume.set()
+
+    assert isinstance(caught.value.__cause__, APITimeoutError)
 
 
 def text_of(events: list[Any]) -> list[str]:

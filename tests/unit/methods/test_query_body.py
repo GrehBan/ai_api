@@ -12,14 +12,14 @@ from typing import Annotated, Any, Union
 import pytest
 from pydantic import MISSING, Field, PlainSerializer, ValidationError
 
-from ai_api.enums import BodyFormat
-from ai_api.http.headers import Headers
-from ai_api.methods.base import BaseAPIMethod
-from ai_api.methods.fields import has_one_shot_file
-from ai_api.serialization.traversal import MAX_DEPTH
-from ai_api.serialization.values import BaseValueFormatter
-from ai_api.types.base import BaseAPIType
-from ai_api.types.files import BytesFile, InputFile, IOFile, StreamFile
+from aiollm.enums import BodyFormat
+from aiollm.http.headers import Headers
+from aiollm.methods.base import BaseAPIMethod
+from aiollm.methods.fields import has_one_shot_file
+from aiollm.serialization.traversal import MAX_DEPTH
+from aiollm.serialization.values import BaseValueFormatter
+from aiollm.types.base import BaseAPIType
+from aiollm.types.files import BytesFile, InputFile, IOFile, StreamFile
 from tests.conftest import make_method
 
 

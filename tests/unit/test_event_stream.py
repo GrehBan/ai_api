@@ -10,20 +10,20 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import Field, ValidationError
 
-from ai_api.enums import ResponseFormat
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import APIStatusError
-from ai_api.methods.base import BaseStreamMethod
-from ai_api.response.parse.sse import ServerSentEvent
-from ai_api.response.parse.stream import (
+from aiollm.enums import ResponseFormat
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import APIStatusError
+from aiollm.methods.base import BaseStreamMethod
+from aiollm.response.parse.sse import ServerSentEvent
+from aiollm.response.parse.stream import (
     MAX_EVENT_SIZE,
     MAX_LINE_SIZE,
     StreamResponseParser,
 )
-from ai_api.serialization.json import JsonLoads, loads
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import FieldValues
+from aiollm.serialization.json import JsonLoads, loads
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import FieldValues
 from tests.conftest import FakeStreamResponse, make_method
 
 

@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-from ai_api.__meta__ import __version__
-from ai_api.http.auth import APIKeyAuth, BearerAuth
-from ai_api.http.headers import (
+from aiollm.__meta__ import __version__
+from aiollm.http.auth import APIKeyAuth, BearerAuth
+from aiollm.http.headers import (
     AUTHORIZATION,
     CONTENT_TYPE,
     SERVER_SOFTWARE,
@@ -92,7 +92,7 @@ def test_header_names_are_case_insensitive() -> None:
 def test_server_software_contains_version() -> None:
     python = f"Python/{sys.version_info[0]}.{sys.version_info[1]}"
 
-    assert f"ai_api/{__version__}" in SERVER_SOFTWARE
+    assert f"aiollm/{__version__}" in SERVER_SOFTWARE
     assert SERVER_SOFTWARE.startswith(python)
 
 

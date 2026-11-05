@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Annotated, Literal, assert_type
+from typing import Annotated, Literal, Unpack, assert_type
 
 from pydantic import Field
 
-from ai_api import (
+from aiollm import (
     BaseAPI,
     BaseAPIMethod,
     BaseAPIType,
@@ -28,35 +28,38 @@ from ai_api import (
     IncompleteReason,
     Provider,
     ResponseFormat,
+    RetryPolicy,
+    RetryState,
     Role,
     ServerSentEvent,
     Stream,
+    bind_resource,
 )
-from ai_api.adapters import (
+from aiollm.adapters import (
     BaseAdapter,
     BaseCompositeAdapter,
     IConversion,
 )
-from ai_api.adapters import Stop as GenerationStop
-from ai_api.client import IClient
-from ai_api.http import IAPI, BearerAuth
-from ai_api.methods import IAPIMethod, IStreamMethod
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.methods import (
+from aiollm.adapters import Stop as GenerationStop
+from aiollm.client import IClient
+from aiollm.http import IAPI, BearerAuth
+from aiollm.methods import IAPIMethod, IStreamMethod
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.methods import (
     CreateMessage,
     MessageParam,
     StreamMessage,
 )
-from ai_api.providers.anthropic.types import Message, MessageStreamEvent
-from ai_api.providers.anthropic.types.messages import Usage
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.client import session_factory
-from ai_api.providers.openai.methods import CreateResponse, StreamResponse
-from ai_api.providers.openai.types import Response, ResponseStreamEvent
-from ai_api.providers.openai.types.responses import ResponseUsage
-from ai_api.resources import (
+from aiollm.providers.anthropic.types import Message, MessageStreamEvent
+from aiollm.providers.anthropic.types.messages import Usage
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.client import session_factory
+from aiollm.providers.openai.methods import CreateResponse, StreamResponse
+from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.providers.openai.types.responses import ResponseUsage
+from aiollm.resources import (
     AdapterStreamUseCase,
     AdapterUseCase,
     BaseResource,
@@ -67,11 +70,11 @@ from ai_api.resources import (
     IStreamUseCase,
     IUseCase,
 )
-from ai_api.response import map_stream
-from ai_api.session import ISession, ISessionFactory
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import (
+from aiollm.response import map_stream
+from aiollm.session import CallOptions, ISession, ISessionFactory
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.responses import (
     GenerationEvent,
     GenerationResponse,
     OtherEvent,
@@ -198,9 +201,21 @@ async def call_options_are_keyword_only(session: AiohttpSession) -> None:
     await session.send_request(GetText(), headers=Headers(), timeout=0.5)
     await session.send_request(GetText(), {"X-A": "1"})  # type: ignore[call-arg]
     await session.send_request(GetText(), timeout="2")  # type: ignore[arg-type]
+    await session.send_request(GetText(), retry_policy=RetryPolicy())
+    await session.send_request(GetText(), retry_policy=3)  # type: ignore[arg-type]
 
     async with session.stream(Download(), timeout=30) as chunks:
         assert_type(chunks, Stream[bytes])
+
+
+def retry_policy_takes_typed_callables() -> None:
+    def only_rate_limits(state: RetryState) -> bool:
+        return state.attempt < 3
+
+    RetryPolicy(retry_if=only_rate_limits, backoff=lambda state: 1.0)
+    RetryPolicy(retry_if=lambda state: "yes")  # type: ignore[arg-type]
+    RetryPolicy(backoff=lambda: 1.0)  # type: ignore[arg-type]
+    RetryPolicy(5)  # type: ignore[call-arg]
 
 
 def aliased_fields_are_set_by_name() -> None:
@@ -266,11 +281,22 @@ class Echo(BaseUseCase[GenerationRequest, GenerationResponse[str]]):
     async def __call__(
         self,
         request: GenerationRequest,
+        **options: Unpack[CallOptions],
     ) -> GenerationResponse[str]:
         assert_type(self.session, ISession)
         return GenerationResponse[str].model_validate(
             {"provider": "openai", "model": request.model, "raw": "x"}
         )
+
+
+class NoOptions(BaseUseCase[GenerationRequest, GenerationResponse[str]]):
+    """A use case must take the options of the call."""
+
+    async def __call__(  # type: ignore[override]
+        self,
+        request: GenerationRequest,
+    ) -> GenerationResponse[str]:
+        raise NotImplementedError
 
 
 def use_case_implements_protocol(
@@ -315,7 +341,9 @@ def resource_keeps_the_session_type(session: AiohttpSession) -> None:
 class WrongRequest(BaseUseCase[Model, GenerationResponse[str]]):  # type: ignore[type-var]
     """A use case request must be a ``BaseRequest``."""
 
-    async def __call__(self, request: Model) -> GenerationResponse[str]:
+    async def __call__(
+        self, request: Model, **options: Unpack[CallOptions]
+    ) -> GenerationResponse[str]:
         raise NotImplementedError
 
 
@@ -504,6 +532,27 @@ async def generation_takes_keyword_arguments(client: OpenAIClient) -> None:
     await client.generation.create(model="m", input="x", instructions=None)  # type: ignore[call-overload]
 
 
+async def generation_takes_the_call_options(
+    client: OpenAIClient,
+    request: GenerationRequest,
+) -> None:
+    once = RetryPolicy(max_attempts=1)
+    response = await client.generation.create(
+        model="m",
+        input="x",
+        headers={"X-A": "1"},
+        timeout=5,
+        retry_policy=once,
+    )
+    assert_type(response, GenerationResponse[Response])
+    await client.generation.create(request, timeout=5.0, retry_policy=once)
+    async with client.generation.stream(request, headers=Headers()) as events:
+        assert_type(events, GenerationStream[ResponseStreamEvent])
+    await client.generation.create(request, timeout="5")  # type: ignore[call-overload]
+    await client.generation.create(request, retry_policy=1)  # type: ignore[call-overload]
+    await client.generation.create(request, retries=1)  # type: ignore[call-overload]
+
+
 def clients_take_session_arguments() -> None:
     OpenAIClient("sk", max_body_size=1_000, trust_env=True)
     AnthropicClient("sk", default_max_tokens=8, follow_redirects=True)
@@ -534,13 +583,29 @@ def session_factories_are_typed() -> None:
     assert session
 
 
-def clients_build_their_adapters() -> None:
-    client = OpenAIClient("sk")
+def openai_adapter(client: object) -> OpenAIGenerationAdapter:
+    return OpenAIGenerationAdapter()
+
+
+def clients_bind_their_resources() -> None:
     assert_type(
-        client.adapter(OpenAIGenerationAdapter), OpenAIGenerationAdapter
+        OpenAIClient("sk").generation,
+        GenerationResource[Response, ResponseStreamEvent],
     )
-    client.adapter(OpenAIGenerationAdapter, stop_conversion=1)  # type: ignore[arg-type]
-    client.adapter(OpenAIGenerationAdapter, max_tokens=1)  # type: ignore[call-arg]
-    anthropic = AnthropicClient("sk")
-    anthropic.adapter(AnthropicGenerationAdapter, default_max_tokens="8")  # type: ignore[arg-type]
+    assert_type(
+        AnthropicClient("sk").generation,
+        GenerationResource[Message, MessageStreamEvent],
+    )
+    resource = bind_resource(
+        GenerationResource[Response, ResponseStreamEvent],
+        OpenAIGenerationAdapter,
+        adapter_factory=openai_adapter,
+    )
+    assert_type(resource, GenerationResource[Response, ResponseStreamEvent])
+    bind_resource(
+        GenerationResource[Response, ResponseStreamEvent],
+        OpenAIGenerationAdapter,
+        adapter_factory=lambda client: 1,  # type: ignore[arg-type, return-value]
+    )
+    bind_resource(GenerationResource[Response, ResponseStreamEvent])  # type: ignore[call-arg]
     assert_type(OpenAIClient.provider, Provider)

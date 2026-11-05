@@ -14,14 +14,13 @@
 | `max_connections` | `100` | Maximum number of simultaneous connections |
 | `timeout` | 600 s total, 30 s connect | Timeout of buffered requests |
 | `stream_timeout` | no total limit, 30 s connect, 600 s between chunks | Timeout of streamed requests |
-| `max_retry_after` | `60` | Longest `Retry-After` to wait for, in seconds |
-| `retry_deadline` | `900` | Seconds after the first attempt after which no retry starts; `None` for no limit |
+| `retry_policy` | `RetryPolicy()` | When and how long a retryable request is retried; see [Retry policy](errors.md#retry-policy) |
 | `max_body_size` | `None` | Largest buffered response or error body, in bytes; streamed bodies are not limited |
 | `trust_env` | `False` | Use proxy settings and `.netrc` from the environment |
 | `follow_redirects` | `False` | Follow redirects within the origin of the request |
 | `loop` | `None` | Event loop the session is bound to; `None` binds the loop of its first use |
 
-The connection pool is created lazily, on the first request or on `async with`. It uses the `certifi` CA bundle, caches DNS answers for an hour and sends `User-Agent: Python/3.x ai_api/<version>`.
+The connection pool is created lazily, on the first request or on `async with`. It uses the `certifi` CA bundle, caches DNS answers for an hour and sends `User-Agent: Python/3.x aiollm/<version>`.
 
 ## Lifecycle
 
@@ -67,7 +66,7 @@ A request gets headers from four places. Names are case-insensitive, and a later
 
 ## Per-request headers and timeout
 
-`send_request` and `stream`, on a session or a client, take two keyword-only arguments for one call:
+`send_request` and `stream`, on a session or a client, and `client.generation.create` and `stream` take keyword-only arguments for one call:
 
 ```python title="call_options.py"
 class BetaCompletion(CreateCompletion):
@@ -87,8 +86,9 @@ async def complete(prompt: str, key: str) -> Completion:
 
 - **`headers=`** is a mapping or `Headers`. It is sent with every attempt of the call, retries included, and is not kept for later calls: an idempotency key, `Last-Event-ID`, a trace id.
 - **`timeout=`** is a number of seconds. It changes one limit of the session's timeout for this call and keeps the others; see [Timeouts](#timeouts).
+- **`retry_policy=`** is a `RetryPolicy` that replaces the session's for this call (for a stream, its opening); see [Retry policy](errors.md#retry-policy).
 
-Both stay out of the method, because they describe one call, not the API endpoint: the same `CreateCompletion` can be sent with different keys and limits.
+They stay out of the method, because they describe one call, not the API endpoint: the same `CreateCompletion` can be sent with different keys and limits.
 
 ## JSON codec
 
@@ -130,23 +130,23 @@ aiohttp connections belong to the loop that created them, and using them from an
 
 ## Logging
 
-The library logs through the standard `logging` module, under the `ai_api` logger and one child per module that logs (`ai_api.session.base`, `ai_api.session.aiohttp`, ...). It sets up nothing itself: `ai_api` has only a `NullHandler`, as the logging HOWTO advises libraries, so nothing is printed until your application configures logging.
+The library logs through the standard `logging` module, under the `aiollm` logger and one child per module that logs (`aiollm.session.base`, `aiollm.session.aiohttp`, ...). It sets up nothing itself: `aiollm` has only a `NullHandler`, as the logging HOWTO advises libraries, so nothing is printed until your application configures logging.
 
 ```text
 logging.basicConfig(level=logging.WARNING)           # retries
-logging.getLogger("ai_api").setLevel(logging.DEBUG)  # every attempt
+logging.getLogger("aiollm").setLevel(logging.DEBUG)  # every attempt
 ```
 
 Each layer logs only its own part, so nothing is said twice. A retried call looks like this:
 
 ```text
-DEBUG   ai_api.session.base     Starting CreateResponse
-DEBUG   ai_api.session.aiohttp  Sending POST /responses
-DEBUG   ai_api.session.aiohttp  HTTP attempt finished: status=429 duration=0.212s
-WARNING ai_api.session.base     Retrying request after RateLimitError: attempt=2, delay=1.50s
-DEBUG   ai_api.session.aiohttp  Sending POST /responses
-DEBUG   ai_api.session.aiohttp  HTTP attempt finished: status=200 duration=1.874s
-DEBUG   ai_api.session.base     Completed CreateResponse
+DEBUG   aiollm.session.base     Starting CreateResponse
+DEBUG   aiollm.session.aiohttp  Sending POST /responses
+DEBUG   aiollm.session.aiohttp  HTTP attempt finished: status=429 duration=0.212s
+WARNING aiollm.session.base     Retrying request after RateLimitError: attempt=2, delay=1.50s
+DEBUG   aiollm.session.aiohttp  Sending POST /responses
+DEBUG   aiollm.session.aiohttp  HTTP attempt finished: status=200 duration=1.874s
+DEBUG   aiollm.session.base     Completed CreateResponse
 ```
 
 ### What is logged, and what is not
@@ -167,7 +167,7 @@ Every record, by logger:
 | WARNING | `session.base` | a retry |
 | DEBUG | `session.base` | a call's start and end (`items=` for a stream) |
 | DEBUG | `session.aiohttp` | each attempt: sent (method and the path as declared, such as `/files/{file_id}`), finished (status and duration; for a stream, when the headers came), that a redirect was followed, the connection pool opened and closed |
-| DEBUG | `session.retry` | an error not retried because its `Retry-After` is above `max_retry_after` |
+| DEBUG | `session.retry.runner` | an error not retried because its `Retry-After` is above the policy's `max_retry_after` |
 | DEBUG | `session.loop` | the event loop a session is bound to |
 | DEBUG | `response.aiohttp` | a failure of the body writer after the answer came, which aiohttp drops, by its type |
 | DEBUG | `types.unknown` | a `type` the library does not model yet, kept as an unknown item |

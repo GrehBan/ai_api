@@ -9,36 +9,36 @@ from __future__ import annotations
 
 from typing import Any
 
-from ai_api.adapters import BaseConversion, IConversion, Stop
-from ai_api.enums import IncompleteReason
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.adapters.conversions import (
+from aiollm.adapters import BaseConversion, IConversion, Stop
+from aiollm.enums import IncompleteReason
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION as ANTHROPIC_INPUT,
 )
-from ai_api.providers.anthropic.adapters.conversions import (
+from aiollm.providers.anthropic.adapters.conversions import (
     STOP_CONVERSION as ANTHROPIC_STOP,
 )
-from ai_api.providers.anthropic.adapters.conversions import (
+from aiollm.providers.anthropic.adapters.conversions import (
     USAGE_CONVERSION as ANTHROPIC_USAGE,
 )
-from ai_api.providers.anthropic.methods.base import MessageParam
-from ai_api.providers.anthropic.types import Message
-from ai_api.providers.anthropic.types.events import MessageDelta
-from ai_api.providers.anthropic.types.messages import Usage
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.adapters.conversions import (
+from aiollm.providers.anthropic.methods.base import MessageParam
+from aiollm.providers.anthropic.types import Message
+from aiollm.providers.anthropic.types.events import MessageDelta
+from aiollm.providers.anthropic.types.messages import Usage
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.adapters.conversions import (
     INPUT_CONVERSION as OPENAI_INPUT,
 )
-from ai_api.providers.openai.adapters.conversions import (
+from aiollm.providers.openai.adapters.conversions import (
     STOP_CONVERSION as OPENAI_STOP,
 )
-from ai_api.providers.openai.adapters.conversions import (
+from aiollm.providers.openai.adapters.conversions import (
     USAGE_CONVERSION as OPENAI_USAGE,
 )
-from ai_api.providers.openai.types import Response
-from ai_api.providers.openai.types.responses import ResponseUsage
-from ai_api.types.requests import Turn
-from ai_api.types.responses import CompletedEvent, TokenUsage
+from aiollm.providers.openai.types import Response
+from aiollm.providers.openai.types.responses import ResponseUsage
+from aiollm.types.requests import Turn
+from aiollm.types.responses import CompletedEvent, TokenUsage
 from tests.providers import test_anthropic_generation as anthropic
 from tests.providers import test_openai_generation as openai
 

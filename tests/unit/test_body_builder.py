@@ -23,15 +23,15 @@ from urllib.parse import parse_qsl
 import pytest
 from aiohttp import BytesPayload, FormData
 
-from ai_api.enums import BodyFormat
-from ai_api.http.exceptions.transport import APIRequestError
-from ai_api.serialization.json import JsonDumps, dumps, loads
-from ai_api.serialization.protocols import IValueFormatter
-from ai_api.serialization.traversal import MAX_DEPTH
-from ai_api.serialization.values import BaseValueFormatter
-from ai_api.session.body.aiohttp import AiohttpBodyBuilder
-from ai_api.types.base import BaseAPIType
-from ai_api.types.files import BytesFile, PathFile, StreamFile
+from aiollm.enums import BodyFormat
+from aiollm.http.exceptions.transport import APIRequestError
+from aiollm.serialization.json import JsonDumps, dumps, loads
+from aiollm.serialization.protocols import IValueFormatter
+from aiollm.serialization.traversal import MAX_DEPTH
+from aiollm.serialization.values import BaseValueFormatter
+from aiollm.session.body.aiohttp import AiohttpBodyBuilder
+from aiollm.types.base import BaseAPIType
+from aiollm.types.files import BytesFile, PathFile, StreamFile
 
 
 class Color(enum.Enum):

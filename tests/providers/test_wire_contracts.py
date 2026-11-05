@@ -27,24 +27,24 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import MISSING, BaseModel, TypeAdapter
 
-from ai_api.adapters import ICompositeAdapter
-from ai_api.methods import BaseAPIMethod, BaseStreamMethod
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
-from ai_api.providers.anthropic.types import Message, MessageStreamEvent
-from ai_api.providers.anthropic.types import events as anthropic_events
-from ai_api.providers.anthropic.types import messages as anthropic_messages
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.methods import CreateResponse, StreamResponse
-from ai_api.providers.openai.types import Response, ResponseStreamEvent
-from ai_api.providers.openai.types import events as openai_events
-from ai_api.providers.openai.types import responses as openai_responses
-from ai_api.response.parse.stream import StreamResponseParser
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.base import BaseAPIType
-from ai_api.types.matchers import AnyOf, EventTypes
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.unknown import BaseUnknown
+from aiollm.adapters import ICompositeAdapter
+from aiollm.methods import BaseAPIMethod, BaseStreamMethod
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
+from aiollm.providers.anthropic.types import Message, MessageStreamEvent
+from aiollm.providers.anthropic.types import events as anthropic_events
+from aiollm.providers.anthropic.types import messages as anthropic_messages
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.methods import CreateResponse, StreamResponse
+from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.providers.openai.types import events as openai_events
+from aiollm.providers.openai.types import responses as openai_responses
+from aiollm.response.parse.stream import StreamResponseParser
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.base import BaseAPIType
+from aiollm.types.matchers import AnyOf, EventTypes
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.unknown import BaseUnknown
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
 from tests.providers import test_openai_responses as openai

@@ -13,21 +13,21 @@ from typing import Any
 
 import pytest
 
-from ai_api import SessionMismatchWarning
-from ai_api.client.base import BaseClient, BaseProviderClient
-from ai_api.enums import Provider
-from ai_api.http.auth import APIKeyAuth, BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.protocols import IAPI, IAuth
-from ai_api.providers.anthropic import (
+from aiollm import SessionMismatchWarning
+from aiollm.client.base import BaseClient, BaseProviderClient
+from aiollm.enums import Provider
+from aiollm.http.auth import APIKeyAuth, BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.protocols import IAPI, IAuth
+from aiollm.providers.anthropic import (
     ANTHROPIC_API,
     AnthropicClient,
     AnthropicErrorResolver,
 )
-from ai_api.providers.openai.api import OPENAI_API
-from ai_api.providers.openai.client import OpenAIClient
-from ai_api.providers.openai.resolver import OpenAIErrorResolver
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.providers.openai.api import OPENAI_API
+from aiollm.providers.openai.client import OpenAIClient
+from aiollm.providers.openai.resolver import OpenAIErrorResolver
+from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import TEST_TOKEN, FakeTransport
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from yarl import URL
 
-from ai_api.http.api import BaseAPI
+from aiollm.http.api import BaseAPI
 
 
 @pytest.mark.parametrize(

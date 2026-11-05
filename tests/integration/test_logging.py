@@ -16,18 +16,18 @@ from typing import cast
 import pytest
 from aiohttp import ClientResponse
 
-from ai_api.enums import BodyFormat
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.status import RateLimitError
-from ai_api.http.exceptions.transport import APIConnectionError
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.providers.openai import OpenAIClient
-from ai_api.response.aiohttp import wait_for_writer
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.session.retry import should_retry
-from ai_api.types.unknown import UNKNOWN, by_type
+from aiollm.enums import BodyFormat
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import RateLimitError
+from aiollm.http.exceptions.transport import APIConnectionError
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.providers.openai import OpenAIClient
+from aiollm.response.aiohttp import wait_for_writer
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.session.retry.runner import should_retry
+from aiollm.types.unknown import UNKNOWN, by_type
 from tests.conftest import (
     TEST_TOKEN,
     FakeTransport,
@@ -67,13 +67,13 @@ def records(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str, str]]:
     return [
         (record.name, record.levelname, record.getMessage())
         for record in caplog.records
-        if record.name.startswith("ai_api")
+        if record.name.startswith("aiollm")
     ]
 
 
 @pytest.fixture
 def caplog(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
-    caplog.set_level(logging.DEBUG, logger="ai_api")
+    caplog.set_level(logging.DEBUG, logger="aiollm")
     return caplog
 
 
@@ -89,23 +89,23 @@ async def test_a_retried_call_is_logged_once_per_layer(
     flow = [
         (name, level, re.sub(r"duration=[\d.]+s", "duration=…", message))
         for name, level, message in records(caplog)
-        if name in {"ai_api.session.base", "ai_api.session.aiohttp"}
+        if name in {"aiollm.session.base", "aiollm.session.aiohttp"}
         and not message.startswith(("Opened", "Closed"))
     ]
     finished = "HTTP attempt finished: status={} duration=…"
     assert flow == [
-        ("ai_api.session.base", "DEBUG", "Starting Ask"),
-        ("ai_api.session.aiohttp", "DEBUG", "Sending POST /ask"),
-        ("ai_api.session.aiohttp", "DEBUG", finished.format(503)),
+        ("aiollm.session.base", "DEBUG", "Starting Ask"),
+        ("aiollm.session.aiohttp", "DEBUG", "Sending POST /ask"),
+        ("aiollm.session.aiohttp", "DEBUG", finished.format(503)),
         (
-            "ai_api.session.base",
+            "aiollm.session.base",
             "WARNING",
             "Retrying request after ServiceUnavailableError: attempt=2, "
             "delay=0.00s",
         ),
-        ("ai_api.session.aiohttp", "DEBUG", "Sending POST /ask"),
-        ("ai_api.session.aiohttp", "DEBUG", finished.format(200)),
-        ("ai_api.session.base", "DEBUG", "Completed Ask"),
+        ("aiollm.session.aiohttp", "DEBUG", "Sending POST /ask"),
+        ("aiollm.session.aiohttp", "DEBUG", finished.format(200)),
+        ("aiollm.session.base", "DEBUG", "Completed Ask"),
     ]
 
 
@@ -122,7 +122,7 @@ async def test_secrets_never_reach_a_log(
 
     text = caplog.text
     assert (
-        "ai_api.session.aiohttp",
+        "aiollm.session.aiohttp",
         "DEBUG",
         "Sending GET /files/{file_id}",
     ) in (records(caplog))
@@ -185,7 +185,7 @@ async def test_a_followed_redirect_is_logged(
         await session.send_request(Ask(prompt="hi", secret="s"))
 
     assert (
-        "ai_api.session.aiohttp",
+        "aiollm.session.aiohttp",
         "DEBUG",
         "Following a redirect",
     ) in records(caplog)
@@ -223,7 +223,7 @@ def test_a_retry_after_above_the_limit_is_logged(
 
     assert records(caplog) == [
         (
-            "ai_api.session.retry",
+            "aiollm.session.retry.runner",
             "DEBUG",
             "Not retrying RateLimitError: the API asks to wait 120.0 s, "
             "more than max_retry_after (60 s)",
@@ -241,7 +241,7 @@ async def test_the_key_from_the_environment_is_logged_by_name(
         pass
 
     assert (
-        "ai_api.client.validators",
+        "aiollm.client.validators",
         "DEBUG",
         "Using the API key from OPENAI_API_KEY",
     ) in records(caplog)
@@ -257,7 +257,7 @@ def test_an_unknown_type_is_logged(caplog: pytest.LogCaptureFixture) -> None:
 
     assert records(caplog) == [
         (
-            "ai_api.types.unknown",
+            "aiollm.types.unknown",
             "DEBUG",
             "Unknown type 'brand_new' is kept as an unknown item",
         )
@@ -269,7 +269,7 @@ async def test_nothing_is_printed_without_logging_set_up(
 ) -> None:
     # The library adds only a NullHandler: without the application's
     # handlers, not even a warning reaches stderr through lastResort.
-    logger = logging.getLogger("ai_api.session.base")
+    logger = logging.getLogger("aiollm.session.base")
     root = logging.getLogger()
     saved = root.handlers[:]
     root.handlers.clear()
@@ -282,7 +282,7 @@ async def test_nothing_is_printed_without_logging_set_up(
     assert capsys.readouterr().err == ""
     assert any(
         isinstance(handler, logging.NullHandler)
-        for handler in logging.getLogger("ai_api").handlers
+        for handler in logging.getLogger("aiollm").handlers
     )
 
 
@@ -302,7 +302,7 @@ async def test_a_writer_failure_after_the_answer_is_logged(
 
     assert records(caplog) == [
         (
-            "ai_api.response.aiohttp",
+            "aiollm.response.aiohttp",
             "DEBUG",
             "The request body writer failed after the response came: OSError",
         )

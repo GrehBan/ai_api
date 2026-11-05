@@ -1,0 +1,163 @@
+"""Error mapping of the OpenAI API."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from http import HTTPStatus
+from typing import Any, Final, cast
+
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import APIStatusError, QuotaExceededError
+from aiollm.providers.openai.api import PROVIDER
+from aiollm.types.matchers import FieldValues
+
+FAILED_RESPONSE: Final = FieldValues("status", "failed")
+"""A ``Response`` whose generation failed.
+
+The one test of a failed response: ``CreateResponse``'s parser raises a
+result it matches, and the resolver reads such a body by its
+``error``.
+"""
+
+QUOTA_CODES: Final = frozenset(
+    {
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+    }
+)
+"""Codes (or the type) of a 429 that retrying does not fix.
+
+The credits, a spend limit or a usage limit are exhausted; only a change
+to the account restores access.
+"""
+
+ERROR_STATUSES: Final[Mapping[str, int]] = {
+    "invalid_request_error": HTTPStatus.BAD_REQUEST,
+    "rate_limit_exceeded": HTTPStatus.TOO_MANY_REQUESTS,
+    "rate_limit_error": HTTPStatus.TOO_MANY_REQUESTS,
+    "slow_down": HTTPStatus.TOO_MANY_REQUESTS,
+    "server_error": HTTPStatus.INTERNAL_SERVER_ERROR,
+    "service_unavailable_error": HTTPStatus.SERVICE_UNAVAILABLE,
+    "server_is_overloaded": HTTPStatus.SERVICE_UNAVAILABLE,
+    "server_overloaded": HTTPStatus.SERVICE_UNAVAILABLE,
+    **dict.fromkeys(QUOTA_CODES, HTTPStatus.TOO_MANY_REQUESTS),
+}
+"""HTTP status of each documented error code or type.
+
+The ``error`` event of a stream arrives after the 200 status, so its
+code, or else its type, tells which error it is. The quota codes stand
+for 429, so a quota reported inside a stream is a ``QuotaExceededError``
+as it is over HTTP.
+"""
+
+
+def _failed_response(response: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the ``error`` of a ``Response`` with status ``failed``.
+
+    Args:
+        response: The decoded ``Response``.
+
+    Returns:
+        A body with its ``error`` object, or with a message saying that
+        OpenAI sent none.
+    """
+    error = response.get("error")
+
+    if isinstance(error, Mapping):
+        return {"error": error}
+
+    return {
+        "error": {
+            "message": f"Response {response.get('id')} failed without an error"
+        }
+    }
+
+
+class OpenAIErrorResolver(BaseErrorResolver):
+    """Error resolver with OpenAI's specifics.
+
+    A 429 whose code or type is in ``QUOTA_CODES`` (no credit left, a
+    spend or usage limit reached) is a ``QuotaExceededError`` and is not
+    retried, also when a stream reports it. The ``error`` event of a
+    response stream is flat
+    (``{"type": "error", "code", "message", "param"}``) and is read like
+    an ``error`` object; a ``response.failed`` event and a ``Response``
+    with status ``failed`` are read by their ``response.error``. They
+    come with a 200 status, so their class is picked by their code or
+    type through ``ERROR_STATUSES``; a code it does not list, such as
+    ``invalid_prompt``, gives ``APIStatusError`` itself. As for every
+    resolver, such an in-band failure is never transient.
+    """
+
+    provider = PROVIDER
+    error_statuses = ERROR_STATUSES
+
+    def resolve(
+        self,
+        *,
+        status: int,
+        body: Any,
+        headers: Mapping[str, str],
+    ) -> APIStatusError:
+        """Build the error, reading OpenAI's in-band failures too.
+
+        Args:
+            status: HTTP status code of the response.
+            body: Decoded JSON body or event data, or ``None``.
+            headers: Response headers.
+
+        Returns:
+            The error to raise.
+        """
+        if isinstance(body, Mapping):
+            event = cast(Mapping[str, Any], body)
+            kind = event.get("type")
+            response = event.get("response")
+
+            if kind == "error" and "error" not in event:
+                fields = {k: v for k, v in event.items() if k != "type"}
+                body = {"error": fields}
+            elif kind == "response.failed" and isinstance(response, Mapping):
+                body = _failed_response(cast(Mapping[str, Any], response))
+            elif FAILED_RESPONSE.matches(event):
+                body = _failed_response(event)
+
+        return super().resolve(status=status, body=body, headers=headers)
+
+    def classify_status(
+        self,
+        *,
+        status: int,
+        code: str | None,
+        error_type: str | None,
+        message: str | None,
+        retry_after: float | None,
+    ) -> tuple[type[APIStatusError], bool]:
+        """Pick the error class and transience, quota errors first.
+
+        Args:
+            status: HTTP status the error is classified by.
+            code: Provider error code, if any.
+            error_type: Provider error type, if any.
+            message: Error message, if any.
+            retry_after: Seconds from ``Retry-After``, if any.
+
+        Returns:
+            ``QuotaExceededError`` (never transient) for a 429 with a
+            quota code or type, else the default classification.
+        """
+        if status == HTTPStatus.TOO_MANY_REQUESTS and (
+            code in QUOTA_CODES or error_type in QUOTA_CODES
+        ):
+            return QuotaExceededError, False
+
+        return super().classify_status(
+            status=status,
+            code=code,
+            error_type=error_type,
+            message=message,
+            retry_after=retry_after,
+        )

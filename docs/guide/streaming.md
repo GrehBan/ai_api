@@ -3,7 +3,7 @@
 Subclass `BaseStreamMethod`. The generic argument is the type of one streamed item: `bytes`, `str`, or an event type (see [Events](#events-sse-and-ndjson)).
 
 ```python title="streaming.py"
-from ai_api import BaseStreamMethod
+from aiollm import BaseStreamMethod
 
 
 class Download(BaseStreamMethod[bytes]):      # raw chunks
@@ -49,7 +49,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
-from ai_api import ResponseFormat, ServerSentEvent
+from aiollm import ResponseFormat, ServerSentEvent
 
 
 class TextDelta(BaseAPIType):
@@ -92,7 +92,7 @@ async with session.stream(StreamMessage(prompt="Hi")) as events:
 - **Format.** It must be set for models and unions: the item type alone doesn't tell SSE from NDJSON. Without it the class definition raises `TypeError`, unless the method sets its own `__stream_parser__`. `ServerSentEvent` items imply SSE.
 - **Parsing.** SSE follows the HTML standard: multi-line `data`, comments, `event`, `id` and `retry`, and `\n`, `\r\n` or `\r` line endings. An event split across chunks is held back until it is complete, and an unfinished event at the end of the body is dropped. NDJSON skips blank lines.
 - **Validation.** Each event is validated through a `TypeAdapter` built once, when the class is defined, from the generic argument as written. That is why discriminated unions and `type` aliases work as item types. An event that doesn't match raises `APIResponseError`.
-- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that), an error event included: once the terminal has come, the stream is complete, and anything after it breaks the protocol. Matchers live in `ai_api.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. They compare values as JSON tells them apart (`FieldValues("done", True)` does not match `{"done": 1}`), read a model's fields but never its properties, and are equal when they match the same items (`EventTypes("x") == FieldValues("type", "x")`). Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. Only SSE and NDJSON have events to check, so a terminal on a `BYTES` or `TEXT` stream raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
+- **End of stream.** By the HTTP and SSE standards, the end of the body is a normal end, so a stream cut between two events looks complete. Only the protocol's own last event proves that it is. Declare it as `__stream_terminal__` and the parser checks it: a body that ends without it raises `APIStreamInterruptedError`, and an item after it raises `APIResponseError` (the parser reads the body to its end to see that), an error event included: once the terminal has come, the stream is complete, and anything after it breaks the protocol. Matchers live in `aiollm.types`: `EventTypes("message_stop")` matches a `type`, `FieldValues(name, *values)` any field, `DONE` the `data: [DONE]` line, and `a | b` either. They compare values as JSON tells them apart (`FieldValues("done", True)` does not match `{"done": 1}`), read a model's fields but never its properties, and are equal when they match the same items (`EventTypes("x") == FieldValues("type", "x")`). Without a declared terminal (the default), `data: [DONE]` ends the stream and nothing is checked. Only SSE and NDJSON have events to check, so a terminal on a `BYTES` or `TEXT` stream raises `TypeError` at class definition, unless the method sets its own `__stream_parser__`. `[DONE]` and SSE comments are never items. The provider methods declare theirs: `response.completed`, `response.incomplete` or `response.failed` for OpenAI's `StreamResponse`, `message_stop` for Anthropic's `StreamMessage`.
 - **Errors inside the stream.** An SSE event whose `event:` field is `error` (Anthropic) raises, whatever its data, the `APIStatusError` built by the session's error resolver, and it is never transient: the generation already ran. So does decoded data that the parser's `error_events` matcher accepts, also for a `ServerSentEvent` item whose data is JSON (data that is not JSON is yielded as it is). The default, `EventTypes("error") | TopLevelError()`, accepts JSON whose `type` is `"error"`, or that has no `type` and a top-level `error` that is `true` or a non-empty object or string (OpenAI, Ollama); an event with another `type` may carry an `error` field as data (a failed tool call, for example). For other rules, give the method a `__stream_parser__ = StreamResponseParser(error_events=...)`, as OpenAI's `StreamResponse` does to raise `response.failed`. When the error event also fits the item type, the validated event is the error's `raw`.
 - **Raw events.** `BaseStreamMethod[ServerSentEvent]` yields events as they are, with their `data`, `event`, `id` and `retry`. `[DONE]` and error events are handled the same way.
 - **Limits.** `StreamResponseParser(max_line_size=...)` limits one SSE or NDJSON line and `max_event_size=...` the data of one SSE event, in characters; a longer one raises `APIResponseError`. Both are on by default, 32 Mi characters each (`MAX_LINE_SIZE`, `MAX_EVENT_SIZE`), since a server that never ends a line would otherwise make the stream grow in memory without bound. They are large because a normal event can be: OpenAI sends a generated image as base64 in one line, and the final event repeats the whole response. `None` lifts a limit; that is your decision to make. A `retry` field with more digits than Python turns into a number (4300 by default) raises `APIResponseError` as well.
@@ -125,7 +125,7 @@ A body that simply stops between two events, without an error, is the hard case:
 **What to do instead.** Decide in your code what a broken stream means. For short answers the simplest choice is to start over and drop the partial text:
 
 ```python title="restart.py"
-from ai_api import (
+from aiollm import (
     APIConnectionError,
     APIStreamInterruptedError,
     APITimeoutError,

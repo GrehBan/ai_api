@@ -1,11 +1,16 @@
-# ai-api
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GrehBan/aiollm/master/docs/assets/aiollm_dark.png">
+    <img alt="aiollm" src="https://raw.githubusercontent.com/GrehBan/aiollm/master/docs/assets/aiollm.png" width="420">
+  </picture>
+</h1>
 
 An async-first toolkit for building typed HTTP API clients, aimed at AI providers.
 
 <!-- --8<-- [start:intro] -->
 You describe each API call as a small declarative class: a Pydantic model whose generic argument is its result type. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming, and ships clients for OpenAI and Anthropic with one shared text generation API.
 
-> **Status: pre-alpha (0.6.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version, see [Versioning](https://grehban.github.io/ai_api/guide/design/#versioning).
+> **Status: pre-alpha (0.6.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version, see [Versioning](https://grehban.github.io/aiollm/guide/design/#versioning).
 
 ## Features
 
@@ -13,7 +18,7 @@ You describe each API call as a small declarative class: a Pydantic model whose 
 - **Buffered and streamed responses.** JSON models, text, bytes or nothing; streams of bytes, text, or typed events from server-sent events (SSE) and newline-delimited JSON (NDJSON).
 - **Checked streams.** A method can declare the protocol's last event, so a stream cut between two events raises instead of looking complete.
 - **File uploads.** From bytes, a path, an open binary stream or an async iterator; a retry resends the whole file.
-- **Opt-in retries.** Transient failures are retried with exponential backoff and jitter, honouring `Retry-After` up to a cap.
+- **Opt-in retries.** Transient failures are retried with exponential backoff and jitter, honouring `Retry-After` up to a cap; a `RetryPolicy` tunes them per session or per call.
 - **Structured errors.** One exception class per common HTTP status, plus transport and response errors, each with the provider's code, the request id and a `transient` flag.
 - **Provider clients.** `OpenAIClient` (Responses API) and `AnthropicClient` (Messages API), both with the provider-neutral `client.generation`.
 - **Replaceable parts.** Sessions depend on protocols, so the API, authentication, error mapping, headers and JSON codec can each be swapped.
@@ -24,8 +29,8 @@ You describe each API call as a small declarative class: a Pydantic model whose 
 The library requires Python 3.13 or newer. It is not on PyPI yet, so install it from source:
 
 ```bash
-git clone https://github.com/GrehBan/ai_api.git
-cd ai_api
+git clone https://github.com/GrehBan/aiollm.git
+cd aiollm
 uv sync
 ```
 
@@ -38,7 +43,7 @@ import asyncio
 
 from pydantic import MISSING
 
-from ai_api import (
+from aiollm import (
     BaseAPI,
     BaseAPIMethod,
     BaseAPIType,
@@ -46,7 +51,7 @@ from ai_api import (
     BearerAuth,
     BodyFormat,
 )
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.session.aiohttp import AiohttpSession
 
 API = BaseAPI("https://api.example.com", "v1")
 
@@ -98,13 +103,13 @@ This sends `POST https://api.example.com/v1/completions` with the body `{"model"
 
 ## Documentation
 
-The guide and the API reference are at **[grehban.github.io/ai_api](https://grehban.github.io/ai_api/)**:
+The guide and the API reference are at **[grehban.github.io/aiollm](https://grehban.github.io/aiollm/)**:
 
-- [Methods](https://grehban.github.io/ai_api/guide/methods/): parameters, body, query and path, result types
-- [Uploads](https://grehban.github.io/ai_api/guide/uploads/) and [streaming](https://grehban.github.io/ai_api/guide/streaming/)
-- [Errors and retries](https://grehban.github.io/ai_api/guide/errors/) and [sessions](https://grehban.github.io/ai_api/guide/sessions/)
-- [Provider clients](https://grehban.github.io/ai_api/guide/providers/) and [shared generation](https://grehban.github.io/ai_api/guide/generation/)
-- [Reference](https://grehban.github.io/ai_api/reference/), generated from the code
+- [Methods](https://grehban.github.io/aiollm/guide/methods/): parameters, body, query and path, result types
+- [Uploads](https://grehban.github.io/aiollm/guide/uploads/) and [streaming](https://grehban.github.io/aiollm/guide/streaming/)
+- [Errors and retries](https://grehban.github.io/aiollm/guide/errors/) and [sessions](https://grehban.github.io/aiollm/guide/sessions/)
+- [Provider clients](https://grehban.github.io/aiollm/guide/providers/) and [shared generation](https://grehban.github.io/aiollm/guide/generation/)
+- [Reference](https://grehban.github.io/aiollm/reference/), generated from the code
 
 ## License
 

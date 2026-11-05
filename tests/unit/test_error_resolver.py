@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 from multidict import CIMultiDict
 
-from ai_api.enums import Provider
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.exceptions.status import (
+from aiollm.enums import Provider
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import (
     HTTP_ERRORS,
     APIStatusError,
     BadRequestError,
@@ -20,7 +20,7 @@ from ai_api.http.exceptions.status import (
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.http.headers import get_header, parse_retry_after
+from aiollm.http.headers import get_header, parse_retry_after
 from tests.conftest import NOW
 
 

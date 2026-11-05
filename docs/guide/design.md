@@ -32,7 +32,7 @@ The main choices, and the reasons for them. Details are in the sections above.
 - **Strict requests, lenient responses.** A typo in a request should fail loudly; a field a provider adds to its responses should not break anyone.
 - **Async only.** AI calls take seconds to minutes and are often streamed, so they are run concurrently. A synchronous wrapper can be built on top of an async core; the opposite works poorly.
 - **Protocols between the parts.** The session depends on `IAPI`, `IAuth`, `IErrorResolver`, `IHeaders` and the parser protocols, not on concrete classes. Each part can be replaced without inheritance, and tests use simple fakes.
-- **The transport is isolated.** All logic is in `BaseSession`, and aiohttp is imported only by `*/aiohttp.py` modules. Another HTTP client behaves the same, and `import ai_api` does not import aiohttp.
+- **The transport is isolated.** All logic is in `BaseSession`, and aiohttp is imported only by `*/aiohttp.py` modules. Another HTTP client behaves the same, and `import aiollm` does not import aiohttp.
 - **One flag decides retries.** Errors carry `transient`, set by the error resolver or the transport mapping. The retry loop knows no statuses, and a provider changes retry behavior by overriding the resolver's `classify_status` (the base `classify` keeps the rule that an in-band failure is never transient).
 - **Retries are opt-in.** Repeating a non-idempotent generation can cost money; only the author of a method can say it is safe.
 - **Streams are not retried once started**, and not resumed: see [Interrupted streams](streaming.md#interrupted-streams).
@@ -50,9 +50,9 @@ The version follows [Semantic Versioning](https://semver.org/). Before 1.0 the p
 - a **breaking** change (a public name removed or renamed, a signature, a default, an error type, a wire format or a behaviour that code may rely on) bumps the **minor** version: 0.5.x → 0.6.0;
 - anything else (a fix, an addition, documentation) bumps the **patch**: 0.5.0 → 0.5.1.
 
-Pin the minor version (`ai-api ~= 0.5.0`) to get fixes without breaking changes. Every breaking change is marked **Breaking** in the [changelog](../changelog.md), with how to migrate. From 1.0, breaking changes bump the major version and are announced by a deprecation warning one release before.
+Pin the minor version (`aiollm ~= 0.5.0`) to get fixes without breaking changes. Every breaking change is marked **Breaking** in the [changelog](../changelog.md), with how to migrate. From 1.0, breaking changes bump the major version and are announced by a deprecation warning one release before.
 
-The public API is what `ai_api` and the `__all__` of its packages export. Everything else (modules and helpers whose names start with `_`, the internal helper modules such as `ai_api.methods.fields`, log messages) may change in any release. The provider types follow the providers' own schemas, so a field can appear or change when the provider changes it.
+The public API is what `aiollm` and the `__all__` of its packages export. Everything else (modules and helpers whose names start with `_`, the internal helper modules such as `aiollm.methods.fields`, log messages) may change in any release. The provider types follow the providers' own schemas, so a field can appear or change when the provider changes it.
 
 ## Limitations and roadmap
 

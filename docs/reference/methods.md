@@ -1,3 +1,3 @@
-# ai_api.methods
+# aiollm.methods
 
-::: ai_api.methods
+::: aiollm.methods

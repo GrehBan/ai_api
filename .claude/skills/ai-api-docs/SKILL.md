@@ -1,9 +1,9 @@
 ---
 name: ai-api-docs
-description: Write or update ai_api documentation - the MkDocs guide pages, README, docstrings (which become the reference pages), CHANGELOG and docs/unification.md - so that every statement matches the code and every Python example is titled and executed by a test. Use it in the ai_api repository whenever behaviour, an option, an error or a public name changes, when the owner asks to document something, fix the docs, add an example, or check that the site still matches the code («доки», «документация», «пример в доках»).
+description: Write or update aiollm documentation - the MkDocs guide pages, README, docstrings (which become the reference pages), CHANGELOG and docs/unification.md - so that every statement matches the code and every Python example is titled and executed by a test. Use it in the aiollm repository whenever behaviour, an option, an error or a public name changes, when the owner asks to document something, fix the docs, add an example, or check that the site still matches the code («доки», «документация», «пример в доках»).
 ---
 
-# ai_api docs
+# aiollm docs
 
 The code is the source of truth about what the library does; the docs must
 say exactly that. Every Python block on the site runs in a test, so an

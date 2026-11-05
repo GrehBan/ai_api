@@ -13,17 +13,17 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from ai_api.enums import Provider
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import (
+from aiollm.enums import Provider
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import (
     APIStatusError,
     InternalServerError,
     RateLimitError,
 )
-from ai_api.http.exceptions.transport import APIStreamInterruptedError
-from ai_api.providers.openai.methods import CreateResponse, StreamResponse
-from ai_api.providers.openai.resolver import OpenAIErrorResolver
-from ai_api.providers.openai.types import (
+from aiollm.http.exceptions.transport import APIStreamInterruptedError
+from aiollm.providers.openai.methods import CreateResponse, StreamResponse
+from aiollm.providers.openai.resolver import OpenAIErrorResolver
+from aiollm.providers.openai.types import (
     ContentPartEvent,
     OutputItemEvent,
     OutputMessage,
@@ -39,8 +39,8 @@ from ai_api.providers.openai.types import (
     UnknownEvent,
     UnknownOutputItem,
 )
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session.aiohttp import AiohttpSession
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import (
     FakeStreamResponse,
     FakeTransport,

@@ -9,29 +9,30 @@ import sys
 import pytest
 
 PACKAGES = [
-    "ai_api",
-    "ai_api.adapters",
-    "ai_api.client",
-    "ai_api.http",
-    "ai_api.http.exceptions",
-    "ai_api.methods",
-    "ai_api.providers.anthropic",
-    "ai_api.providers.anthropic.adapters",
-    "ai_api.providers.anthropic.methods",
-    "ai_api.providers.anthropic.types",
-    "ai_api.providers.openai",
-    "ai_api.providers.openai.adapters",
-    "ai_api.providers.openai.methods",
-    "ai_api.providers.openai.types",
-    "ai_api.resources",
-    "ai_api.response",
-    "ai_api.response.parse",
-    "ai_api.serialization",
-    "ai_api.session",
-    "ai_api.session.body",
-    "ai_api.types",
-    "ai_api.types.requests",
-    "ai_api.types.responses",
+    "aiollm",
+    "aiollm.adapters",
+    "aiollm.client",
+    "aiollm.http",
+    "aiollm.http.exceptions",
+    "aiollm.methods",
+    "aiollm.providers.anthropic",
+    "aiollm.providers.anthropic.adapters",
+    "aiollm.providers.anthropic.methods",
+    "aiollm.providers.anthropic.types",
+    "aiollm.providers.openai",
+    "aiollm.providers.openai.adapters",
+    "aiollm.providers.openai.methods",
+    "aiollm.providers.openai.types",
+    "aiollm.resources",
+    "aiollm.response",
+    "aiollm.response.parse",
+    "aiollm.serialization",
+    "aiollm.session",
+    "aiollm.session.body",
+    "aiollm.session.retry",
+    "aiollm.types",
+    "aiollm.types.requests",
+    "aiollm.types.responses",
 ]
 
 
@@ -45,8 +46,8 @@ def test_all_names_exist_and_are_sorted(name: str) -> None:
 
 
 def test_root_reexports_the_error_tree() -> None:
-    import ai_api  # noqa: PLC0415 - checked against its subpackage
-    from ai_api.http import exceptions  # noqa: PLC0415
+    import aiollm  # noqa: PLC0415 - checked against its subpackage
+    from aiollm.http import exceptions  # noqa: PLC0415
 
     errors = set(exceptions.__all__) - {
         "BaseErrorResolver",
@@ -54,11 +55,11 @@ def test_root_reexports_the_error_tree() -> None:
         "IErrorResolver",
     }
 
-    assert errors <= set(ai_api.__all__)
+    assert errors <= set(aiollm.__all__)
 
 
 def test_importing_the_root_does_not_import_a_transport() -> None:
-    code = "import sys, ai_api; print('aiohttp' in sys.modules)"
+    code = "import sys, aiollm; print('aiohttp' in sys.modules)"
 
     result = subprocess.run(  # noqa: S603 - fixed command
         [sys.executable, "-c", code],

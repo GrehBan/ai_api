@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from ai_api.enums import Provider
-from ai_api.http.exceptions.status import (
+from aiollm.enums import Provider
+from aiollm.http.exceptions.status import (
     APIStatusError,
     BadRequestError,
     InternalServerError,
@@ -18,7 +18,7 @@ from ai_api.http.exceptions.status import (
     RateLimitError,
     ServiceUnavailableError,
 )
-from ai_api.providers.openai.resolver import (
+from aiollm.providers.openai.resolver import (
     OpenAIErrorResolver,
 )
 

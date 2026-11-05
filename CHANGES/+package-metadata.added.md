@@ -1,0 +1,1 @@
+Fuller package metadata on PyPI: maintainers, keywords, classifiers (pre-alpha, asyncio, aiohttp, Pydantic 2, CPython 3.13–3.15, typed) and links to the issue tracker and the home page; the author's address is now `maximfeedback19@gmail.com`.

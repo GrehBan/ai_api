@@ -1,9 +1,9 @@
 ---
 name: ai-api-provider
-description: Add a new AI provider package to ai_api (e.g. OpenRouter, Gemini) - api.py with PROVIDER, resolver.py with the error table, client.py with SessionFactory and BaseProviderClient, the first endpoints, and the shared generation/client contract cases. Use it in the ai_api repository whenever the owner asks to support a new provider or vendor, or asks what adding one would take. For a new endpoint of an existing provider use ai-api-endpoint instead.
+description: Add a new AI provider package to aiollm (e.g. OpenRouter, Gemini) - api.py with PROVIDER, resolver.py with the error table, client.py with SessionFactory and BaseProviderClient, the first endpoints, and the shared generation/client contract cases. Use it in the aiollm repository whenever the owner asks to support a new provider or vendor, or asks what adding one would take. For a new endpoint of an existing provider use ai-api-endpoint instead.
 ---
 
-# ai_api provider
+# aiollm provider
 
 A provider is a flat package built from the same parts as `providers/openai/`
 and `providers/anthropic/`; the steps are in `docs/guide/extending.md` and
@@ -18,7 +18,7 @@ propose it (`change-proposal`) with what upstream offers (from the
 `compare_providers`), the auth scheme, error format and stream format, and
 which shared resources it will support. Code starts on the owner's go.
 
-## 1. Package skeleton (`src/ai_api/providers/<name>/`)
+## 1. Package skeleton (`src/aiollm/providers/<name>/`)
 
 1. `api.py`: `BaseAPI(base_url, version)` and `PROVIDER: Final =
    Provider.<NAME>`; add the member to `Provider` in `enums.py`.
@@ -28,9 +28,11 @@ which shared resources it will support. Code starts on the owner's go.
    are never transient.
 3. `client.py`: module-level `session_factory = SessionFactory(AiohttpSession,
    auth_factory=..., api=..., error_resolver=...)`, and a `BaseProviderClient`
-   subclass with `provider`, `session_factory`, `api_key_env`, `auth_headers`,
-   `adapter_types`; `__init__` types `**session_kwargs`, builds adapters with
-   `self.adapter(...)` and resources after `super().__init__()`.
+   subclass with `provider`, `session_factory`, `api_key_env`, `auth_headers`
+   and each resource as `name = bind_resource(Resource[...], Adapter)`
+   (`adapter_factory=` for an adapter with options, read from the client);
+   `__init__` types `**session_kwargs`, keeps the adapter options and calls
+   `super().__init__()`, which builds adapters before the session.
 4. `__init__.py` re-exports the client (the one `__init__` allowed to import a
    transport), sorted `__all__`.
 

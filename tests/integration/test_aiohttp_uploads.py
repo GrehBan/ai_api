@@ -13,12 +13,12 @@ from typing import Any
 import pytest
 from pydantic import MISSING
 
-from ai_api.enums import BodyFormat
-from ai_api.http.exceptions.status import ServiceUnavailableError
-from ai_api.http.exceptions.transport import APIRequestError
-from ai_api.methods.base import BaseAPIMethod
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.files import (
+from aiollm.enums import BodyFormat
+from aiollm.http.exceptions.status import ServiceUnavailableError
+from aiollm.http.exceptions.transport import APIRequestError
+from aiollm.methods.base import BaseAPIMethod
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.files import (
     DEFAULT_CHUNK_SIZE,
     BytesFile,
     InputFile,

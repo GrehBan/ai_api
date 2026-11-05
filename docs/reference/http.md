@@ -1,5 +1,5 @@
-# ai_api.http
+# aiollm.http
 
-::: ai_api.http
+::: aiollm.http
 
-::: ai_api.http.exceptions
+::: aiollm.http.exceptions

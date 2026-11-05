@@ -14,12 +14,15 @@ from typing import Any, get_overloads, get_type_hints
 import pytest
 from pydantic import ValidationError
 
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.client import session_factory as openai_factory
-from ai_api.resources import GenerationResource, IGenerationResource
-from ai_api.session.aiohttp import AiohttpSession, AiohttpSessionOptions
-from ai_api.types.requests import GenerationRequest
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.client import session_factory as openai_factory
+from aiollm.resources import GenerationResource, IGenerationResource
+from aiollm.session.aiohttp import AiohttpSession, AiohttpSessionOptions
+from aiollm.session.base import BaseSession
+from aiollm.session.protocols import CallOptions, ISession
+from aiollm.session.retry import RetryPolicy
+from aiollm.types.requests import GenerationRequest
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 from tests.providers.test_openai_responses import RESPONSE, STREAM, frame
 
@@ -113,8 +116,62 @@ def test_keyword_overloads_name_the_request_fields(
     assert {
         name
         for name, parameter in signature.parameters.items()
-        if parameter.default is inspect.Parameter.empty and name != "self"
+        if parameter.default is inspect.Parameter.empty
+        and parameter.kind is not inspect.Parameter.VAR_KEYWORD
+        and name != "self"
     } == required
+
+
+@pytest.mark.parametrize(
+    "method",
+    [ISession.send_request, ISession.stream, BaseSession.send_request],
+    ids=["protocol-send", "protocol-stream", "session-send"],
+)
+def test_call_options_match_the_session_arguments(method: Any) -> None:
+    # Compared as written, since both modules defer their annotations;
+    # a TypedDict keeps each one as a ForwardRef of that text.
+    options = {
+        name: hint.__forward_arg__
+        for name, hint in CallOptions.__annotations__.items()
+    }
+    keyword = {
+        name: parameter.annotation
+        for name, parameter in inspect.signature(method).parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+
+    assert options == keyword
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [GenerationResource, IGenerationResource],
+    ids=["resource", "protocol"],
+)
+@pytest.mark.parametrize("method", ["create", "stream"])
+def test_generation_takes_the_call_options(
+    owner: type[Any], method: str
+) -> None:
+    parameters = inspect.signature(getattr(owner, method)).parameters
+    keyword = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+
+    assert keyword == CallOptions.__optional_keys__
+
+
+def test_no_request_field_is_named_like_a_call_option() -> None:
+    # The options and the fields share the keyword arguments of create()
+    # and stream(); a field named like an option could not be given.
+    names = set(GenerationRequest.model_fields) | {
+        field.alias
+        for field in GenerationRequest.model_fields.values()
+        if field.alias
+    }
+
+    assert names.isdisjoint(CallOptions.__optional_keys__)
 
 
 def test_session_options_match_the_session_arguments() -> None:
@@ -136,13 +193,13 @@ def test_session_options_match_the_session_arguments() -> None:
     ids=["openai", "anthropic"],
 )
 async def test_clients_pass_session_arguments_on(build: Any) -> None:
-    client = build(TEST_TOKEN, max_retry_after=5.0, retry_deadline=None)
+    policy = RetryPolicy(max_retry_after=5.0, deadline=None)
+    client = build(TEST_TOKEN, retry_policy=policy)
 
     async with client:
         session = client.session
         assert isinstance(session, AiohttpSession)
-        assert session.max_retry_after == 5.0
-        assert session.retry_deadline is None
+        assert session.retry_policy is policy
 
 
 @pytest.mark.parametrize(

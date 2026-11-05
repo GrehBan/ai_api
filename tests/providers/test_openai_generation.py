@@ -12,20 +12,20 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from ai_api.enums import IncompleteReason, Provider
-from ai_api.exceptions import RequestValidationError
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import (
+from aiollm.enums import IncompleteReason, Provider
+from aiollm.exceptions import RequestValidationError
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import (
     APIStatusError,
     QuotaExceededError,
 )
-from ai_api.providers.openai import OpenAIClient
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.client import session_factory
-from ai_api.providers.openai.methods import CreateResponse, StreamResponse
-from ai_api.providers.openai.types import Response, ResponseStreamEvent
-from ai_api.types.requests import GenerationRequest, Turn
-from ai_api.types.responses import (
+from aiollm.providers.openai import OpenAIClient
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.client import session_factory
+from aiollm.providers.openai.methods import CreateResponse, StreamResponse
+from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
     TextDeltaEvent,

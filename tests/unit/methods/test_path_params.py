@@ -9,8 +9,8 @@ from typing import Annotated, Any, Literal, Union
 
 import pytest
 
-from ai_api.enums import BodyFormat
-from ai_api.methods.base import BaseAPIMethod
+from aiollm.enums import BodyFormat
+from aiollm.methods.base import BaseAPIMethod
 from tests.conftest import make_method
 
 

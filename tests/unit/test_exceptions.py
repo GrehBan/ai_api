@@ -11,13 +11,13 @@ from typing import Any, ClassVar
 import pytest
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from ai_api.adapters.validation import request_errors
-from ai_api.enums import Provider
-from ai_api.exceptions import AIAPIError, RequestValidationError
-from ai_api.http.exceptions import status as http_errors
-from ai_api.http.exceptions.response import APIResponseError
-from ai_api.http.exceptions.status import HTTP_ERRORS, APIStatusError
-from ai_api.http.exceptions.transport import (
+from aiollm.adapters.validation import request_errors
+from aiollm.enums import Provider
+from aiollm.exceptions import AIAPIError, RequestValidationError
+from aiollm.http.exceptions import status as http_errors
+from aiollm.http.exceptions.response import APIResponseError
+from aiollm.http.exceptions.status import HTTP_ERRORS, APIStatusError
+from aiollm.http.exceptions.transport import (
     APIConnectionError,
     APIRedirectError,
     APIRequestError,
@@ -298,7 +298,7 @@ def test_error_resolver_protocols_import_in_fresh_interpreter() -> None:
         [
             sys.executable,
             "-c",
-            "import ai_api.http.exceptions.protocols",
+            "import aiollm.http.exceptions.protocols",
         ],
         capture_output=True,
         text=True,

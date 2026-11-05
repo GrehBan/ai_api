@@ -1,13 +1,52 @@
 
 [project]
-name = "ai-api"
+name = "aiollm"
 dynamic = ["version"]
 description = "Async-first toolkit for building typed HTTP API clients"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 authors = [
-    { name = "GrehBan", email = "57055685+GrehBan@users.noreply.github.com" },
+    { name = "GrehBan", email = "maximfeedback19@gmail.com" },
+]
+maintainers = [
+    { name = "GrehBan", email = "maximfeedback19@gmail.com" },
+]
+keywords = [
+    "ai",
+    "llm",
+    "openai",
+    "anthropic",
+    "claude",
+    "api-client",
+    "http-client",
+    "async",
+    "asyncio",
+    "aiohttp",
+    "pydantic",
+    "typed",
+    "streaming",
+    "sse",
+]
+# No "License ::" classifier: PEP 639 replaces it with the SPDX
+# expression in `license`, and a build that has both fails.
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: AsyncIO",
+    "Framework :: Pydantic :: 2",
+    "Framework :: aiohttp",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
     "aiodns>=4.0.4",
@@ -22,19 +61,21 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://grehban.github.io/ai_api/"
-Repository = "https://github.com/GrehBan/ai_api"
-Changelog = "https://github.com/GrehBan/ai_api/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/GrehBan/aiollm"
+Documentation = "https://grehban.github.io/aiollm/"
+Repository = "https://github.com/GrehBan/aiollm"
+Issues = "https://github.com/GrehBan/aiollm/issues"
+Changelog = "https://github.com/GrehBan/aiollm/blob/master/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/ai_api/__meta__.py"
+path = "src/aiollm/__meta__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ai_api"]
+packages = ["src/aiollm"]
 
 [dependency-groups]
 dev = [
@@ -134,7 +175,7 @@ max-complexity = 10
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ai_api"]
+known-first-party = ["aiollm"]
 required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.format]
@@ -162,13 +203,13 @@ filterwarnings = ["error"]
 # (CHANGES/+redirect-log.fixed.md). `towncrier build --version X.Y.Z`
 # turns them into the CHANGELOG section of a release; the sections are
 # Keep a Changelog's, in its order.
-package = "ai_api"
+package = "aiollm"
 package_dir = "src"
 directory = "CHANGES"
 filename = "CHANGELOG.md"
 start_string = "<!-- towncrier release notes start -->\n"
 title_format = "## [{version}] - {project_date}"
-issue_format = "[#{issue}](https://github.com/GrehBan/ai_api/pull/{issue})"
+issue_format = "[#{issue}](https://github.com/GrehBan/aiollm/pull/{issue})"
 orphan_prefix = "+"
 ignore = [".gitkeep", "README.md"]
 wrap = true
@@ -205,7 +246,7 @@ showcontent = true
 
 [tool.coverage.run]
 branch = true
-source = ["ai_api"]
+source = ["aiollm"]
 
 [tool.coverage.report]
 show_missing = true
@@ -258,6 +299,10 @@ reportUnknownVariableType = false
 
 [tool.rumdl.MD024]
 siblings_only = true
+
+[tool.rumdl.MD033]
+# The README logo: <picture> switches it with the light or dark theme.
+allowed_elements = ["h1", "img", "picture", "source"]
 
 [tool.rumdl.per-file-ignores]
 "CHANGELOG.md" = ["MD024"]

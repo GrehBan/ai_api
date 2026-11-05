@@ -167,7 +167,7 @@ from typing import Annotated
 
 from pydantic import PlainSerializer
 
-from ai_api import BaseValueFormatter
+from aiollm import BaseValueFormatter
 
 
 class UnixSeconds(BaseValueFormatter):        # the API wants Unix seconds

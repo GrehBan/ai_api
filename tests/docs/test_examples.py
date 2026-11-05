@@ -19,7 +19,7 @@ from typing import Any, Final
 
 import pytest
 
-from ai_api import (
+from aiollm import (
     APIConnectionError,
     APIRedirectError,
     APIStreamInterruptedError,
@@ -31,14 +31,14 @@ from ai_api import (
     ResponseFormat,
     ServiceUnavailableError,
 )
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.client import (
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.client import (
     session_factory as anthropic_session_factory,
 )
-from ai_api.providers.openai.client import session_factory
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.types.base import BaseAPIType
-from ai_api.types.requests import GenerationRequest
+from aiollm.providers.openai.client import session_factory
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.types.base import BaseAPIType
+from aiollm.types.requests import GenerationRequest
 from tests.conftest import LocalAPI, Recorder, Reply
 
 ROOT = Path(__file__).parents[2]
@@ -101,6 +101,7 @@ HANDLING: Final = "handling.py"
 RESOLVER: Final = "resolver.py"
 AUTH: Final = "auth.py"
 CALL_OPTIONS: Final = "call_options.py"
+RETRY_POLICY: Final = "retry_policy.py"
 CLIENT: Final = "client.py"
 OPENAI_RESPONSES: Final = "openai_responses.py"
 ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
@@ -123,6 +124,7 @@ TESTED: Final = (
     RESOLVER,
     AUTH,
     CALL_OPTIONS,
+    RETRY_POLICY,
     CLIENT,
     OPENAI_RESPONSES,
     ANTHROPIC_MESSAGES,
@@ -588,6 +590,35 @@ async def test_call_options(
     assert recorder.last.headers["x-beta-features"] == "long-context"
     assert recorder.last.headers["Idempotency-Key"] == "key-1"
 
+
+async def test_retry_policy(
+    examples: Examples,
+    recorder: Recorder,
+) -> None:
+    await examples.run(QUICK_START, RETRY_POLICY)
+    recorder.reply(
+        *[Reply(status=503)] * 5,
+        Reply(json={"id": "c-1", "text": "Done."}),
+    )
+
+    result = await examples.complete_patiently("Hello!")
+
+    assert result == examples.Completion(id="c-1", text="Done.")
+    assert len(recorder.requests) == 6
+
+
+async def test_retry_policy_leaves_a_rate_limit_to_the_caller(
+    examples: Examples,
+    recorder: Recorder,
+) -> None:
+    await examples.run(QUICK_START, RETRY_POLICY)
+    recorder.reply(Reply(status=429, headers={"Retry-After": "1"}))
+
+    with pytest.raises(RateLimitError) as caught:
+        await examples.complete_patiently("Hello!")
+
+    assert caught.value.transient is True
+    assert len(recorder.requests) == 1
 
 async def test_openai_client(
     examples: Examples,

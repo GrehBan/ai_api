@@ -5,7 +5,7 @@ Annotate a field as `InputFile` and use a multipart body:
 ```python title="uploads.py"
 from pathlib import Path
 
-from ai_api import BytesFile, InputFile, StreamFile
+from aiollm import BytesFile, InputFile, StreamFile
 
 
 class Transcribe(BaseAPIMethod[Transcription]):

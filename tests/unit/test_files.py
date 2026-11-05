@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from ai_api.types.files import (
+from aiollm.types.files import (
     BytesFile,
     InputFile,
     IOFile,

@@ -3,7 +3,7 @@
 `OpenAIClient` builds an `AiohttpSession` for OpenAI from a token: the `https://api.openai.com/v1` URL, `BearerAuth` and `OpenAIErrorResolver`, which turns a 429 for exhausted credits or a reached spend or usage limit (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, ...) into a `QuotaExceededError` that is not retried, also when a stream's `error` event reports it. A stream's `error` event and a `failed` response come after a 200, so their class is picked by the code or type, such as `ServiceUnavailableError` for `server_is_overloaded` and `QuotaExceededError` for `insufficient_quota`. Such a failure is never transient: the generation ran and failed, and running it again is your choice, as in the official SDK, which retries by the HTTP status only. The client owns its session, so close it, ideally with `async with`:
 
 ```python title="client.py"
-from ai_api.providers.openai import OpenAIClient
+from aiollm.providers.openai import OpenAIClient
 
 
 async def list_models() -> ModelList:
@@ -12,18 +12,18 @@ async def list_models() -> ModelList:
 ```
 
 - **Key from the environment.** `OpenAIClient()` without a token or a session reads the key from `OPENAI_API_KEY`. An explicit token always wins over the variable, a session is never combined with it, and an empty variable counts as unset.
-- **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` whose error resolver is not an `OpenAIErrorResolver` (a subclass of it is fine), or with authentication outside the `Authorization` header, gets a `SessionMismatchWarning` (a `UserWarning`), since both are almost certainly mistakes for OpenAI. When the session is deliberate, turn the warning off with the standard filters: `warnings.filterwarnings("ignore", category=SessionMismatchWarning)`. To change only some options of the session built from a token, pass them to the client: `OpenAIClient(token, max_body_size=..., timeout=...)` takes every keyword argument of `AiohttpSession` (`AiohttpSessionOptions`), and type checkers check them; with a ready `session=` they raise `ValueError`, since they would be ignored. `session_factory(token, max_body_size=...)` from `ai_api.providers.openai.client` builds such a session on its own.
+- **Custom session settings.** Pass a ready session with `OpenAIClient(session=...)` instead of a token. A `BaseSession` whose error resolver is not an `OpenAIErrorResolver` (a subclass of it is fine), or with authentication outside the `Authorization` header, gets a `SessionMismatchWarning` (a `UserWarning`), since both are almost certainly mistakes for OpenAI. When the session is deliberate, turn the warning off with the standard filters: `warnings.filterwarnings("ignore", category=SessionMismatchWarning)`. To change only some options of the session built from a token, pass them to the client: `OpenAIClient(token, max_body_size=..., timeout=...)` takes every keyword argument of `AiohttpSession` (`AiohttpSessionOptions`), and type checkers check them; with a ready `session=` they raise `ValueError`, since they would be ignored. `session_factory(token, max_body_size=...)` from `aiollm.providers.openai.client` builds such a session on its own.
 - **Ownership.** A client closes its session when it is closed, also a session you passed in. One owner per session means no connection pool is left open by accident; create one session per client.
-- **Anthropic.** `AnthropicClient` (`ai_api.providers.anthropic`) works the same way: a token, a ready `session=` or `ANTHROPIC_API_KEY`, with the `https://api.anthropic.com/v1` URL, `BearerAuth` (Anthropic also accepts `x-api-key`, so `APIKeyAuth` in a given session gets no warning) and `AnthropicErrorResolver`. The resolver reads Anthropic's `error.type` as `error_type` and `details.error_code` as `code`; a reached spend cap (429 `enforced_spend_limit_reached`) or a spend limit you set (400) is a `QuotaExceededError` that is not retried, and the 529 `overloaded_error` is a transient `ServiceUnavailableError`, like OpenAI's 503. A stream's `error` event comes after a 200, so its class is picked by its type, and it is never transient, as for OpenAI. Anthropic also requires an `anthropic-version` header; `API_VERSION` (`2026-10-21`) is the version the library's Anthropic types follow.
-- **Other providers.** Subclass `BaseClient`, which delegates `send_request`, `stream`, `close` and `async with` to its session, and build the session with a `SessionFactory` (`ai_api.session`). `BaseClient` is generic in the session type: `BaseClient(AiohttpSession(...)).session` is typed as `AiohttpSession`, while `OpenAIClient`, which accepts any session, is a `BaseClient[ISession]`.
+- **Anthropic.** `AnthropicClient` (`aiollm.providers.anthropic`) works the same way: a token, a ready `session=` or `ANTHROPIC_API_KEY`, with the `https://api.anthropic.com/v1` URL, `BearerAuth` (Anthropic also accepts `x-api-key`, so `APIKeyAuth` in a given session gets no warning) and `AnthropicErrorResolver`. The resolver reads Anthropic's `error.type` as `error_type` and `details.error_code` as `code`; a reached spend cap (429 `enforced_spend_limit_reached`) or a spend limit you set (400) is a `QuotaExceededError` that is not retried, and the 529 `overloaded_error` is a transient `ServiceUnavailableError`, like OpenAI's 503. A stream's `error` event comes after a 200, so its class is picked by its type, and it is never transient, as for OpenAI. Anthropic also requires an `anthropic-version` header; `API_VERSION` (`2026-10-21`) is the version the library's Anthropic types follow.
+- **Other providers.** Subclass `BaseClient`, which delegates `send_request`, `stream`, `close` and `async with` to its session, and build the session with a `SessionFactory` (`aiollm.session`). `BaseClient` is generic in the session type: `BaseClient(AiohttpSession(...)).session` is typed as `AiohttpSession`, while `OpenAIClient`, which accepts any session, is a `BaseClient[ISession]`.
 
 ## OpenAI Responses API
 
-`ai_api.providers.openai.methods` has `CreateResponse` and `StreamResponse` for `POST /v1/responses`, with OpenAI's own types in `ai_api.providers.openai.types`:
+`aiollm.providers.openai.methods` has `CreateResponse` and `StreamResponse` for `POST /v1/responses`, with OpenAI's own types in `aiollm.providers.openai.types`:
 
 ```python title="openai_responses.py"
-from ai_api.providers.openai.methods import CreateResponse, StreamResponse
-from ai_api.providers.openai.types import OutputTextDeltaEvent
+from aiollm.providers.openai.methods import CreateResponse, StreamResponse
+from aiollm.providers.openai.types import OutputTextDeltaEvent
 
 
 async def ask(client: OpenAIClient) -> str | None:
@@ -54,12 +54,12 @@ async def ask_streamed(client: OpenAIClient) -> str:
 
 ## Anthropic Messages API
 
-`ai_api.providers.anthropic.methods` has `CreateMessage` and `StreamMessage` for `POST /v1/messages`, with Anthropic's own types in `ai_api.providers.anthropic.types`:
+`aiollm.providers.anthropic.methods` has `CreateMessage` and `StreamMessage` for `POST /v1/messages`, with Anthropic's own types in `aiollm.providers.anthropic.types`:
 
 ```python title="anthropic_messages.py"
-from ai_api.providers.anthropic import AnthropicClient
-from ai_api.providers.anthropic.methods import CreateMessage, StreamMessage
-from ai_api.providers.anthropic.types import ContentBlockDeltaEvent, TextDelta
+from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
+from aiollm.providers.anthropic.types import ContentBlockDeltaEvent, TextDelta
 
 
 async def ask_claude(client: AnthropicClient) -> str | None:

@@ -8,12 +8,12 @@ from typing import Any
 
 import pytest
 
-from ai_api.enums import Provider
-from ai_api.http.exceptions.status import RateLimitError
-from ai_api.http.exceptions.transport import APIStreamInterruptedError
-from ai_api.resources.stream import GenerationStream
-from ai_api.response.stream import Stream, transform_stream
-from ai_api.types.responses.events import (
+from aiollm.enums import Provider
+from aiollm.http.exceptions.status import RateLimitError
+from aiollm.http.exceptions.transport import APIStreamInterruptedError
+from aiollm.resources.stream import GenerationStream
+from aiollm.response.stream import Stream, transform_stream
+from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,

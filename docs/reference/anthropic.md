@@ -1,9 +1,9 @@
-# ai_api.providers.anthropic
+# aiollm.providers.anthropic
 
-::: ai_api.providers.anthropic
+::: aiollm.providers.anthropic
 
-::: ai_api.providers.anthropic.methods
+::: aiollm.providers.anthropic.methods
 
-::: ai_api.providers.anthropic.adapters
+::: aiollm.providers.anthropic.adapters
 
-::: ai_api.providers.anthropic.types
+::: aiollm.providers.anthropic.types

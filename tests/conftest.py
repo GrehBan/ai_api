@@ -31,19 +31,20 @@ from pytest_mock import MockerFixture
 from tenacity import RetryCallState
 from yarl import URL
 
-from ai_api.http import headers as http_headers
-from ai_api.http.auth import BearerAuth
-from ai_api.http.exceptions.protocols import IErrorResolver
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.headers import CONTENT_TYPE
-from ai_api.http.protocols import IAPI, HeadersType, IAuth, Query
-from ai_api.methods.base import BaseMethod
-from ai_api.methods.protocols import IAPIMethod, IStreamMethod
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session import aiohttp as session_aiohttp
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.session.base import BaseSession
-from ai_api.session.protocols import Timeout
+from aiollm.http import headers as http_headers
+from aiollm.http.auth import BearerAuth
+from aiollm.http.exceptions.protocols import IErrorResolver
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.headers import CONTENT_TYPE
+from aiollm.http.protocols import IAPI, HeadersType, IAuth, Query
+from aiollm.methods.base import BaseMethod
+from aiollm.methods.protocols import IAPIMethod, IStreamMethod
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session import aiohttp as session_aiohttp
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.session.base import BaseSession
+from aiollm.session.protocols import Timeout
+from aiollm.session.retry.policy import RetryPolicy
 
 TEST_TOKEN = "test-token"
 
@@ -55,21 +56,25 @@ NOW = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
 def no_retry_wait(mocker: MockerFixture) -> MagicMock:
     """Make retries instant.
 
-    Replaces ``calculate_wait`` where ``BaseSession`` looks it up, so the
-    retry loop waits 0 seconds. Tenacity reuses one mutable state object,
-    so the mock's ``call_args`` only show the final state; the error each
-    wait was computed for is kept in ``mock.outcomes`` instead.
+    Replaces ``calculate_wait`` where the retry loop looks it up, so it
+    waits 0 seconds and the policy's ``backoff`` is not called. Tenacity
+    reuses one mutable state object, so the mock's ``call_args`` only
+    show the final state; the error each wait was computed for is kept
+    in ``mock.outcomes`` instead. A test that needs the real wait sets
+    the mock's ``side_effect`` to ``calculate_wait`` imported from
+    ``aiollm.session.retry.runner`` at the top of its module, before the
+    patch.
     """
     outcomes: list[BaseException | None] = []
 
-    def wait(state: RetryCallState) -> float:
+    def wait(state: RetryCallState, policy: RetryPolicy) -> float:
         outcomes.append(
             None if state.outcome is None else state.outcome.exception()
         )
         return 0.0
 
     mock = mocker.patch(
-        "ai_api.session.base.calculate_wait",
+        "aiollm.session.retry.runner.calculate_wait",
         autospec=True,
         side_effect=wait,
     )

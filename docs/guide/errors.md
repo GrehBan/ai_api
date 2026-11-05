@@ -47,7 +47,7 @@ A status error's message starts with the class's fixed description and ends with
 One more library error is raised before anything is sent: `RequestValidationError` (a `ValueError`), for a shared request that a provider cannot take; see [Shared generation](generation.md).
 
 ```python title="handling.py"
-from ai_api import APIStatusError, APITransportError, RateLimitError
+from aiollm import APIStatusError, APITransportError, RateLimitError
 
 
 async def ask(prompt: str) -> str | None:
@@ -81,7 +81,7 @@ A request is retried only when the method sets `__retryable__ = True`, does not 
 
 It is false for certificate errors, redirects that are not followed, invalid requests and failing upload sources, since repeating them gives the same result, and `APIResponseError` is never retried.
 
-Waits use random exponential backoff of up to 30 s, but never less than `Retry-After`. When the API asks to wait longer than `max_retry_after` (60 s by default), the error is raised at once instead. No retry starts after `retry_deadline` (15 minutes from the first attempt by default), and a wait that would end later is not started; an attempt in progress is limited by its own timeout.
+How often and how long to retry is set by a `RetryPolicy`, the `retry_policy` argument of a session or a client ([below](#retry-policy)). The default one makes at most four attempts, waits with random exponential backoff of up to 30 s but never less than `Retry-After`, raises the error at once when the API asks to wait longer than 60 s, and starts no retry 15 minutes after the first attempt; a wait that would end later is not started, and an attempt in progress is limited by its own timeout.
 
 The reasons behind these rules:
 
@@ -90,6 +90,44 @@ The reasons behind these rules:
 - **`Retry-After` is capped.** A server that asks for ten minutes would otherwise block the caller silently. Raising the error lets the caller decide, for example to queue the work.
 - **The deadline bounds the total time.** Four attempts with long waits and long timeouts could otherwise take far longer than any caller expects.
 - **Jitter spreads the retries.** Many clients failing at the same moment don't all come back at the same moment.
+- **A policy narrows, never widens.** Whether an error can succeed on a second try is the library's knowledge (`transient`), and whether a request may run twice is the method's (`__retryable__`); a policy only tunes how far to go within both.
+
+### Retry policy
+
+| Field | Default | Meaning |
+|---|---|---|
+| `max_attempts` | `4` | Attempts in total, the first one included; `1` turns retries off |
+| `deadline` | `900` | Seconds after the first attempt after which no retry starts; `None` for no limit |
+| `max_retry_after` | `60` | Longest `Retry-After` worth waiting for, in seconds |
+| `backoff` | `FullJitterBackoff()` | Gives the wait before each retry, from a `RetryState`; the session still waits at least `Retry-After` |
+| `retry_if` | `None` | Asked about each transient error, the last attempt's too; `False` raises it at once |
+
+A `RetryState` holds the failed attempt's number (`attempt`, from 1), the seconds since the first attempt (`elapsed`) and its `error`, always a transient `APIStatusError` or `APITransportError`. `FullJitterBackoff(multiplier=0.5, max_delay=30)` draws the wait after attempt *n* from zero to `multiplier * 2 ** (n - 1)`, capped at `max_delay`.
+
+A policy given to `send_request` or `stream` replaces the session's for that call (for a stream, its opening):
+
+```python title="retry_policy.py"
+from aiollm import RateLimitError, RetryPolicy, RetryState
+
+
+def not_rate_limited(state: RetryState) -> bool:
+    return not isinstance(state.error, RateLimitError)   # a 429 goes to the caller
+
+
+patient = RetryPolicy(max_attempts=6, deadline=None, retry_if=not_rate_limited)
+
+
+async def complete_patiently(prompt: str) -> Completion:
+    return await session.send_request(
+        CreateCompletion(
+            model="example-1",
+            messages=[Message(role="user", content=prompt)],
+        ),
+        retry_policy=patient,   # this call only; the session keeps its own
+    )
+```
+
+A policy applies only to methods with `__retryable__ = True` and to errors whose `transient` flag is true, and `retry_if` can refuse such an error but cannot make any other one retried. If `retry_if` or `backoff` raises, or `backoff` returns something other than a finite, non-negative number, that error is raised with the request's error as its `__cause__`. The settings are checked when the policy is created: a wrong type raises `TypeError`, a value out of range `ValueError`.
 
 ## Error resolvers
 
@@ -106,7 +144,7 @@ A failure the API reports after a successful status (a stream's error event, a r
 Subclass the resolver to handle a provider's specifics: set `provider` and `error_statuses`, and override `get_error_code` or `classify_status`, which picks the class and transience of a status (the in-band rule stays the base class's):
 
 ```python title="resolver.py"
-from ai_api import APIStatusError, Provider, QuotaExceededError
+from aiollm import APIStatusError, Provider, QuotaExceededError
 
 
 class ExampleErrorResolver(BaseErrorResolver):

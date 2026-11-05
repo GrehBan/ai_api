@@ -10,33 +10,37 @@ import types
 import warnings
 from types import TracebackType
 from typing import Any
+from unittest import mock
 
 import pytest
 
-from ai_api import SessionMismatchWarning
-from ai_api.adapters.base import BaseAdapter, BaseCompositeAdapter
-from ai_api.client.base import BaseClient, BaseProviderClient
-from ai_api.client.validators import (
+from aiollm import SessionMismatchWarning
+from aiollm.adapters.base import BaseAdapter, BaseCompositeAdapter
+from aiollm.client.base import BaseClient, BaseProviderClient
+from aiollm.client.binding import ResourceBinding, bind_resource
+from aiollm.client.validators import (
     check_same_provider,
     provider_of,
-    providers_of,
 )
-from ai_api.enums import Provider
-from ai_api.http.auth import APIKeyAuth, BearerAuth
-from ai_api.http.exceptions.resolver import BaseErrorResolver
-from ai_api.http.headers import AUTHORIZATION
-from ai_api.methods.base import BaseAPIMethod, BaseStreamMethod
-from ai_api.providers.anthropic.adapters import AnthropicGenerationAdapter
-from ai_api.providers.anthropic.resolver import AnthropicErrorResolver
-from ai_api.providers.openai.adapters import OpenAIGenerationAdapter
-from ai_api.providers.openai.api import OPENAI_API
-from ai_api.providers.openai.client import OpenAIClient
-from ai_api.providers.openai.resolver import OpenAIErrorResolver
-from ai_api.response.buffered import BufferedResponse
-from ai_api.session.aiohttp import AiohttpSession
-from ai_api.session.factory import SessionFactory
-from ai_api.types.requests import GenerationRequest
-from ai_api.types.responses import GenerationResponse
+from aiollm.enums import Provider
+from aiollm.http.auth import APIKeyAuth, BearerAuth
+from aiollm.http.exceptions.resolver import BaseErrorResolver
+from aiollm.http.exceptions.status import ServiceUnavailableError
+from aiollm.http.headers import AUTHORIZATION
+from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
+from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.resolver import AnthropicErrorResolver
+from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.api import OPENAI_API
+from aiollm.providers.openai.client import OpenAIClient
+from aiollm.providers.openai.resolver import OpenAIErrorResolver
+from aiollm.resources.generation import GenerationResource
+from aiollm.response.buffered import BufferedResponse
+from aiollm.session.aiohttp import AiohttpSession
+from aiollm.session.factory import SessionFactory
+from aiollm.session.retry import RetryPolicy
+from aiollm.types.requests import GenerationRequest
+from aiollm.types.responses import GenerationResponse
 from tests.conftest import (
     TEST_TOKEN,
     FakeStreamResponse,
@@ -85,6 +89,24 @@ class AnthropicModelsAdapter(ModelsAdapter):
     provider = Provider.ANTHROPIC
 
 
+class ModelsResource:
+    """A second shared resource, as a ``models`` resource would be."""
+
+    def __init__(self, session: Any, adapter: ModelsAdapter) -> None:
+        self.session = session
+        self.adapter = adapter
+
+
+def bind_models(adapter_type: type[ModelsAdapter] = ModelsAdapter) -> Any:
+    """Bind ``ModelsResource`` to an adapter class."""
+    return bind_resource(ModelsResource, adapter_type)
+
+
+def bind_generation(adapter_type: Any = OpenAIGenerationAdapter) -> Any:
+    """Bind the generation resource to an adapter class."""
+    return bind_resource(GenerationResource, adapter_type)
+
+
 def declare(**parts: Any) -> type[BaseProviderClient]:
     """Declare a provider client with the given parts; ``None`` drops one."""
     namespace: dict[str, Any] = {
@@ -92,7 +114,8 @@ def declare(**parts: Any) -> type[BaseProviderClient]:
         "session_factory": OPENAI_FACTORY,
         "api_key_env": "EXAMPLE_API_KEY",
         "auth_headers": frozenset({AUTHORIZATION}),
-        "adapter_types": (OpenAIGenerationAdapter, ModelsAdapter),
+        "generation": bind_generation(),
+        "models": bind_models(),
     }
     namespace.update(parts)
     namespace = {k: v for k, v in namespace.items() if v is not None}
@@ -104,10 +127,15 @@ def declare(**parts: Any) -> type[BaseProviderClient]:
 
 
 def test_parts_of_one_provider_are_accepted() -> None:
-    client = declare()(TEST_TOKEN)
+    client: Any = declare()(TEST_TOKEN)
 
     assert client.provider is Provider.OPENAI
     assert isinstance(client.session, AiohttpSession)
+    assert isinstance(client.generation, GenerationResource)
+    assert client.generation.session is client.session
+    assert isinstance(client.models, ModelsResource)
+    assert client.models.session is client.session
+    assert type(client.models.adapter) is ModelsAdapter
 
 
 @pytest.mark.parametrize(
@@ -116,31 +144,26 @@ def test_parts_of_one_provider_are_accepted() -> None:
         (
             {"provider": Provider.ANTHROPIC},
             "client=anthropic, error_resolver=openai, "
-            "adapter OpenAIGenerationAdapter=openai, "
-            "adapter ModelsAdapter=openai",
+            "generation adapter OpenAIGenerationAdapter=openai, "
+            "models adapter ModelsAdapter=openai",
         ),
         (
             {"session_factory": factory(AnthropicErrorResolver())},
             "client=openai, error_resolver=anthropic, "
-            "adapter OpenAIGenerationAdapter=openai, "
-            "adapter ModelsAdapter=openai",
+            "generation adapter OpenAIGenerationAdapter=openai, "
+            "models adapter ModelsAdapter=openai",
         ),
         (
-            {"adapter_types": (AnthropicGenerationAdapter, ModelsAdapter)},
+            {"generation": bind_generation(AnthropicGenerationAdapter)},
             "client=openai, error_resolver=openai, "
-            "adapter AnthropicGenerationAdapter=anthropic, "
-            "adapter ModelsAdapter=openai",
+            "generation adapter AnthropicGenerationAdapter=anthropic, "
+            "models adapter ModelsAdapter=openai",
         ),
         (
-            {
-                "adapter_types": (
-                    OpenAIGenerationAdapter,
-                    AnthropicModelsAdapter,
-                )
-            },
+            {"models": bind_models(AnthropicModelsAdapter)},
             "client=openai, error_resolver=openai, "
-            "adapter OpenAIGenerationAdapter=openai, "
-            "adapter AnthropicModelsAdapter=anthropic",
+            "generation adapter OpenAIGenerationAdapter=openai, "
+            "models adapter AnthropicModelsAdapter=anthropic",
         ),
     ],
     ids=["client", "resolver", "first-adapter", "second-adapter"],
@@ -162,7 +185,6 @@ def test_a_part_of_another_provider_fails_at_definition(
         "session_factory",
         "api_key_env",
         "auth_headers",
-        "adapter_types",
     ],
 )
 def test_a_missing_part_fails_at_definition(missing: str) -> None:
@@ -170,19 +192,31 @@ def test_a_missing_part_fails_at_definition(missing: str) -> None:
         declare(**{missing: None})
 
 
-def test_a_client_without_shared_resources_declares_no_adapter() -> None:
-    client = declare(adapter_types=())(TEST_TOKEN)
+def test_a_client_without_shared_resources_builds_none() -> None:
+    client = declare(generation=None, models=None)(TEST_TOKEN)
 
-    with pytest.raises(TypeError, match="not in its adapter_types"):
-        client.adapter(OpenAIGenerationAdapter)
+    assert not hasattr(client, "generation")
+    assert not hasattr(client, "models")
 
 
-def test_adapter_classes_with_one_name_fail_at_definition() -> None:
-    twin = types.new_class("ModelsAdapter", (ModelsAdapter,))
+def test_adapters_of_one_class_on_two_resources_are_both_checked() -> None:
+    # Keyed by attribute name, neither drops out of the check.
+    with pytest.raises(
+        TypeError,
+        match="models adapter ModelsAdapter=openai, "
+        "spare adapter AnthropicModelsAdapter=anthropic",
+    ):
+        declare(spare=bind_models(AnthropicModelsAdapter))
 
-    # Keyed by name, one of the two would drop out of the check.
-    with pytest.raises(TypeError, match="Two adapter classes are named"):
-        declare(adapter_types=(ModelsAdapter, twin))
+
+def test_an_adapter_without_provider_fails_at_definition() -> None:
+    class Bare:
+        """An adapter that names no provider."""
+
+    bare: Any = Bare
+
+    with pytest.raises(TypeError, match="The models adapter .* no provider"):
+        declare(models=bind_resource(ModelsResource, bare))
 
 
 def test_a_resolver_without_provider_fails_at_definition() -> None:
@@ -196,32 +230,101 @@ def test_a_resolver_without_provider_fails_at_definition() -> None:
         declare(session_factory=session_factory)
 
 
-def test_adapter_builds_a_declared_adapter_with_its_arguments() -> None:
-    client = declare()(TEST_TOKEN)
+def test_an_adapter_factory_builds_the_adapter_from_the_client() -> None:
+    def adapter(client: Any) -> ModelsAdapter:
+        return ModelsAdapter(page_size=client.page_size)
 
-    adapter = client.adapter(ModelsAdapter, page_size=5)
+    def init(self: Any, token: str) -> None:
+        self.page_size = 5
+        BaseProviderClient.__init__(self, token)
 
-    assert type(adapter) is ModelsAdapter
-    assert adapter.page_size == 5
+    models = bind_resource(
+        ModelsResource, ModelsAdapter, adapter_factory=adapter
+    )
+    client: Any = declare(models=models, __init__=init)(TEST_TOKEN)
+
+    assert client.models.adapter.page_size == 5
 
 
-def test_adapter_refuses_a_class_the_client_does_not_declare() -> None:
-    # Only declared classes had their provider checked.
-    client = declare()(TEST_TOKEN)
+def test_adapters_are_built_before_the_session() -> None:
+    # A bad adapter option fails before a session and its pool exist.
+    def adapter(client: Any) -> ModelsAdapter:
+        raise ValueError("bad option")
 
-    with pytest.raises(
-        TypeError,
-        match="ExampleClient builds AnthropicModelsAdapter, which is not",
+    models = bind_resource(
+        ModelsResource, ModelsAdapter, adapter_factory=adapter
+    )
+    client_type = declare(models=models)
+
+    with (
+        mock.patch.object(client_type, "session_factory") as session_factory,
+        pytest.raises(ValueError, match="bad option"),
     ):
-        client.adapter(AnthropicModelsAdapter)
+        client_type(TEST_TOKEN)
+
+    session_factory.assert_not_called()
 
 
-def test_a_subclass_of_a_declared_adapter_is_not_declared() -> None:
-    # It may name another provider, so it must be listed itself.
-    client = declare(adapter_types=(ModelsAdapter,))(TEST_TOKEN)
+@pytest.mark.parametrize(
+    "built",
+    [OpenAIGenerationAdapter, AnthropicModelsAdapter],
+    ids=["another-class", "subclass-of-another-provider"],
+)
+def test_a_factory_of_another_adapter_is_refused(built: type[Any]) -> None:
+    # Only the declared class had its provider checked; a subclass of it
+    # may name another provider.
+    models = bind_resource(
+        ModelsResource,
+        ModelsAdapter,
+        adapter_factory=lambda client: built(),
+    )
+    client_type = declare(models=models)
 
-    with pytest.raises(TypeError, match="not in its adapter_types"):
-        client.adapter(AnthropicModelsAdapter)
+    with (
+        mock.patch.object(client_type, "session_factory") as session_factory,
+        pytest.raises(
+            TypeError,
+            match=f"factory returned {built.__name__}, not ModelsAdapter "
+            "of its provider",
+        ),
+    ):
+        client_type(TEST_TOKEN)
+
+    session_factory.assert_not_called()
+
+
+def test_a_subclass_replaces_or_drops_an_inherited_resource() -> None:
+    base: Any = declare()
+    replaced_models = bind_resource(
+        ModelsResource,
+        ModelsAdapter,
+        adapter_factory=lambda client: ModelsAdapter(page_size=1),
+    )
+    replaced_type = types.new_class(
+        "Replaced",
+        (base,),
+        exec_body=lambda body: body.update(models=replaced_models),
+    )
+    dropped_type = types.new_class(
+        "Dropped",
+        (base,),
+        exec_body=lambda body: body.update(models=None),
+    )
+
+    replaced = replaced_type(TEST_TOKEN)
+    dropped = dropped_type(TEST_TOKEN)
+
+    assert replaced.models.adapter.page_size == 1
+    assert isinstance(replaced.generation, GenerationResource)
+    assert dropped.models is None
+    assert isinstance(dropped.generation, GenerationResource)
+
+
+def test_on_the_class_a_resource_is_its_binding() -> None:
+    binding = vars(declare())["models"]
+
+    assert isinstance(binding, ResourceBinding)
+    assert repr(binding) == "ResourceBinding(ModelsAdapter)"
 
 
 def test_check_same_provider_accepts_one_provider() -> None:
@@ -233,15 +336,6 @@ def test_provider_of_names_the_source() -> None:
 
     with pytest.raises(TypeError, match="The adapter 1 declares no provider"):
         provider_of(1, "adapter")
-
-
-def test_providers_of_keys_each_class_by_kind_and_name() -> None:
-    assert providers_of(
-        (ModelsAdapter, AnthropicModelsAdapter), "adapter"
-    ) == {
-        "adapter ModelsAdapter": Provider.OPENAI,
-        "adapter AnthropicModelsAdapter": Provider.ANTHROPIC,
-    }
 
 
 def test_the_environment_variable_of_the_client_is_read(
@@ -380,6 +474,28 @@ async def test_client_forwards_call_options() -> None:
         pass
 
     assert transport.call_options == [({"X-A": "1"}, 3), ({"X-B": "2"}, 4)]
+
+
+async def test_client_forwards_the_retry_policy() -> None:
+    once = RetryPolicy(max_attempts=1)
+    transport = FakeTransport(
+        [BufferedResponse(503, {}, b""), BufferedResponse(200, {}, b"ok")],
+        [FakeStreamResponse([], status=503), FakeStreamResponse([b"a"])],
+    )
+    client = BaseClient(transport)
+    retryable = make_method(BaseAPIMethod[bytes], __retryable__=True)
+    retryable_stream = make_method(
+        BaseStreamMethod[bytes], http_method="GET", __retryable__=True
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        await client.send_request(retryable(), retry_policy=once)
+
+    with pytest.raises(ServiceUnavailableError):
+        async with client.stream(retryable_stream(), retry_policy=once):
+            pass
+
+    assert transport.attempts == 2
 
 
 async def test_client_context_closes_its_session() -> None:
