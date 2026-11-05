@@ -171,6 +171,7 @@ class StreamState:
     delta: MessageDelta = field(default_factory=MessageDelta)
     _message: Message | None = field(default=None, init=False, repr=False)
     _texts: list[str] = field(default_factory=list, init=False, repr=False)
+    _thinking: list[str] = field(default_factory=list, init=False, repr=False)
 
     def start(self, event: MessageStartEvent) -> None:
         """Take the message and the counts of ``message_start``.
@@ -187,6 +188,22 @@ class StreamState:
             text: The new text of a ``text_delta``.
         """
         self._texts.append(text)
+
+    def add_thinking(self, thinking: str) -> None:
+        """Keep a thinking delta for the whole reasoning.
+
+        Args:
+            thinking: The new text of a ``thinking_delta``.
+        """
+        self._thinking.append(thinking)
+
+    def thinking(self) -> str | None:
+        """Join the thinking deltas.
+
+        Returns:
+            The thinking received, or ``None`` if there was none.
+        """
+        return "".join(self._thinking) or None
 
     def update(self, event: MessageDeltaEvent) -> None:
         """Take the stop reason and counts of a ``message_delta``.

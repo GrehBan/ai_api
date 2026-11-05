@@ -12,6 +12,7 @@ from aiollm.types.responses.events import (
     GenerationEvent,
     OtherEvent,
     RawResponseEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import (
@@ -28,6 +29,7 @@ __all__ = [
     "GenerationResponse",
     "OtherEvent",
     "RawResponseEvent",
+    "ReasoningDeltaEvent",
     "TextDeltaEvent",
     "TokenUsage",
 ]

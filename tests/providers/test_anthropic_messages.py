@@ -30,6 +30,7 @@ from aiollm.providers.anthropic.types import (
     PingEvent,
     TextBlock,
     TextDelta,
+    ThinkingBlock,
     UnknownBlock,
     UnknownDelta,
     UnknownEvent,
@@ -180,17 +181,13 @@ def test_message_reads_the_reference_example() -> None:
 
 
 def test_message_keeps_unknown_blocks_whole() -> None:
-    thinking = {
-        "type": "thinking",
-        "thinking": "Let me think",
-        "signature": "Eq...",
-    }
+    redacted = {"type": "redacted_thinking", "data": "EmwK..."}
     message = Message.model_validate(
         MESSAGE
         | {
             "content": [
                 {"type": "text", "text": "Hel"},
-                thinking,
+                redacted,
                 {"type": "text", "text": "lo"},
             ]
         }
@@ -198,8 +195,29 @@ def test_message_keeps_unknown_blocks_whole() -> None:
 
     block = message.content[1]
     assert isinstance(block, UnknownBlock)
-    assert block.model_dump() == thinking
+    assert block.model_dump() == redacted
     assert message.text == "Hello"
+    assert message.thinking is None
+
+
+def test_thinking_blocks_are_joined_and_empty_ones_dropped() -> None:
+    # On the 5.x models a thinking block whose display is omitted comes
+    # with empty thinking: it is no summary.
+    message = Message.model_validate(
+        MESSAGE
+        | {
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "a"},
+                {"type": "thinking", "thinking": "Let me", "signature": "b"},
+                {"type": "thinking", "thinking": " think", "signature": "c"},
+                {"type": "text", "text": "Hi"},
+            ]
+        }
+    )
+
+    assert isinstance(message.content[1], ThinkingBlock)
+    assert message.thinking == "Let me think"
+    assert message.text == "Hi"
 
 
 def test_message_without_text_has_no_text() -> None:

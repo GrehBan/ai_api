@@ -12,9 +12,9 @@ from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
     check_last_turn,
     checked_options,
+    merge_options,
     request_errors,
 )
-from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
@@ -33,6 +33,7 @@ from aiollm.providers.anthropic.types.events import (
     MessageStopEvent,
     MessageStreamEvent,
     TextDelta,
+    ThinkingDelta,
 )
 from aiollm.providers.anthropic.types.messages import Message
 from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
@@ -41,6 +42,7 @@ from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
@@ -54,16 +56,19 @@ if TYPE_CHECKING:
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
-DEFAULT_MAX_TOKENS: Final = 1024
-"""``max_tokens`` sent when the request has no ``max_output_tokens``."""
+DEFAULT_MAX_TOKENS: Final = 16000
+"""``max_tokens`` sent when the request has no ``max_output_tokens``.
 
-METADATA_KEYS: Final = frozenset({"user_id"})
-"""The only metadata keys Anthropic accepts."""
+Thinking is always on for the Claude 5.x models and counts toward
+``max_tokens``, so the default leaves room for it; 16000 is the value
+Anthropic's own examples send.
+"""
 
 SHARED_FIELDS: Final[Mapping[str, str]] = {
     "messages": "input",
     "max_tokens": "max_output_tokens",
     "system": "instructions",
+    "metadata": "end_user_id",
 }
 """Shared request field of each method field with another name."""
 
@@ -84,9 +89,8 @@ class AnthropicGenerationAdapter(
     prompt. Anthropic requires ``max_tokens``, so a request without
     ``max_output_tokens`` gets ``default_max_tokens``. A request that
     Anthropic would reject raises ``RequestValidationError`` before
-    anything is sent: Anthropic takes only ``user_id`` as metadata, so
-    any other key raises instead of being dropped, and a conversation
-    must end with a ``user`` turn.
+    anything is sent, such as a conversation that does not end with a
+    ``user`` turn. ``end_user_id`` becomes ``metadata.user_id``.
 
     The conversions of the input, the token counts and the stop are
     keyword arguments, so any of them can be swapped without a subclass;
@@ -209,6 +213,7 @@ class AnthropicGenerationAdapter(
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
+            reasoning=raw.thinking,
             raw=raw,
         )
 
@@ -235,7 +240,8 @@ class AnthropicGenerationAdapter(
     ) -> AsyncGenerator[GenerationEvent[MessageStreamEvent]]:
         """Convert the events of a message stream.
 
-        Text deltas become ``TextDeltaEvent``; ``message_stop`` becomes
+        Text deltas become ``TextDeltaEvent`` and non-empty thinking
+        deltas ``ReasoningDeltaEvent``; ``message_stop`` becomes
         ``CompletedEvent`` with the counts and stop reason collected from
         ``message_start`` and ``message_delta``; every other event is an
         ``OtherEvent``.
@@ -261,6 +267,14 @@ class AnthropicGenerationAdapter(
                         text=delta.text, raw=item
                     )
                     continue
+                case ContentBlockDeltaEvent(
+                    delta=ThinkingDelta(thinking=str(thinking))
+                ) if thinking:
+                    state.add_thinking(thinking)
+                    yield ReasoningDeltaEvent[MessageStreamEvent](
+                        text=thinking, raw=item
+                    )
+                    continue
                 case MessageStartEvent():
                     state.start(item)
                 case MessageDeltaEvent():
@@ -277,6 +291,7 @@ class AnthropicGenerationAdapter(
                         incomplete_reason=stop.incomplete_reason,
                         raw_incomplete_reason=stop.raw_incomplete_reason,
                         refusal=stop.refusal,
+                        reasoning=state.thinking(),
                         raw=item,
                     )
                     continue
@@ -296,24 +311,10 @@ class AnthropicGenerationAdapter(
 
         Raises:
             RequestValidationError: The conversation does not end with a
-                ``user`` turn, or the metadata has keys other than
-                ``user_id``.
+                ``user`` turn.
         """
         check_last_turn(request, self.provider)
-        # Only a dict has keys to check; anything else that slipped past
-        # the request's validation (None through model_copy, say) is left
-        # to the method's, which raises RequestValidationError for it.
-        if isinstance(request.metadata, Mapping) and (
-            unknown := sorted(set(request.metadata) - METADATA_KEYS)
-        ):
-            message = (
-                "Anthropic accepts only 'user_id' as metadata; "
-                f"unsupported keys: {', '.join(unknown)}"
-            )
-            raise RequestValidationError(
-                message, provider=self.provider, field="metadata"
-            )
-        return {
+        fields = {
             "model": request.model,
             "messages": self.input_conversion(request.input),
             "max_tokens": (
@@ -322,6 +323,34 @@ class AnthropicGenerationAdapter(
                 else request.max_output_tokens
             ),
             "system": request.instructions,
-            "metadata": request.metadata,
-            **self.provider_options,
+            "metadata": (
+                MISSING
+                if request.end_user_id is MISSING
+                else {"user_id": request.end_user_id}
+            ),
+            "output_config": _output_config(request),
         }
+        return merge_options(fields, self.provider_options, self.provider)
+
+
+def _output_config(request: GenerationRequest) -> dict[str, Any] | MISSING:
+    """Build ``output_config`` from the shared effort and output schema.
+
+    Args:
+        request: The shared request.
+
+    Returns:
+        The fields of ``output_config`` the request gives, or ``MISSING``
+        when it gives neither, so nothing is sent.
+    """
+    config: dict[str, Any] = {}
+
+    if request.effort is not MISSING:
+        config["effort"] = request.effort.value
+    if request.output_schema is not MISSING:
+        config["format"] = {
+            "type": "json_schema",
+            "schema": request.output_schema,
+        }
+
+    return config or MISSING

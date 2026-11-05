@@ -22,10 +22,11 @@ from aiollm.types.responses.events import BaseResponseEvent, GenerationEvent
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
+    from aiollm.enums import Effort
     from aiollm.http.protocols import HeadersType
     from aiollm.resources.stream import GenerationStream
     from aiollm.session.retry.policy import RetryPolicy
-    from aiollm.types.requests.generation import Turn
+    from aiollm.types.requests.generation import JSONSchema, Turn
 
 
 class ISessionAccess(Protocol):
@@ -165,7 +166,9 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         input: str | list[Turn],
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
-        metadata: dict[str, str] | MISSING = MISSING,
+        end_user_id: str | MISSING = MISSING,
+        effort: Effort | MISSING = MISSING,
+        output_schema: JSONSchema | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
@@ -213,7 +216,9 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         input: str | list[Turn],
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
-        metadata: dict[str, str] | MISSING = MISSING,
+        end_user_id: str | MISSING = MISSING,
+        effort: Effort | MISSING = MISSING,
+        output_schema: JSONSchema | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 

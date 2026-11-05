@@ -6,7 +6,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from pydantic import ValidationError
+from pydantic import MISSING, ValidationError
 from typing_extensions import is_typeddict
 
 from aiollm.enums import Role
@@ -73,6 +73,53 @@ def checked_options(
         )
 
     return dict(options)
+
+
+def merge_options(
+    fields: Mapping[str, Any],
+    options: Mapping[str, Any],
+    provider: Provider,
+) -> dict[str, Any]:
+    """Merge a call's provider options into the fields of a method.
+
+    A shared field may fill part of an object, such as OpenAI's
+    ``reasoning.effort``, while the options fill the rest of it
+    (``reasoning.summary``): such objects are merged one level deep.
+    A key both sides set is refused, so the two never disagree.
+
+    Args:
+        fields: The method fields the shared request gives; ``MISSING``
+            for a field it leaves out.
+        options: The checked provider options.
+        provider: The provider, for the error.
+
+    Returns:
+        The merged fields.
+
+    Raises:
+        RequestValidationError: The options set a key of an object that
+            a shared field sets too; ``field`` is its dotted path.
+    """
+    merged = dict(fields)
+
+    for key, value in options.items():
+        given = merged.get(key, MISSING)
+
+        if isinstance(given, Mapping) and isinstance(value, Mapping):
+            if clash := sorted(set(given) & set(value)):
+                path = f"{key}.{clash[0]}"
+                message = (
+                    f"{path} is set by a shared field of the request; "
+                    "set it there, not in the provider options"
+                )
+                raise RequestValidationError(
+                    message, provider=provider, field=path
+                )
+            merged[key] = {**given, **value}
+        else:
+            merged[key] = value
+
+    return merged
 
 
 @contextmanager

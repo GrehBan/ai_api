@@ -183,10 +183,32 @@ class RefusalDoneEvent(BaseContentEvent):
     refusal: str
 
 
+class ReasoningSummaryTextDeltaEvent(BaseResponseStreamEvent):
+    """A piece of a reasoning summary.
+
+    Attributes:
+        type: Always ``"response.reasoning_summary_text.delta"``.
+        item_id: The reasoning item the summary belongs to.
+        output_index: Position of that item in ``output``.
+        summary_index: Position of the summary in the item.
+        delta: The new text of the summary.
+    """
+
+    __upstream_schema__ = "ResponseReasoningSummaryTextDeltaEvent"
+
+    type: Literal["response.reasoning_summary_text.delta"] = (
+        "response.reasoning_summary_text.delta"
+    )
+    item_id: str
+    output_index: int
+    summary_index: int
+    delta: str
+
+
 class UnknownEvent(BaseUnknown):
     """An event the library does not model yet, kept whole.
 
-    Tool calls, reasoning summaries, annotations and every event OpenAI
+    Tool calls, other reasoning events, annotations and every event OpenAI
     adds later arrive as this, with all their fields as extra fields.
 
     Attributes:
@@ -211,6 +233,7 @@ _EVENT_TAGS: Final[Mapping[str, str]] = {
     "response.output_text.done": "text_done",
     "response.refusal.delta": "refusal_delta",
     "response.refusal.done": "refusal_done",
+    "response.reasoning_summary_text.delta": "reasoning_delta",
 }
 """Tag of each modeled event type; the rest become ``UnknownEvent``."""
 
@@ -223,6 +246,7 @@ type ResponseStreamEvent = Annotated[
     | Annotated[OutputTextDoneEvent, Tag("text_done")]
     | Annotated[RefusalDeltaEvent, Tag("refusal_delta")]
     | Annotated[RefusalDoneEvent, Tag("refusal_done")]
+    | Annotated[ReasoningSummaryTextDeltaEvent, Tag("reasoning_delta")]
     | Annotated[UnknownEvent, Tag(UNKNOWN)],
     Discriminator(by_type(_EVENT_TAGS)),
 ]

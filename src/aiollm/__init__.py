@@ -23,6 +23,7 @@ from aiollm.client.binding import (
 )
 from aiollm.enums import (
     BodyFormat,
+    Effort,
     GenerationEventType,
     IncompleteReason,
     Provider,
@@ -132,6 +133,7 @@ from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import (
@@ -177,6 +179,7 @@ __all__ = [
     "CompletedEvent",
     "ConflictError",
     "ContentTooLargeError",
+    "Effort",
     "FullJitterBackoff",
     "GatewayTimeoutError",
     "GenerationEvent",
@@ -201,6 +204,7 @@ __all__ = [
     "Provider",
     "QuotaExceededError",
     "RateLimitError",
+    "ReasoningDeltaEvent",
     "RequestTimeoutError",
     "RequestValidationError",
     "ResponseFormat",

@@ -7,7 +7,7 @@ from typing import Annotated, Self
 from pydantic import MISSING, ConfigDict, Field
 from typing_extensions import TypedDict
 
-from aiollm.enums import Role
+from aiollm.enums import Effort, Role
 from aiollm.types.base import BaseAPIType
 from aiollm.types.requests.base import BaseRequest
 
@@ -57,6 +57,15 @@ class Turn(BaseAPIType):
         return cls(role=Role.ASSISTANT, content=content)
 
 
+type JSONValue = (
+    str | int | float | bool | None | list[JSONValue] | dict[str, JSONValue]
+)
+"""A JSON value, as ``json.loads`` gives it."""
+
+type JSONSchema = dict[str, JSONValue]
+"""A JSON Schema, as a JSON object."""
+
+
 class NoProviderOptions(TypedDict, total=False, closed=True):
     """Provider options of a generation resource that takes none.
 
@@ -82,7 +91,15 @@ class GenerationRequest(BaseRequest):
         instructions: Instructions for the model given apart from the
             input, such as a system prompt.
         max_output_tokens: Upper bound on generated tokens; positive.
-        metadata: Free-form key-value pairs stored with the request.
+        end_user_id: An opaque id of the end user the request is made
+            for, such as a hash, never personal data; providers use it
+            to detect abuse. Each provider limits its length.
+        effort: How much work the model puts into the response; the
+            model's own default when left out.
+        output_schema: A JSON Schema the response text must follow; the
+            text is then JSON. Each provider takes its own subset of
+            JSON Schema and answers 400 to the rest; the schema is sent
+            as it is, never rewritten.
 
     An optional field is left out until it is given; ``None`` is not
     taken (it would mean ``null``, which not every provider accepts),
@@ -103,4 +120,6 @@ class GenerationRequest(BaseRequest):
     )
     instructions: str | MISSING = MISSING
     max_output_tokens: int | MISSING = Field(default=MISSING, gt=0)
-    metadata: dict[str, str] | MISSING = MISSING
+    end_user_id: str | MISSING = Field(default=MISSING, min_length=1)
+    effort: Effort | MISSING = MISSING
+    output_schema: JSONSchema | MISSING = MISSING

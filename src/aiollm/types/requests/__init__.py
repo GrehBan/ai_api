@@ -7,6 +7,8 @@ from aiollm.types.requests.base import (
 )
 from aiollm.types.requests.generation import (
     GenerationRequest,
+    JSONSchema,
+    JSONValue,
     NoProviderOptions,
     Turn,
 )
@@ -14,6 +16,8 @@ from aiollm.types.requests.generation import (
 __all__ = [
     "BaseRequest",
     "GenerationRequest",
+    "JSONSchema",
+    "JSONValue",
     "NoProviderOptions",
     "Turn",
 ]

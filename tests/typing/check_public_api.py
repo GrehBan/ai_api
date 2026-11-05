@@ -22,6 +22,7 @@ from aiollm import (
     BaseClient,
     BaseStreamMethod,
     CompletedEvent,
+    Effort,
     GenerationStream,
     Headers,
     IGenerationClient,
@@ -657,6 +658,17 @@ async def provider_options_are_typed(request: GenerationRequest) -> None:
     )
     await anthropic.create(request, provider_options={"store": False})  # type: ignore[call-overload]
     await neutral_resource_has_no_options(generation, request)
+
+
+async def effort_is_typed(client: IGenerationClient) -> None:
+    await client.generation.create(model="m", input="x", effort=Effort.HIGH)
+    await client.generation.create(model="m", input="x", effort="high")  # type: ignore[call-overload]
+    GenerationRequest(model="m", input="x", effort=Effort.MAX)
+    await client.generation.create(
+        model="m", input="x", output_schema={"type": "object", "n": [1, None]}
+    )
+    bad = {1: "x"}
+    await client.generation.create(model="m", input="x", output_schema=bad)  # type: ignore[arg-type]
 
 
 async def neutral_resource_has_no_options(

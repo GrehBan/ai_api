@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from aiollm.providers.openai.methods.base import (
     Metadata,
+    Reasoning,
     ResponseParams,
+    TextConfig,
+    TextFormatJSONObject,
+    TextFormatJSONSchema,
+    TextFormatText,
 )
 from aiollm.providers.openai.methods.responses import (
     CreateResponse,
@@ -14,6 +19,11 @@ from aiollm.providers.openai.methods.responses import (
 __all__ = [
     "CreateResponse",
     "Metadata",
+    "Reasoning",
     "ResponseParams",
     "StreamResponse",
+    "TextConfig",
+    "TextFormatJSONObject",
+    "TextFormatJSONSchema",
+    "TextFormatText",
 ]

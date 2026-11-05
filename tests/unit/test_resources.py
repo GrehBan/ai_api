@@ -502,7 +502,14 @@ def test_request_keeps_instructions() -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ["instructions", "max_output_tokens", "metadata"]
+    "field",
+    [
+        "instructions",
+        "max_output_tokens",
+        "end_user_id",
+        "effort",
+        "output_schema",
+    ],
 )
 def test_request_takes_no_none(field: str) -> None:
     # None would mean null, which not every provider takes; an optional
@@ -516,7 +523,14 @@ def test_request_takes_no_none(field: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ["instructions", "max_output_tokens", "metadata"]
+    "field",
+    [
+        "instructions",
+        "max_output_tokens",
+        "end_user_id",
+        "effort",
+        "output_schema",
+    ],
 )
 def test_an_assignment_is_validated(field: str) -> None:
     request = GenerationRequest(model="m", input="i")

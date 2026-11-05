@@ -57,6 +57,10 @@ class GenerationResponse[RawT](BaseResponse):
             OpenAI's ``"content_filter"``, if it gave one.
         refusal: Why the model refused, if it did and the provider says
             why.
+        reasoning: A summary of the model's reasoning, when the
+            provider sent one (OpenAI's ``reasoning.summary``,
+            Anthropic's ``thinking.display`` of ``summarized``, both
+            set through ``provider_options``); ``None`` otherwise.
         raw: The provider's response.
     """
 
@@ -69,6 +73,7 @@ class GenerationResponse[RawT](BaseResponse):
     incomplete_reason: IncompleteReason | None = None
     raw_incomplete_reason: str | None = None
     refusal: str | None = None
+    reasoning: str | None = None
 
     raw: RawT
 

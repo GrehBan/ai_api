@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Final, Literal, TypedDict
+from typing import Annotated, Any, Final, Literal, NotRequired, TypedDict
 
 from pydantic import (
     MISSING,
@@ -58,6 +58,96 @@ class Metadata(TypedDict, total=False):
     user_id: Annotated[str, StringConstraints(max_length=512)] | None
 
 
+@with_config(ConfigDict(extra="forbid"))
+class ThinkingAdaptive(TypedDict):
+    """Thinking the model sizes itself; the default on current models.
+
+    Attributes:
+        type: Always ``adaptive``.
+        display: ``summarized`` to receive a summary of the thinking,
+            ``omitted`` (the default on the 5.x models) for none.
+    """
+
+    type: Literal["adaptive"]
+    display: NotRequired[Literal["summarized", "omitted"] | None]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class ThinkingEnabled(TypedDict):
+    """Thinking with a token budget, on the models that take one.
+
+    Attributes:
+        type: Always ``enabled``.
+        budget_tokens: Tokens the thinking may take, within
+            ``max_tokens``.
+        display: ``summarized`` or ``omitted``, as for adaptive.
+    """
+
+    type: Literal["enabled"]
+    budget_tokens: int
+    display: NotRequired[Literal["summarized", "omitted"] | None]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class ThinkingDisabled(TypedDict):
+    """No thinking, on the models that can turn it off.
+
+    Attributes:
+        type: Always ``disabled``.
+    """
+
+    type: Literal["disabled"]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class ThinkingBetweenTools(TypedDict):
+    """Thinking only between tool calls.
+
+    Attributes:
+        type: Always ``between_tools``.
+    """
+
+    type: Literal["between_tools"]
+
+
+type ThinkingConfig = (
+    ThinkingAdaptive
+    | ThinkingEnabled
+    | ThinkingDisabled
+    | ThinkingBetweenTools
+)
+"""How the model thinks; which ``type`` a model takes depends on it."""
+
+
+@with_config(ConfigDict(extra="forbid"))
+class JSONOutputFormat(TypedDict):
+    """Output that follows a JSON Schema.
+
+    Attributes:
+        type: Always ``json_schema``.
+        schema: The JSON Schema.
+    """
+
+    type: Literal["json_schema"]
+    schema: dict[str, Any]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class OutputConfig(TypedDict, total=False):
+    """Configuration of the output.
+
+    Any other key is rejected before the request is sent.
+
+    Attributes:
+        effort: How much work the model puts into the response; thinking
+            and the reply both count.
+        format: A JSON Schema the response must follow.
+    """
+
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None
+    format: JSONOutputFormat | None
+
+
 class MessageParams(BaseModel):
     """Request fields of creating a message, buffered or streamed.
 
@@ -76,6 +166,9 @@ class MessageParams(BaseModel):
             0 (0 only fills the prompt cache).
         system: System prompt: text, or a list of text blocks.
         metadata: Metadata of the request.
+        output_config: Configuration of the output, such as its effort.
+        thinking: How the model thinks, and whether a summary of its
+            thinking comes back.
         stop_sequences: Texts that stop generation.
     """
 
@@ -84,4 +177,6 @@ class MessageParams(BaseModel):
     max_tokens: int = Field(ge=0)
     system: str | list[dict[str, Any]] | MISSING = MISSING
     metadata: Metadata | MISSING = MISSING
+    output_config: OutputConfig | MISSING = MISSING
+    thinking: ThinkingConfig | MISSING = MISSING
     stop_sequences: list[str] | MISSING = MISSING

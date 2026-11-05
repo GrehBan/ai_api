@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import AsyncGenerator, AsyncIterator
-from typing import TYPE_CHECKING, Any, Self
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, Self
+
+from pydantic import MISSING
 
 from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
     check_last_turn,
     checked_options,
+    merge_options,
     request_errors,
 )
 from aiollm.providers.openai.adapters.conversions import (
@@ -25,6 +28,7 @@ from aiollm.providers.openai.methods.responses import (
 )
 from aiollm.providers.openai.types.events import (
     OutputTextDeltaEvent,
+    ReasoningSummaryTextDeltaEvent,
     ResponseStateEvent,
     ResponseStreamEvent,
 )
@@ -35,6 +39,7 @@ from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
@@ -45,6 +50,15 @@ if TYPE_CHECKING:
     from aiollm.providers.openai.types.responses import ResponseUsage
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
+
+
+SHARED_FIELDS: Final[Mapping[str, str]] = {
+    "safety_identifier": "end_user_id",
+}
+"""Shared request field of each method field with another name."""
+
+DEFAULT_SCHEMA_NAME: Final = "output"
+"""``name`` of a JSON Schema format when the adapter is given none."""
 
 
 class OpenAIGenerationAdapter(
@@ -94,18 +108,22 @@ class OpenAIGenerationAdapter(
             ResponseUsage, TokenUsage
         ] = USAGE_CONVERSION,
         stop_conversion: IConversion[Response, Stop] = STOP_CONVERSION,
+        schema_name: str = DEFAULT_SCHEMA_NAME,
     ) -> None:
-        """Store the conversions.
+        """Store the conversions and the name of an output schema.
 
         Args:
             input_conversion: Turns the shared ``input`` into OpenAI's.
             usage_conversion: Turns OpenAI's ``ResponseUsage`` into
                 shared counts.
             stop_conversion: Tells how a finished response stopped.
+            schema_name: The ``name`` OpenAI requires with a JSON Schema
+                format; the shared ``output_schema`` has none.
         """
         self.input_conversion = input_conversion
         self.usage_conversion = usage_conversion
         self.stop_conversion = stop_conversion
+        self.schema_name = schema_name
         self.provider_options: dict[str, Any] = {}
 
     def with_options(self, options: OpenAIGenerationOptions, /) -> Self:
@@ -140,7 +158,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: OpenAI cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(self.provider):
+        with request_errors(self.provider, SHARED_FIELDS):
             return CreateResponse(**fields)
 
     def to_response(
@@ -174,6 +192,7 @@ class OpenAIGenerationAdapter(
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
+            reasoning=raw.reasoning_summary,
             raw=raw,
         )
 
@@ -190,7 +209,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: OpenAI cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(self.provider):
+        with request_errors(self.provider, SHARED_FIELDS):
             return StreamResponse(**fields)
 
     async def to_events(
@@ -221,14 +240,19 @@ class OpenAIGenerationAdapter(
             event: The event OpenAI sent.
 
         Returns:
-            A text delta, the completion (also of an incomplete
-            response), or ``OtherEvent`` for every other event.
+            A text or reasoning summary delta, the completion (also of
+            an incomplete response), or ``OtherEvent`` for every other
+            event.
             ``response.failed`` never gets here: ``StreamResponse``
             raises it as an ``APIStatusError``.
         """
         match event:
             case OutputTextDeltaEvent():
                 return TextDeltaEvent[ResponseStreamEvent](
+                    text=event.delta, raw=event
+                )
+            case ReasoningSummaryTextDeltaEvent():
+                return ReasoningDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
                 )
             case ResponseStateEvent(
@@ -245,6 +269,7 @@ class OpenAIGenerationAdapter(
                     incomplete_reason=stop.incomplete_reason,
                     raw_incomplete_reason=stop.raw_incomplete_reason,
                     refusal=stop.refusal,
+                    reasoning=response.reasoning_summary,
                     raw=event,
                 )
             case _:
@@ -276,11 +301,28 @@ class OpenAIGenerationAdapter(
                 ``user`` turn.
         """
         check_last_turn(request, self.provider)
-        return {
+        fields = {
             "model": request.model,
             "input": self.input_conversion(request.input),
             "instructions": request.instructions,
             "max_output_tokens": request.max_output_tokens,
-            "metadata": request.metadata,
-            **self.provider_options,
+            "safety_identifier": request.end_user_id,
+            "reasoning": (
+                MISSING
+                if request.effort is MISSING
+                else {"effort": request.effort.value}
+            ),
+            "text": (
+                MISSING
+                if request.output_schema is MISSING
+                else {
+                    "format": {
+                        "type": "json_schema",
+                        "name": self.schema_name,
+                        "schema": request.output_schema,
+                        "strict": True,
+                    }
+                }
+            ),
         }
+        return merge_options(fields, self.provider_options, self.provider)

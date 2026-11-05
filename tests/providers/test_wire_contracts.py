@@ -96,6 +96,23 @@ OPENAI = Case(
         "instructions": "Be brief",
         "max_output_tokens": 64,
         "metadata": {"user": "u-1"},
+        "safety_identifier": "u-1",
+        "reasoning": {
+            "effort": "high",
+            "summary": "auto",
+            "context": "auto",
+            "mode": "standard",
+        },
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer",
+                "schema": {"type": "object"},
+                "description": "The answer",
+                "strict": True,
+            },
+            "verbosity": "low",
+        },
         "previous_response_id": "resp_1",
         "store": False,
         "temperature": 0.5,
@@ -126,6 +143,11 @@ ANTHROPIC = Case(
         "max_tokens": 64,
         "system": [{"type": "text", "text": "Be brief"}],
         "metadata": {"user_id": "u-1"},
+        "output_config": {
+            "effort": "high",
+            "format": {"type": "json_schema", "schema": {"type": "object"}},
+        },
+        "thinking": {"type": "adaptive", "display": "summarized"},
         "stop_sequences": ["END"],
     },
     response=Message,
@@ -294,7 +316,7 @@ CONVERSATION = GenerationRequest(
     ],
     instructions="Be brief",
     max_output_tokens=64,
-    metadata={"user_id": "u-1"},
+    end_user_id="u-1",
 )
 """A shared request with every field set and several turns."""
 

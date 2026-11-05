@@ -30,6 +30,7 @@ from aiollm.types.requests import GenerationRequest, Turn
 from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
     TokenUsage,
 )
@@ -48,7 +49,7 @@ REQUEST = GenerationRequest(
     input="Hello, world",
     instructions="Be brief",
     max_output_tokens=256,
-    metadata={"user_id": "u-1"},
+    end_user_id="u-1",
 )
 
 adapter = AnthropicGenerationAdapter()
@@ -96,12 +97,15 @@ def test_methods_take_the_request_fields() -> None:
 
 
 def test_max_tokens_falls_back_to_the_default() -> None:
+    # Thinking is always on for the 5.x models and counts toward
+    # max_tokens, so the default leaves room for it: Anthropic's own
+    # examples send 16000, and 1024 could end a reply in thinking.
     request = GenerationRequest(model=MODEL, input="Hi")
 
     assert adapter.to_method(request).get_body_map() == {
         "model": MODEL,
         "messages": [{"role": "user", "content": "Hi"}],
-        "max_tokens": 1024,
+        "max_tokens": 16000,
     }
     custom = AnthropicGenerationAdapter(default_max_tokens=8)
     assert custom.to_stream_method(request).max_tokens == 8
@@ -113,26 +117,7 @@ def test_default_max_tokens_must_be_positive(value: int) -> None:
         AnthropicGenerationAdapter(default_max_tokens=value)
 
 
-def test_unsupported_metadata_keys_raise() -> None:
-    request = REQUEST.model_copy(
-        update={"metadata": {"user_id": "u", "team": "t", "app": "a"}}
-    )
-
-    with pytest.raises(
-        RequestValidationError, match="unsupported keys: app, team"
-    ) as caught:
-        adapter.to_method(request)
-    with pytest.raises(RequestValidationError, match="only 'user_id'"):
-        adapter.to_stream_method(request)
-
-    assert caught.value.provider is Provider.ANTHROPIC
-    assert caught.value.field == "metadata"
-    assert caught.value.__cause__ is None
-
-
-@pytest.mark.parametrize(
-    "field", ["instructions", "max_output_tokens", "metadata"]
-)
+@pytest.mark.parametrize("field", ["instructions", "max_output_tokens"])
 def test_none_past_the_request_is_a_validation_error(field: str) -> None:
     # model_copy validates nothing, so None can reach the adapter; it is
     # refused like any value Anthropic cannot take, never a bare
@@ -146,15 +131,15 @@ def test_none_past_the_request_is_a_validation_error(field: str) -> None:
 
 
 def test_too_long_user_id_is_rejected() -> None:
-    request = REQUEST.model_copy(update={"metadata": {"user_id": "u" * 513}})
+    request = REQUEST.model_copy(update={"end_user_id": "u" * 513})
 
     with pytest.raises(RequestValidationError) as caught:
         adapter.to_method(request)
 
-    assert caught.value.field == "metadata"
+    assert caught.value.field == "end_user_id"
     assert isinstance(caught.value, ValueError)
     assert isinstance(caught.value.__cause__, ValidationError)
-    assert "metadata.user_id: String should have at most 512" in str(
+    assert "end_user_id.user_id: String should have at most 512" in str(
         caught.value
     )
 
@@ -359,6 +344,47 @@ async def test_stream_events_are_converted() -> None:
     assert completed.id == STREAM[0]["message"]["id"]
     assert completed.model == MODEL
     assert completed.text == "Hello!"
+
+
+def test_thinking_becomes_the_reasoning() -> None:
+    thinking = {"type": "thinking", "thinking": "Weighing.", "signature": "s"}
+    converted = adapter.to_response(
+        message(content=[thinking, *MESSAGE["content"]]), REQUEST
+    )
+
+    assert converted.reasoning == "Weighing."
+    assert adapter.to_response(message(), REQUEST).reasoning is None
+
+
+async def test_thinking_deltas_become_reasoning_deltas() -> None:
+    # An empty thinking delta (display omitted) is no summary.
+    def thinking(text: str) -> dict[str, Any]:
+        return {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": text},
+        }
+
+    payloads = [STREAM[0], thinking("Weigh"), thinking(""), thinking("ing.")]
+    converted = await convert([*payloads, *STREAM[1:]])
+
+    reasoning = [e for e in converted if isinstance(e, ReasoningDeltaEvent)]
+    assert [event.text for event in reasoning] == ["Weigh", "ing."]
+    completed = converted[-1]
+    assert isinstance(completed, CompletedEvent)
+    assert completed.reasoning == "Weighing."
+    assert completed.text == "Hello!"
+
+
+def test_thinking_options_reach_the_method() -> None:
+    tuned = adapter.with_options(
+        {"thinking": {"type": "adaptive", "display": "summarized"}}
+    )
+
+    assert tuned.to_method(REQUEST).thinking == {
+        "type": "adaptive",
+        "display": "summarized",
+    }
 
 
 async def test_usage_takes_the_last_cumulative_counts() -> None:

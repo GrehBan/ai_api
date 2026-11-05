@@ -1,0 +1,1 @@
+`client.generation` of `AnthropicClient` sends `max_tokens` 16000, not 1024, when a request has no `max_output_tokens`: thinking is always on for the Claude 5.x models and counts toward `max_tokens`, so 1024 could end a reply in its thinking, with little or no text. Pass `default_max_tokens=` to the client to keep another value.
