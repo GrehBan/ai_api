@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, Protocol, Unpack, overload
+from typing import TYPE_CHECKING, Any, Protocol, Self, Unpack, overload
 
 from pydantic import MISSING
 
+from aiollm.adapters.protocols import ICompositeAdapter
 from aiollm.client.protocols import IClient
 from aiollm.response.stream import Stream
 from aiollm.session.protocols import CallOptions, ISession, Timeout
 from aiollm.types.requests.base import BaseRequest
-from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.requests.generation import (
+    GenerationRequest,
+    NoProviderOptions,
+)
 from aiollm.types.responses.base import BaseResponse
-from aiollm.types.responses.events import BaseResponseEvent
+from aiollm.types.responses.events import BaseResponseEvent, GenerationEvent
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
@@ -91,6 +96,46 @@ class ICompositeUseCase[
     EventT: BaseResponseEvent,
 ](IUseCase[ReqT, RespT], IStreamUseCase[ReqT, EventT], Protocol):
     """A use case that can both respond at once and stream."""
+
+
+class IGenerationAdapter[
+    RawT,
+    RawItemT,
+    OptionsT: Mapping[str, object] = NoProviderOptions,
+](
+    ICompositeAdapter[
+        GenerationRequest,
+        RawT,
+        GenerationResponse[RawT],
+        RawItemT,
+        GenerationEvent[RawItemT],
+    ],
+    Protocol,
+):
+    """The adapter a ``GenerationResource`` runs on.
+
+    Besides converting, it takes the provider's own options of one call
+    (``provider_options``): fields that only its provider has, such as
+    OpenAI's ``store``. ``OptionsT`` is a ``TypedDict`` of them.
+    """
+
+    def with_options(self, options: OptionsT, /) -> Self:
+        """Return a copy that adds the options to every method it builds.
+
+        The adapter itself is left as it is, so concurrent calls with
+        other options do not meet.
+
+        Args:
+            options: The provider's options of one call.
+
+        Returns:
+            A copy of the adapter with the options.
+
+        Raises:
+            RequestValidationError: A key is not one of the provider's
+                options; the shared fields are set in the request.
+        """
+        ...
 
 
 class IGenerationResource[RawT, RawItemT](IResource, Protocol):

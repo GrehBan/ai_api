@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import MISSING
 
 from aiollm.adapters.base import BaseCompositeAdapter
-from aiollm.adapters.validation import check_last_turn, request_errors
+from aiollm.adapters.validation import (
+    check_last_turn,
+    checked_options,
+    request_errors,
+)
 from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION,
@@ -30,6 +35,7 @@ from aiollm.providers.anthropic.types.events import (
     TextDelta,
 )
 from aiollm.providers.anthropic.types.messages import Message
+from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
 from aiollm.types.requests.generation import GenerationRequest
 from aiollm.types.responses.events import (
     CompletedEvent,
@@ -137,6 +143,26 @@ class AnthropicGenerationAdapter(
         self.input_conversion = input_conversion
         self.usage_conversion = usage_conversion
         self.stop_conversion = stop_conversion
+        self.provider_options: dict[str, Any] = {}
+
+    def with_options(self, options: AnthropicGenerationOptions, /) -> Self:
+        """Return a copy that sends the options with every method.
+
+        Args:
+            options: Fields of ``CreateMessage`` that the shared request
+                does not hold, such as ``{"stop_sequences": ["END"]}``.
+
+        Returns:
+            A copy of the adapter; this one is left as it is.
+
+        Raises:
+            RequestValidationError: A key is not one of the options.
+        """
+        adapter = copy.copy(self)
+        adapter.provider_options = checked_options(
+            options, AnthropicGenerationOptions, self.provider
+        )
+        return adapter
 
     def to_method(self, request: GenerationRequest) -> CreateMessage:
         """Build the method that creates a message at once.
@@ -265,7 +291,8 @@ class AnthropicGenerationAdapter(
             request: The shared request.
 
         Returns:
-            The fields that both methods take.
+            The fields that both methods take, the provider options of
+            ``with_options`` included.
 
         Raises:
             RequestValidationError: The conversation does not end with a
@@ -296,4 +323,5 @@ class AnthropicGenerationAdapter(
             ),
             "system": request.instructions,
             "metadata": request.metadata,
+            **self.provider_options,
         }

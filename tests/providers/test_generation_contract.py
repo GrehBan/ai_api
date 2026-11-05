@@ -100,6 +100,8 @@ class Case:
         quota: An exhausted quota, as the stream sends it.
         bad_request: Body of a 400 response.
         raw_stream: Builds the provider's own stream method.
+        options: Valid provider options, sent as they are.
+        bad_option: A provider option with a value the method refuses.
     """
 
     provider: Provider
@@ -119,6 +121,8 @@ class Case:
     quota: dict[str, Any]
     bad_request: dict[str, Any]
     raw_stream: Callable[[], BaseStreamMethod[Any]]
+    options: dict[str, Any]
+    bad_option: dict[str, Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -189,6 +193,8 @@ OPENAI = Case(
         }
     },
     raw_stream=lambda: StreamResponse(model="model-1", input="Hi"),
+    options={"store": False, "temperature": 0.2},
+    bad_option={"temperature": 5},
 )
 
 ANTHROPIC = Case(
@@ -231,6 +237,8 @@ ANTHROPIC = Case(
         "error": {"type": "invalid_request_error", "message": "Bad"},
     },
     raw_stream=lambda: StreamMessage(**anthropic.request()),
+    options={"stop_sequences": ["END"]},
+    bad_option={"stop_sequences": "END"},
 )
 
 
@@ -330,6 +338,90 @@ async def test_refusal_is_an_answer(
 def test_generation_shares_the_client_session(client: Client) -> None:
     assert isinstance(client.generation, GenerationResource)
     assert client.generation.session is client.session
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_provider_options_reach_the_wire_of_their_call_only(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    # The options belong to the call: the next one without them sends none.
+    if mode == "create":
+        reply = Reply(json=case.response)
+    else:
+        reply = events(case.stream)
+    recorder.reply(reply)
+    recorder.reply(reply)
+
+    async with client:
+        for options in (case.options, {}):
+            if mode == "create":
+                await client.generation.create(
+                    REQUEST, provider_options=options
+                )
+            else:
+                async with client.generation.stream(
+                    REQUEST, provider_options=options
+                ) as stream:
+                    await stream.final()
+
+    with_options, without = (json.loads(r.body) for r in recorder.requests)
+    assert {key: with_options[key] for key in case.options} == case.options
+    assert set(case.options).isdisjoint(without)
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_an_unknown_provider_option_is_refused_before_sending(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    # A shared field is no option: it is set in the request.
+    shared = {"model": "m", "input": "x"}
+
+    async with client:
+        with pytest.raises(
+            RequestValidationError, match="input, model"
+        ) as caught:
+            if mode == "create":
+                await client.generation.create(
+                    REQUEST, provider_options=shared
+                )
+            else:
+                async with client.generation.stream(
+                    REQUEST, provider_options=shared
+                ):
+                    pass
+
+    assert caught.value.provider is case.provider
+    assert caught.value.field == "input"
+    assert recorder.requests == []
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_an_invalid_provider_option_is_refused_before_sending(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    async with client:
+        with pytest.raises(RequestValidationError) as caught:
+            if mode == "create":
+                await client.generation.create(
+                    REQUEST, provider_options=case.bad_option
+                )
+            else:
+                async with client.generation.stream(
+                    REQUEST, provider_options=case.bad_option
+                ):
+                    pass
+
+    assert caught.value.field == next(iter(case.bad_option))
+    assert recorder.requests == []
 
 
 @pytest.mark.parametrize("mode", ["create", "stream"])

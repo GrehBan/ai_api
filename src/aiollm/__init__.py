@@ -82,6 +82,7 @@ from aiollm.methods.base import (
     BaseStreamMethod,
 )
 from aiollm.resources.protocols import (
+    IGenerationAdapter,
     IGenerationClient,
     IGenerationResource,
 )
@@ -124,6 +125,7 @@ from aiollm.types.files import (
 )
 from aiollm.types.requests.generation import (
     GenerationRequest,
+    NoProviderOptions,
     Turn,
 )
 from aiollm.types.responses.events import (
@@ -183,6 +185,7 @@ __all__ = [
     "GenerationResponse",
     "GenerationStream",
     "Headers",
+    "IGenerationAdapter",
     "IGenerationClient",
     "IGenerationResource",
     "IOFile",
@@ -190,6 +193,7 @@ __all__ = [
     "IncompleteReason",
     "InputFile",
     "InternalServerError",
+    "NoProviderOptions",
     "NotFoundError",
     "OtherEvent",
     "PathFile",

@@ -27,8 +27,12 @@ from aiollm.providers.anthropic.types.messages import (
     UnknownBlock,
     Usage,
 )
+from aiollm.providers.anthropic.types.options import (
+    AnthropicGenerationOptions,
+)
 
 __all__ = [
+    "AnthropicGenerationOptions",
     "ContentBlock",
     "ContentBlockDeltaEvent",
     "ContentBlockStartEvent",

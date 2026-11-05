@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Unpack
+from typing import Any, Self, Unpack
 
 import pytest
 from pydantic import (
@@ -53,7 +53,11 @@ from aiollm.session.protocols import CallOptions
 from aiollm.session.retry import RetryPolicy
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import EventTypes
-from aiollm.types.requests.generation import GenerationRequest, Turn
+from aiollm.types.requests.generation import (
+    GenerationRequest,
+    NoProviderOptions,
+    Turn,
+)
 from aiollm.types.responses.events import (
     GENERATION_TERMINAL,
     CompletedEvent,
@@ -267,6 +271,9 @@ class ResponsesAdapter(
     ]
 ):
     provider = Provider.OPENAI
+
+    def with_options(self, options: NoProviderOptions, /) -> Self:
+        return self
 
     def to_method(self, request: GenerationRequest) -> Create:
         return Create(model=request.model, input=request.input)

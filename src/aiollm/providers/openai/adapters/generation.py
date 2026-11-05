@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from aiollm.adapters.base import BaseCompositeAdapter
-from aiollm.adapters.validation import check_last_turn, request_errors
+from aiollm.adapters.validation import (
+    check_last_turn,
+    checked_options,
+    request_errors,
+)
 from aiollm.providers.openai.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
@@ -23,6 +28,7 @@ from aiollm.providers.openai.types.events import (
     ResponseStateEvent,
     ResponseStreamEvent,
 )
+from aiollm.providers.openai.types.options import OpenAIGenerationOptions
 from aiollm.providers.openai.types.responses import Response
 from aiollm.types.requests.generation import GenerationRequest
 from aiollm.types.responses.events import (
@@ -100,6 +106,26 @@ class OpenAIGenerationAdapter(
         self.input_conversion = input_conversion
         self.usage_conversion = usage_conversion
         self.stop_conversion = stop_conversion
+        self.provider_options: dict[str, Any] = {}
+
+    def with_options(self, options: OpenAIGenerationOptions, /) -> Self:
+        """Return a copy that sends the options with every method.
+
+        Args:
+            options: Fields of ``CreateResponse`` that the shared request
+                does not hold, such as ``{"store": False}``.
+
+        Returns:
+            A copy of the adapter; this one is left as it is.
+
+        Raises:
+            RequestValidationError: A key is not one of the options.
+        """
+        adapter = copy.copy(self)
+        adapter.provider_options = checked_options(
+            options, OpenAIGenerationOptions, self.provider
+        )
+        return adapter
 
     def to_method(self, request: GenerationRequest) -> CreateResponse:
         """Build the method that creates a response at once.
@@ -242,7 +268,8 @@ class OpenAIGenerationAdapter(
             request: The shared request.
 
         Returns:
-            The fields that both methods take.
+            The fields that both methods take, the provider options of
+            ``with_options`` included.
 
         Raises:
             RequestValidationError: The conversation does not end with a
@@ -255,4 +282,5 @@ class OpenAIGenerationAdapter(
             "instructions": request.instructions,
             "max_output_tokens": request.max_output_tokens,
             "metadata": request.metadata,
+            **self.provider_options,
         }

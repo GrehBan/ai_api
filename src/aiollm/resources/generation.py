@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, Unpack, overload
 
 from pydantic import MISSING
 
-from aiollm.adapters.protocols import ICompositeAdapter
 from aiollm.resources.base import BaseResource
+from aiollm.resources.protocols import IGenerationAdapter
 from aiollm.resources.stream import GenerationStream
 from aiollm.resources.usecases import (
     AdapterCompositeUseCase,
     open_adapted_stream,
 )
 from aiollm.session.protocols import CallOptions, ISession, Timeout
-from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.requests.generation import (
+    GenerationRequest,
+    NoProviderOptions,
+)
 from aiollm.types.responses.events import (
     GENERATION_TERMINAL,
-    GenerationEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
 
@@ -27,16 +30,13 @@ if TYPE_CHECKING:
     from aiollm.session.retry.policy import RetryPolicy
     from aiollm.types.requests.generation import Turn
 
-type GenerationAdapter[RawT, RawItemT] = ICompositeAdapter[
-    GenerationRequest,
+
+class GenerationResource[
     RawT,
-    GenerationResponse[RawT],
     RawItemT,
-    GenerationEvent[RawItemT],
-]
-
-
-class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
+    OptionsT: Mapping[str, object] = NoProviderOptions,
+    SessionT: ISession = ISession,
+](
     BaseResource[SessionT],
 ):
     """Generates text with any provider through that provider's adapter.
@@ -44,12 +44,17 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     The class is the same for every provider: a provider's client builds
     it with its own adapter, so calling code reads the same for all of
     them and only the type of ``raw`` differs. ``RawT`` is the provider's
-    response, ``RawItemT`` one item of its stream.
+    response, ``RawItemT`` one item of its stream, ``OptionsT`` the
+    ``TypedDict`` of its own options (``NoProviderOptions`` for none).
 
     Both methods take the request's fields as keyword arguments, as the
     providers' SDKs do, or a ready ``GenerationRequest``; not both. The
     options of the call (``headers``, ``timeout``, ``retry_policy``) are
-    passed on to the session, as ``send_request`` takes them.
+    passed on to the session, as ``send_request`` takes them. The
+    provider's own fields of a call, which the shared request does not
+    hold, go in ``provider_options``, a ``TypedDict`` of the provider;
+    code that works with any provider (``IGenerationResource``) has no
+    such parameter.
 
     Example:
         >>> generation = GenerationResource(session, ResponsesAdapter())
@@ -63,7 +68,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     def __init__(
         self,
         session: SessionT,
-        adapter: GenerationAdapter[RawT, RawItemT],
+        adapter: IGenerationAdapter[RawT, RawItemT, OptionsT],
     ) -> None:
         """Keep the session and build the use case on the adapter.
 
@@ -73,6 +78,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
                 and its stream items.
         """
         super().__init__(session)
+        self._adapter = adapter
         self._generate = AdapterCompositeUseCase(
             session, adapter, terminal=GENERATION_TERMINAL
         )
@@ -87,6 +93,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
@@ -95,6 +102,8 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         self,
         request: GenerationRequest,
         /,
+        *,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
@@ -106,6 +115,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
         retry_policy: RetryPolicy | None = None,
+        provider_options: OptionsT | MISSING = MISSING,
         **fields: Any,
     ) -> GenerationResponse[RawT]:
         """Generate the whole response at once.
@@ -117,6 +127,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
                 limit; ``None`` to keep it.
             retry_policy: Retry policy of this request; ``None`` for the
                 session's.
+            provider_options: The provider's own fields of this request,
+                such as ``{"store": False}`` for OpenAI; a key left out
+                is not sent.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -126,8 +139,18 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         Raises:
             TypeError: Both a request and fields are given.
             ValidationError: The fields do not make a valid request.
+            RequestValidationError: A key of ``provider_options`` is not
+                one of the provider's options, or a value is invalid;
+                raised before anything is sent.
         """
-        return await self._generate(
+        generate = self._generate
+        if provider_options is not MISSING:
+            generate = AdapterCompositeUseCase(
+                self.session,
+                self._adapter.with_options(provider_options),
+                terminal=GENERATION_TERMINAL,
+            )
+        return await generate(
             _request(request, fields),
             headers=headers,
             timeout=timeout,
@@ -144,6 +167,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
@@ -152,6 +176,8 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         self,
         request: GenerationRequest,
         /,
+        *,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
@@ -163,6 +189,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
         retry_policy: RetryPolicy | None = None,
+        provider_options: OptionsT | MISSING = MISSING,
         **fields: Any,
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]:
         """Open a stream of generation events; use with ``async with``.
@@ -174,6 +201,9 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
                 limit; ``None`` to keep it.
             retry_policy: Retry policy of this request; ``None`` for the
                 session's.
+            provider_options: The provider's own fields of this request,
+                such as ``{"store": False}`` for OpenAI; a key left out
+                is not sent.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -188,12 +218,18 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
         Raises:
             TypeError: Both a request and fields are given.
             ValidationError: The fields do not make a valid request.
+            RequestValidationError: A key of ``provider_options`` is not
+                one of the provider's options, or a value is invalid;
+                raised before anything is sent.
         """
+        adapter = self._adapter
+        if provider_options is not MISSING:
+            adapter = adapter.with_options(provider_options)
         # The use case's own stream would be a Stream that a
         # GenerationStream wraps once more; this builds it directly.
         return open_adapted_stream(
             self.session,
-            self._generate.adapter,
+            adapter,
             _request(request, fields),
             self._generate.terminal,
             GenerationStream,

@@ -22,6 +22,9 @@ from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.client import session_factory
 from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
 from aiollm.providers.anthropic.types import Message, MessageStreamEvent
+from aiollm.providers.anthropic.types.options import (
+    AnthropicGenerationOptions,
+)
 from aiollm.resources.generation import GenerationResource
 from aiollm.types.requests import GenerationRequest, Turn
 from aiollm.types.responses import (
@@ -466,7 +469,9 @@ class LongAnthropicClient(AnthropicClient):
         return AnthropicGenerationAdapter(default_max_tokens=4096)
 
     generation = bind_resource(
-        GenerationResource[Message, MessageStreamEvent],
+        GenerationResource[
+            Message, MessageStreamEvent, AnthropicGenerationOptions
+        ],
         AnthropicGenerationAdapter,
         adapter_factory=_long_adapter,
     )

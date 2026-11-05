@@ -7,11 +7,13 @@ from aiollm.types.requests.base import (
 )
 from aiollm.types.requests.generation import (
     GenerationRequest,
+    NoProviderOptions,
     Turn,
 )
 
 __all__ = [
     "BaseRequest",
     "GenerationRequest",
+    "NoProviderOptions",
     "Turn",
 ]

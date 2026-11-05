@@ -106,6 +106,7 @@ CLIENT: Final = "client.py"
 OPENAI_RESPONSES: Final = "openai_responses.py"
 ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
 SHARED_GENERATION: Final = "shared_generation.py"
+PROVIDER_OPTIONS: Final = "provider_options.py"
 RESOURCES: Final = "resources.py"
 
 TESTED: Final = (
@@ -129,6 +130,7 @@ TESTED: Final = (
     OPENAI_RESPONSES,
     ANTHROPIC_MESSAGES,
     SHARED_GENERATION,
+    PROVIDER_OPTIONS,
     RESOURCES,
 )
 """The title of every example a test below runs."""
@@ -892,6 +894,38 @@ async def test_shared_generation_works_with_anthropic(
         "messages": [{"role": "user", "content": "Hi"}],
         "max_tokens": 64,
         "system": "Be brief",
+    }
+
+
+async def test_provider_options(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, PROVIDER_OPTIONS)
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(
+        Reply(
+            json={
+                "id": "resp_1",
+                "created_at": 1741476777,
+                "status": "completed",
+                "model": "gpt-6-astra",
+                "output": [],
+            }
+        )
+    )
+
+    async with examples.OpenAIClient("sk-...") as client:
+        response = await examples.generate_unstored(client)
+
+    assert response.id == "resp_1"
+    assert json.loads(recorder.last.body) == {
+        "model": "gpt-6-astra",
+        "input": "Hi",
+        "store": False,
+        "temperature": 0.2,
     }
 
 

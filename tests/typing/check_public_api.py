@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Annotated, Literal, Unpack, assert_type
+from typing import Annotated, Literal, Self, Unpack, assert_type
 
 from pydantic import Field
 
@@ -53,11 +53,15 @@ from aiollm.providers.anthropic.methods import (
 )
 from aiollm.providers.anthropic.types import Message, MessageStreamEvent
 from aiollm.providers.anthropic.types.messages import Usage
+from aiollm.providers.anthropic.types.options import (
+    AnthropicGenerationOptions,
+)
 from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
 from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.providers.openai.types.options import OpenAIGenerationOptions
 from aiollm.providers.openai.types.responses import ResponseUsage
 from aiollm.resources import (
     AdapterStreamUseCase,
@@ -73,7 +77,7 @@ from aiollm.resources import (
 from aiollm.response import map_stream
 from aiollm.session import CallOptions, ISession, ISessionFactory
 from aiollm.session.aiohttp import AiohttpSession
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import GenerationRequest, NoProviderOptions, Turn
 from aiollm.types.responses import (
     GenerationEvent,
     GenerationResponse,
@@ -407,6 +411,9 @@ class TextGeneration(
 
     provider = Provider.GENERIC
 
+    def with_options(self, options: NoProviderOptions, /) -> Self:
+        return self
+
     def to_method(self, request: GenerationRequest) -> GetText:
         return GetText()
 
@@ -590,22 +597,69 @@ def openai_adapter(client: object) -> OpenAIGenerationAdapter:
 def clients_bind_their_resources() -> None:
     assert_type(
         OpenAIClient("sk").generation,
-        GenerationResource[Response, ResponseStreamEvent],
+        GenerationResource[
+            Response, ResponseStreamEvent, OpenAIGenerationOptions
+        ],
     )
     assert_type(
         AnthropicClient("sk").generation,
-        GenerationResource[Message, MessageStreamEvent],
+        GenerationResource[
+            Message, MessageStreamEvent, AnthropicGenerationOptions
+        ],
     )
     resource = bind_resource(
-        GenerationResource[Response, ResponseStreamEvent],
+        GenerationResource[
+            Response, ResponseStreamEvent, OpenAIGenerationOptions
+        ],
         OpenAIGenerationAdapter,
         adapter_factory=openai_adapter,
     )
-    assert_type(resource, GenerationResource[Response, ResponseStreamEvent])
+    assert_type(
+        resource,
+        GenerationResource[
+            Response, ResponseStreamEvent, OpenAIGenerationOptions
+        ],
+    )
+    # An adapter of options the resource does not take.
+    no_options = GenerationResource[Response, ResponseStreamEvent]
+    bind_resource(no_options, OpenAIGenerationAdapter)  # type: ignore[arg-type]
     bind_resource(
-        GenerationResource[Response, ResponseStreamEvent],
+        GenerationResource[
+            Response, ResponseStreamEvent, OpenAIGenerationOptions
+        ],
         OpenAIGenerationAdapter,
         adapter_factory=lambda client: 1,  # type: ignore[arg-type, return-value]
     )
     bind_resource(GenerationResource[Response, ResponseStreamEvent])  # type: ignore[call-arg]
     assert_type(OpenAIClient.provider, Provider)
+
+
+async def provider_options_are_typed(request: GenerationRequest) -> None:
+    generation = OpenAIClient("sk").generation
+    response = await generation.create(
+        request, provider_options={"store": False, "temperature": 0.2}
+    )
+    assert_type(response, GenerationResponse[Response])
+    await generation.create(
+        model="m", input="x", provider_options={"store": None}, timeout=5
+    )
+    async with generation.stream(
+        request, provider_options={"top_p": 0.5}
+    ) as events:
+        assert_type(events, GenerationStream[ResponseStreamEvent])
+    await generation.create(request, provider_options={"stor": False})  # type: ignore[call-overload]
+    await generation.create(request, provider_options={"temperature": "hot"})  # type: ignore[call-overload]
+    anthropic = AnthropicClient("sk").generation
+    await anthropic.create(
+        request, provider_options={"stop_sequences": ["END"]}
+    )
+    await anthropic.create(request, provider_options={"store": False})  # type: ignore[call-overload]
+    await neutral_resource_has_no_options(generation, request)
+
+
+async def neutral_resource_has_no_options(
+    generation: IGenerationResource[Response, ResponseStreamEvent],
+    request: GenerationRequest,
+) -> None:
+    await generation.create(request, provider_options={})  # type: ignore[call-overload]
+    await generation.create(request, extra=1)  # type: ignore[call-overload]
