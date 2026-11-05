@@ -126,6 +126,8 @@ class ResponseParams(BaseModel):
             effort.
         text: Configuration of the text output, such as a JSON Schema.
         previous_response_id: Response to continue from.
+        safety_identifier: Opaque id of the end user, such as a hash; up
+            to 128 characters.
         store: Whether OpenAI stores the response; ``True`` by default.
         temperature: Sampling temperature, 0 to 2.
         top_p: Nucleus sampling mass, 0 to 1.
@@ -139,6 +141,9 @@ class ResponseParams(BaseModel):
     reasoning: Reasoning | None | MISSING = MISSING
     text: TextConfig | MISSING = MISSING
     previous_response_id: str | None | MISSING = MISSING
+    safety_identifier: (
+        Annotated[str, StringConstraints(max_length=128)] | None | MISSING
+    ) = MISSING
     store: bool | None | MISSING = MISSING
     temperature: float | None | MISSING = Field(default=MISSING, ge=0, le=2)
     top_p: float | None | MISSING = Field(default=MISSING, ge=0, le=1)

@@ -106,7 +106,7 @@ TAKEN_AS_IS = {
     "GenerationRequest.model",
     "GenerationRequest.instructions",
     "GenerationRequest.max_output_tokens",
-    "GenerationRequest.metadata",
+    "GenerationRequest.end_user_id",
     "GenerationRequest.effort",
     "GenerationRequest.output_schema",
     "GenerationResponse.id",
@@ -216,15 +216,9 @@ SYNC_CASES: dict[str, Callable[[], object]] = {
     "openai-last-assistant-turn": openai_method(input=TURNS),
     "anthropic-last-assistant-turn": anthropic_method(input=TURNS),
     "openai-max-output-tokens-below-16": openai_method(max_output_tokens=15),
-    "openai-too-many-metadata-pairs": openai_method(
-        metadata={f"k{index}": "v" for index in range(17)}
-    ),
-    "openai-too-long-metadata-key": openai_method(metadata={"k" * 65: "v"}),
-    "anthropic-metadata-key-other-than-user-id": anthropic_method(
-        metadata={"team": "t"}
-    ),
-    "anthropic-too-long-user-id": anthropic_method(
-        metadata={"user_id": "u" * 513}
+    "openai-too-long-end-user-id": openai_method(end_user_id="u" * 129),
+    "anthropic-too-long-end-user-id": anthropic_method(
+        end_user_id="u" * 513
     ),
     "openai-unfinished-response": lambda: (
         OpenAIGenerationAdapter().to_response(

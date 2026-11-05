@@ -20,7 +20,7 @@ Two rules decide what is shared:
 | `GenerationRequest.input` | `input`: a text as is; a list of turns as `EasyInputMessage` items (`role`, `content`) | `messages`: a text as one `user` turn; a list of turns as they are | A list must not be empty and must end with a `user` turn: Anthropic rejects an assistant prefill on current models, and OpenAI gives a last assistant turn another meaning. Images, files, tool calls and results are not shared. |
 | `GenerationRequest.instructions` | `instructions` | `system` | System and developer turns are not shared: instructions go here. Not sent when not given. |
 | `GenerationRequest.max_output_tokens` | `max_output_tokens`, at least 16, reasoning included; without it, the model's limit | `max_tokens`, thinking included; required, so without it the adapter's `default_max_tokens` (16000, room for thinking) | Must be positive. Below 16 raises for OpenAI. Not sent to OpenAI when not given. |
-| `GenerationRequest.metadata` | `metadata`: up to 16 pairs, keys up to 64 and values up to 512 characters | `metadata.user_id` only, up to 512 characters | A key other than `user_id` raises for Anthropic instead of being dropped; OpenAI's limits raise too. Not sent when not given. |
+| `GenerationRequest.end_user_id` | `safety_identifier`, up to 128 characters | `metadata.user_id`, up to 512 characters | An opaque id (a hash), never personal data; both providers use it to detect abuse. A longer value raises before sending. Not sent when not given. OpenAI's `metadata`, which has no Anthropic counterpart, is a provider option. |
 | `GenerationRequest.effort` | `reasoning.effort`: how deeply a reasoning model reasons | `output_config.effort`: all output tokens, thinking and reply | An `Effort`: `low`, `medium`, `high`, `xhigh` or `max`, the levels both have. OpenAI's `none` and `minimal` have no Anthropic counterpart and are not shared (`CreateResponse` takes them). A model that does not take a level answers 400, an `APIStatusError`. Not sent when not given, so the model's own default applies. |
 | `GenerationRequest.output_schema` | `text.format`: `json_schema` with the adapter's `schema_name` (`"output"` unless set) and `strict: true` | `output_config.format`: `json_schema`, next to `effort` in the same object | The schema is sent as it is: each provider takes its own subset of JSON Schema and answers 400 to the rest, an `APIStatusError`. The JSON comes back in `text`; a reply cut by the token limit is invalid JSON, with `incomplete_reason` `MAX_TOKENS`. Not sent when not given. |
 
@@ -92,10 +92,8 @@ Every case below is raised before the request is sent (requests) or before the s
 | `openai-last-assistant-turn` | OpenAI | `input` | `RequestValidationError` |
 | `anthropic-last-assistant-turn` | Anthropic | `input` | `RequestValidationError` |
 | `openai-max-output-tokens-below-16` | OpenAI | `max_output_tokens` | `RequestValidationError` |
-| `openai-too-many-metadata-pairs` | OpenAI | `metadata` | `RequestValidationError` |
-| `openai-too-long-metadata-key` | OpenAI | `metadata` | `RequestValidationError` |
-| `anthropic-metadata-key-other-than-user-id` | Anthropic | `metadata` | `RequestValidationError` |
-| `anthropic-too-long-user-id` | Anthropic | `metadata` | `RequestValidationError` |
+| `openai-too-long-end-user-id` | OpenAI | `end_user_id` | `RequestValidationError` |
+| `anthropic-too-long-end-user-id` | Anthropic | `end_user_id` | `RequestValidationError` |
 | `openai-failed-response` | OpenAI | — | `APIStatusError` |
 | `openai-unfinished-response` | OpenAI | — | `APIResponseError` |
 | `anthropic-message-without-stop-reason` | Anthropic | — | `APIResponseError` |
@@ -108,7 +106,7 @@ Not shared, but reachable through `client.generation`: `create(..., provider_opt
 
 | Provider | Options type | Keys |
 |---|---|---|
-| OpenAI | `OpenAIGenerationOptions` | `store`, `previous_response_id`, `temperature`, `top_p` |
+| OpenAI | `OpenAIGenerationOptions` | `metadata`, `store`, `previous_response_id`, `temperature`, `top_p` |
 | Anthropic | `AnthropicGenerationOptions` | `stop_sequences` |
 
 ## Not unified

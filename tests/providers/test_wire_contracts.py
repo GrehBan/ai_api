@@ -96,6 +96,7 @@ OPENAI = Case(
         "instructions": "Be brief",
         "max_output_tokens": 64,
         "metadata": {"user": "u-1"},
+        "safety_identifier": "u-1",
         "reasoning": {
             "effort": "high",
             "summary": "auto",
@@ -314,7 +315,7 @@ CONVERSATION = GenerationRequest(
     ],
     instructions="Be brief",
     max_output_tokens=64,
-    metadata={"user_id": "u-1"},
+    end_user_id="u-1",
 )
 """A shared request with every field set and several turns."""
 

@@ -47,7 +47,7 @@ REQUEST = GenerationRequest(
     input="Hi",
     instructions="Be brief",
     max_output_tokens=16,
-    metadata={"user": "u-1"},
+    end_user_id="u-1",
 )
 
 TEXT = MESSAGE["content"][0]["text"]
@@ -79,7 +79,7 @@ def test_methods_take_the_request_fields() -> None:
         "input": "Hi",
         "instructions": "Be brief",
         "max_output_tokens": 16,
-        "metadata": {"user": "u-1"},
+        "safety_identifier": "u-1",
     }
 
     created = adapter.to_method(REQUEST)
@@ -125,8 +125,7 @@ def test_the_schema_name_comes_from_the_adapter() -> None:
     ("changes", "field"),
     [
         ({"max_output_tokens": 15}, "max_output_tokens"),
-        ({"metadata": {f"k{index}": "v" for index in range(17)}}, "metadata"),
-        ({"metadata": {"k" * 65: "v"}}, "metadata"),
+        ({"end_user_id": "u" * 129}, "end_user_id"),
     ],
 )
 def test_limits_of_openai_are_checked_before_sending(

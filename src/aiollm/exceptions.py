@@ -80,7 +80,8 @@ class RequestValidationError(AIAPIError, ValueError):
 
     Raised by an adapter before anything is sent, when a field of a
     shared request breaks a rule of the provider, such as OpenAI's
-    minimum ``max_output_tokens`` or Anthropic's only metadata key. A
+    minimum ``max_output_tokens`` or a conversation that does not end
+    with a ``user`` turn. A
     ``ValueError``, like the validation error of the request itself.
 
     Attributes:

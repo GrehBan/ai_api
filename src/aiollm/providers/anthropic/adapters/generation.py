@@ -14,7 +14,6 @@ from aiollm.adapters.validation import (
     checked_options,
     request_errors,
 )
-from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
@@ -62,13 +61,11 @@ Thinking is always on for the Claude 5.x models and counts toward
 Anthropic's own examples send.
 """
 
-METADATA_KEYS: Final = frozenset({"user_id"})
-"""The only metadata keys Anthropic accepts."""
-
 SHARED_FIELDS: Final[Mapping[str, str]] = {
     "messages": "input",
     "max_tokens": "max_output_tokens",
     "system": "instructions",
+    "metadata": "end_user_id",
 }
 """Shared request field of each method field with another name."""
 
@@ -89,9 +86,8 @@ class AnthropicGenerationAdapter(
     prompt. Anthropic requires ``max_tokens``, so a request without
     ``max_output_tokens`` gets ``default_max_tokens``. A request that
     Anthropic would reject raises ``RequestValidationError`` before
-    anything is sent: Anthropic takes only ``user_id`` as metadata, so
-    any other key raises instead of being dropped, and a conversation
-    must end with a ``user`` turn.
+    anything is sent, such as a conversation that does not end with a
+    ``user`` turn. ``end_user_id`` becomes ``metadata.user_id``.
 
     The conversions of the input, the token counts and the stop are
     keyword arguments, so any of them can be swapped without a subclass;
@@ -301,23 +297,9 @@ class AnthropicGenerationAdapter(
 
         Raises:
             RequestValidationError: The conversation does not end with a
-                ``user`` turn, or the metadata has keys other than
-                ``user_id``.
+                ``user`` turn.
         """
         check_last_turn(request, self.provider)
-        # Only a dict has keys to check; anything else that slipped past
-        # the request's validation (None through model_copy, say) is left
-        # to the method's, which raises RequestValidationError for it.
-        if isinstance(request.metadata, Mapping) and (
-            unknown := sorted(set(request.metadata) - METADATA_KEYS)
-        ):
-            message = (
-                "Anthropic accepts only 'user_id' as metadata; "
-                f"unsupported keys: {', '.join(unknown)}"
-            )
-            raise RequestValidationError(
-                message, provider=self.provider, field="metadata"
-            )
         return {
             "model": request.model,
             "messages": self.input_conversion(request.input),
@@ -327,7 +309,11 @@ class AnthropicGenerationAdapter(
                 else request.max_output_tokens
             ),
             "system": request.instructions,
-            "metadata": request.metadata,
+            "metadata": (
+                MISSING
+                if request.end_user_id is MISSING
+                else {"user_id": request.end_user_id}
+            ),
             "output_config": _output_config(request),
             **self.provider_options,
         }

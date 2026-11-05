@@ -48,7 +48,7 @@ REQUEST = GenerationRequest(
     input="Hello, world",
     instructions="Be brief",
     max_output_tokens=256,
-    metadata={"user_id": "u-1"},
+    end_user_id="u-1",
 )
 
 adapter = AnthropicGenerationAdapter()
@@ -116,26 +116,7 @@ def test_default_max_tokens_must_be_positive(value: int) -> None:
         AnthropicGenerationAdapter(default_max_tokens=value)
 
 
-def test_unsupported_metadata_keys_raise() -> None:
-    request = REQUEST.model_copy(
-        update={"metadata": {"user_id": "u", "team": "t", "app": "a"}}
-    )
-
-    with pytest.raises(
-        RequestValidationError, match="unsupported keys: app, team"
-    ) as caught:
-        adapter.to_method(request)
-    with pytest.raises(RequestValidationError, match="only 'user_id'"):
-        adapter.to_stream_method(request)
-
-    assert caught.value.provider is Provider.ANTHROPIC
-    assert caught.value.field == "metadata"
-    assert caught.value.__cause__ is None
-
-
-@pytest.mark.parametrize(
-    "field", ["instructions", "max_output_tokens", "metadata"]
-)
+@pytest.mark.parametrize("field", ["instructions", "max_output_tokens"])
 def test_none_past_the_request_is_a_validation_error(field: str) -> None:
     # model_copy validates nothing, so None can reach the adapter; it is
     # refused like any value Anthropic cannot take, never a bare
@@ -149,15 +130,15 @@ def test_none_past_the_request_is_a_validation_error(field: str) -> None:
 
 
 def test_too_long_user_id_is_rejected() -> None:
-    request = REQUEST.model_copy(update={"metadata": {"user_id": "u" * 513}})
+    request = REQUEST.model_copy(update={"end_user_id": "u" * 513})
 
     with pytest.raises(RequestValidationError) as caught:
         adapter.to_method(request)
 
-    assert caught.value.field == "metadata"
+    assert caught.value.field == "end_user_id"
     assert isinstance(caught.value, ValueError)
     assert isinstance(caught.value.__cause__, ValidationError)
-    assert "metadata.user_id: String should have at most 512" in str(
+    assert "end_user_id.user_id: String should have at most 512" in str(
         caught.value
     )
 

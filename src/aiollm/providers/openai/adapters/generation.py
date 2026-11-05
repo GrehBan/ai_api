@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import MISSING
@@ -48,6 +48,11 @@ if TYPE_CHECKING:
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
+
+SHARED_FIELDS: Final[Mapping[str, str]] = {
+    "safety_identifier": "end_user_id",
+}
+"""Shared request field of each method field with another name."""
 
 DEFAULT_SCHEMA_NAME: Final = "output"
 """``name`` of a JSON Schema format when the adapter is given none."""
@@ -150,7 +155,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: OpenAI cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(self.provider):
+        with request_errors(self.provider, SHARED_FIELDS):
             return CreateResponse(**fields)
 
     def to_response(
@@ -200,7 +205,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: OpenAI cannot take the request.
         """
         fields = self._fields(request)
-        with request_errors(self.provider):
+        with request_errors(self.provider, SHARED_FIELDS):
             return StreamResponse(**fields)
 
     async def to_events(
@@ -291,7 +296,7 @@ class OpenAIGenerationAdapter(
             "input": self.input_conversion(request.input),
             "instructions": request.instructions,
             "max_output_tokens": request.max_output_tokens,
-            "metadata": request.metadata,
+            "safety_identifier": request.end_user_id,
             "reasoning": (
                 MISSING
                 if request.effort is MISSING

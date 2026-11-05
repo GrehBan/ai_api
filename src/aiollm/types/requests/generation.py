@@ -91,7 +91,9 @@ class GenerationRequest(BaseRequest):
         instructions: Instructions for the model given apart from the
             input, such as a system prompt.
         max_output_tokens: Upper bound on generated tokens; positive.
-        metadata: Free-form key-value pairs stored with the request.
+        end_user_id: An opaque id of the end user the request is made
+            for, such as a hash, never personal data; providers use it
+            to detect abuse. Each provider limits its length.
         effort: How much work the model puts into the response; the
             model's own default when left out.
         output_schema: A JSON Schema the response text must follow; the
@@ -118,6 +120,6 @@ class GenerationRequest(BaseRequest):
     )
     instructions: str | MISSING = MISSING
     max_output_tokens: int | MISSING = Field(default=MISSING, gt=0)
-    metadata: dict[str, str] | MISSING = MISSING
+    end_user_id: str | MISSING = Field(default=MISSING, min_length=1)
     effort: Effort | MISSING = MISSING
     output_schema: JSONSchema | MISSING = MISSING
