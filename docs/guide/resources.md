@@ -7,10 +7,11 @@ Methods are specific to one provider. Resources and use cases are the layer abov
 - **Shared events**: `GenerationEvent[RawT]`, a discriminated union of `TextDeltaEvent`, `CompletedEvent` and `OtherEvent`. `CompletedEvent`, the stream's final event, carries `id`, `provider`, `model`, the whole `text`, `usage`, `incomplete_reason`, `raw_incomplete_reason` and `refusal` too. Their `type` is a `GenerationEventType`. A failure is an exception at every level, never an event.
 - **Adapters** (`aiollm.adapters`): convert models and nothing else. `BaseAdapter` builds the provider's method from a shared request (`to_method`) and turns its result into a shared response (`to_response`); its `provider` names the provider in the results and in the errors of the requests it refuses. `BaseStreamAdapter` does the same for streams (`to_stream_method`, `to_events`), and `BaseCompositeAdapter` does both.
 - **Use cases** (`aiollm.resources`): only orchestrate. `AdapterUseCase(session, adapter)` sends what the adapter builds and returns what it converts; `AdapterStreamUseCase` and `AdapterCompositeUseCase` do the same for streams and for both. Given `terminal=` (an event matcher, such as `GENERATION_TERMINAL` from `aiollm.types.responses`, which matches `CompletedEvent`), they check that exactly one event matches it, as the last one: a stream without it raises `APIStreamInterruptedError` (or `RuntimeError` when the provider method's `__stream_terminal__` proved the stream complete), an event after it `APIResponseError`.
-- **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(...)` and `stream(...)`, with keyword arguments or a request, typed by the adapter's raw types; `stream` yields a `GenerationStream` with `text()` and `final()`. `BaseResource` groups the use cases of any other area.
+- **Resources**: `GenerationResource(session, adapter)` is the shared resource of text generation, the same class for every provider: `create(...)` and `stream(...)`, with keyword arguments or a request, typed by the adapter's raw types; `stream` yields a `GenerationStream` with `text()` and `final()`. Its adapter is an `IGenerationAdapter`: a composite adapter with `with_options(options, /) -> Self`, which takes a call's `provider_options`, the provider's own fields as a `TypedDict` (`OptionsT`, the resource's third type parameter; `NoProviderOptions`, closed, for an adapter without any), and returns a copy that sends them. `BaseResource` groups the use cases of any other area.
 
 ```python title="resources.py"
 from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Self
 
 from aiollm import (
     BaseClient,
@@ -18,10 +19,12 @@ from aiollm import (
     GenerationEvent,
     GenerationRequest,
     GenerationResponse,
+    NoProviderOptions,
     Provider,
     TextDeltaEvent,
 )
 from aiollm.adapters import BaseCompositeAdapter
+from aiollm.adapters.validation import checked_options
 from aiollm.resources import GenerationResource
 from aiollm.session import ISession
 
@@ -36,6 +39,11 @@ class CompletionAdapter(
     ]
 ):
     provider = Provider.GENERIC           # a provider the library does not list
+
+    def with_options(self, options: NoProviderOptions, /) -> Self:
+        # No options of its own: still refuse a key instead of dropping it.
+        checked_options(options, NoProviderOptions, self.provider)
+        return self
 
     def to_method(self, request: GenerationRequest) -> CreateCompletion:
         return CreateCompletion(
