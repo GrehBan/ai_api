@@ -1,14 +1,18 @@
-"""Rebuild the wire-contract snapshots from the offline docs dump.
+"""Rebuild the wire-contract snapshots from the provider schemas.
 
-The dump is the ``docs-lite`` folder of ``GrehBan/docs-lite-mcp`` (the
-data behind the ``unified-api-docs`` MCP server). For every endpoint in
-``ENDPOINTS`` this script copies the request, response and stream-event
-schemas, and keeps the documentation examples that the upstream schema
-accepts: whole response bodies, and single stream events taken out of
-the SSE examples. An example that looks like a response or a known
-event but fails the upstream schema is not copied; it is listed under
-``rejected`` in ``manifest.json`` with the first error, so nothing is
-dropped silently.
+The documentation examples come from the ``docs-lite`` folder of
+``GrehBan/docs-lite-mcp`` (the data behind the ``unified-api-docs`` MCP
+server). The schemas come from the provider's official OpenAPI
+specification where it publishes one (OpenAI): the request, response
+and stream-event components of the endpoint, with every component they
+reference under ``$defs``. Where it does not (Anthropic), they are the
+SDK-derived schemas of the dump. For every endpoint in ``ENDPOINTS``
+this script writes the three schemas and keeps the documentation
+examples that they accept: whole response bodies, and single stream
+events taken out of the SSE examples. An example that looks like a
+response or a known event but fails the upstream schema is not copied;
+it is listed under ``rejected`` in ``manifest.json`` with the first
+error, so nothing is dropped silently.
 
 Usage::
 
@@ -16,10 +20,13 @@ Usage::
 
 Without an argument the dump is found through ``DOCS_LITE_DIR``, or
 next to ``DOCS_SUITE_MCP_DIR`` (the variable ``.mcp.json`` uses).
+OpenAI's specification (``openapi.yaml`` of ``openai/openai-openapi``)
+is read from ``OPENAI_OPENAPI``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -29,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
+import yaml
 from jsonschema import Draft202012Validator
 
 CONTRACTS: Final = Path(__file__).parent
@@ -36,6 +44,23 @@ CONTRACTS: Final = Path(__file__).parent
 
 MANIFEST: Final = CONTRACTS / "manifest.json"
 """Provenance of every snapshot file."""
+
+
+@dataclass(frozen=True)
+class OpenAPIOperation:
+    """Where an endpoint's schemas are in an official OpenAPI file.
+
+    Attributes:
+        variable: Environment variable with the file's path.
+        request: Component of the request body.
+        response: Component of the ``200`` JSON response.
+        stream: Component of the ``200`` event-stream response.
+    """
+
+    variable: str
+    request: str
+    response: str
+    stream: str
 
 
 @dataclass(frozen=True)
@@ -49,6 +74,8 @@ class Endpoint:
         stream: Stream contract id in ``_meta/stream-contracts.json``.
         kind: Field and value that mark a JSON example as a response
             body of this endpoint, such as ``("object", "response")``.
+        openapi: Where the schemas are in the provider's official
+            OpenAPI file; ``None`` to take the dump's schemas.
     """
 
     provider: str
@@ -56,6 +83,7 @@ class Endpoint:
     operation: str
     stream: str
     kind: tuple[str, str]
+    openapi: OpenAPIOperation | None = None
 
 
 REDACTED: Final = frozenset({"fallback_credit_token"})
@@ -96,6 +124,12 @@ ENDPOINTS: Final = (
         operation="openai:post:688886f44f64cc",
         stream="openai.responses",
         kind=("object", "response"),
+        openapi=OpenAPIOperation(
+            variable="OPENAI_OPENAPI",
+            request="CreateResponse",
+            response="Response",
+            stream="ResponseStreamEvent",
+        ),
     ),
     Endpoint(
         provider="anthropic",
@@ -228,6 +262,195 @@ def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
 
+COMPONENTS: Final = "#/components/schemas/"
+"""Prefix of a reference to an OpenAPI component."""
+
+NOT_SCHEMA: Final = frozenset({"example", "examples", "deprecated"})
+"""OpenAPI keys left out of a schema: documentation, not constraints."""
+
+
+def component_closure(
+    components: dict[str, Any],
+    root: str,
+) -> set[str]:
+    """Collect a component and every component it references.
+
+    Args:
+        components: The OpenAPI file's ``components.schemas``.
+        root: Name of the first component.
+
+    Returns:
+        The names of all of them.
+    """
+    found: set[str] = set()
+    pending = [root]
+
+    while pending:
+        name = pending.pop()
+        if name in found:
+            continue
+        found.add(name)
+        pending.extend(references(components[name]))
+
+    return found
+
+
+def references(node: Any) -> Iterator[str]:
+    """Name every component a schema node references.
+
+    Args:
+        node: A schema or any node of one.
+
+    Yields:
+        The component name of each ``$ref``.
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith(COMPONENTS):
+            yield ref.removeprefix(COMPONENTS)
+        for value in node.values():
+            yield from references(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from references(value)
+
+
+def json_schema(node: Any, components: dict[str, Any]) -> Any:
+    """Turn an OpenAPI schema node into plain JSON Schema.
+
+    References point into ``$defs``; documentation keys and ``x-``
+    extensions are left out; a ``oneOf`` becomes an ``anyOf``; an
+    ``allOf`` of objects becomes one object
+    with all their properties and required fields, so a schema can be
+    closed (``additionalProperties: false``) without each part refusing
+    the others' fields.
+
+    Args:
+        node: A schema node.
+        components: The OpenAPI file's ``components.schemas``.
+
+    Returns:
+        The converted node.
+    """
+    if isinstance(node, list):
+        return [json_schema(value, components) for value in node]
+    if not isinstance(node, dict):
+        return node
+
+    converted: dict[str, Any] = {}
+    for key, value in node.items():
+        if key in NOT_SCHEMA or key.startswith("x-"):
+            continue
+        if key == "$ref" and isinstance(value, str):
+            converted[key] = "#/$defs/" + value.removeprefix(COMPONENTS)
+        elif key == "oneOf":
+            # OpenAPI's oneOf names alternatives; as JSON Schema it would
+            # also refuse a value two of them accept (a message without
+            # its optional type is both an EasyInputMessage and an
+            # InputMessage), which the API takes.
+            converted["anyOf"] = json_schema(value, components)
+        else:
+            converted[key] = json_schema(value, components)
+
+    if "allOf" in converted:
+        merged = merge_objects(node["allOf"], components)
+        if merged is not None:
+            del converted["allOf"]
+            converted.setdefault("type", "object")
+            converted["properties"] = {
+                **merged["properties"],
+                **converted.get("properties", {}),
+            }
+            required = merged["required"] + converted.get("required", [])
+            if required:
+                converted["required"] = list(dict.fromkeys(required))
+
+    return converted
+
+
+def merge_objects(
+    parts: list[Any],
+    components: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Merge the object schemas of an ``allOf`` into one.
+
+    Args:
+        parts: The ``allOf`` items, as the OpenAPI file has them.
+        components: The OpenAPI file's ``components.schemas``.
+
+    Returns:
+        The converted properties and required fields of all parts, or
+        ``None`` when a part is not a plain object schema (a union, a
+        scalar), which stays an ``allOf``.
+    """
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for part in parts:
+        node = part
+        while isinstance(node, dict) and "$ref" in node:
+            node = components[str(node["$ref"]).removeprefix(COMPONENTS)]
+        if not isinstance(node, dict) or any(
+            key in node for key in ("anyOf", "oneOf", "enum", "const")
+        ):
+            return None
+        if "allOf" in node:
+            inner = merge_objects(node["allOf"], components)
+            if inner is None:
+                return None
+            properties.update(inner["properties"])
+            required.extend(inner["required"])
+        if node.get("type", "object") != "object":
+            return None
+        properties.update(json_schema(node.get("properties", {}), components))
+        required.extend(node.get("required", []))
+
+    return {"properties": properties, "required": required}
+
+
+def openapi_schema(spec: dict[str, Any], root: str) -> dict[str, Any]:
+    """Take one component of an OpenAPI file as a JSON Schema.
+
+    Args:
+        spec: The decoded OpenAPI file.
+        root: Name of the component.
+
+    Returns:
+        The component as the schema itself, titled with its name, and
+        every component it references under ``$defs``.
+    """
+    components: dict[str, Any] = spec["components"]["schemas"]
+    names = component_closure(components, root)
+    schema = json_schema(components[root], components)
+    schema["title"] = root
+    schema["$defs"] = {
+        name: json_schema(components[name], components)
+        for name in sorted(names)
+    }
+    return cast(dict[str, Any], schema)
+
+
+def read_openapi(operation: OpenAPIOperation) -> tuple[Path, dict[str, Any]]:
+    """Read the official OpenAPI file an endpoint names.
+
+    Args:
+        operation: Where the endpoint's schemas are.
+
+    Returns:
+        The file's path and its decoded content.
+
+    Raises:
+        SystemExit: The environment variable is not set.
+    """
+    if operation.variable not in os.environ:
+        message = (
+            f"set {operation.variable} to the provider's official OpenAPI file"
+        )
+        raise SystemExit(message)
+    path = Path(os.environ[operation.variable])
+    return path, yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
 def source_of(entry: dict[str, Any]) -> dict[str, Any]:
     """Describe where a schema came from.
 
@@ -316,11 +539,40 @@ def snapshot(
     ]
     request_entry = operation["requests"][0]
     response_entry = operation["responses"][0]
-    schemas = {
-        "request": read_json(docs / request_entry["file"]),
-        "response": read_json(docs / response_entry["file"]),
-        "stream": read_json(docs / stream["schema"]["file"]),
-    }
+    sources: dict[str, Any]
+    if endpoint.openapi is None:
+        schemas = {
+            "request": read_json(docs / request_entry["file"]),
+            "response": read_json(docs / response_entry["file"]),
+            "stream": read_json(docs / stream["schema"]["file"]),
+        }
+        sources = {
+            "request": source_of(request_entry),
+            "response": source_of(response_entry),
+            "stream": {
+                "file": stream["schema"]["file"],
+                "provenance": stream.get("provenance"),
+            },
+        }
+    else:
+        path, spec = read_openapi(endpoint.openapi)
+        roots = {
+            "request": endpoint.openapi.request,
+            "response": endpoint.openapi.response,
+            "stream": endpoint.openapi.stream,
+        }
+        schemas = {
+            name: openapi_schema(spec, root) for name, root in roots.items()
+        }
+        sources = {
+            "openapi": {
+                "file": path.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "openapi": spec.get("openapi"),
+                "version": spec.get("info", {}).get("version"),
+            },
+            **{name: {"component": root} for name, root in roots.items()},
+        }
     target = CONTRACTS / endpoint.provider / endpoint.name
     for name, schema in schemas.items():
         write_json(target / f"{name}.schema.json", schema)
@@ -366,12 +618,7 @@ def snapshot(
     return {
         "operation": endpoint.operation,
         "stream_contract": endpoint.stream,
-        "request": source_of(request_entry),
-        "response": source_of(response_entry),
-        "stream": {
-            "file": stream["schema"]["file"],
-            "provenance": stream.get("provenance"),
-        },
+        **sources,
         "responses": len(kept["responses"]),
         "events": len(kept["events"]),
         "rejected": rejected,
