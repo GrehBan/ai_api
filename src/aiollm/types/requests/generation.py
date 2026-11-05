@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Self
+from typing import Annotated, Self, TypedDict
 
 from pydantic import MISSING, ConfigDict, Field
 
@@ -54,6 +54,14 @@ class Turn(BaseAPIType):
             The turn.
         """
         return cls(role=Role.ASSISTANT, content=content)
+
+
+class NoProviderOptions(TypedDict, total=False):
+    """Provider options of a generation resource that takes none.
+
+    The default of ``GenerationResource``'s ``OptionsT``: only ``{}``
+    matches it, so a resource without options of its own refuses any.
+    """
 
 
 class GenerationRequest(BaseRequest):

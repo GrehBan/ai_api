@@ -100,14 +100,23 @@ Every case below is raised before the request is sent (requests) or before the s
 | `stream-without-completion` | any | — | `APIStreamInterruptedError` |
 | `turn-from-response-without-text` | any | — | `ValueError` |
 
+## Provider options
+
+Not shared, but reachable through `client.generation`: `generation.with_options({...})` sends a provider's own fields with every request of the copy it returns. Each key is a field of the provider's method with its type, and none is a field the shared request fills, which `tests/providers/test_provider_options.py` checks.
+
+| Provider | Options type | Keys |
+|---|---|---|
+| OpenAI | `OpenAIGenerationOptions` | `store`, `previous_response_id`, `temperature`, `top_p` |
+| Anthropic | `AnthropicGenerationOptions` | `stop_sequences` |
+
 ## Not unified
 
-These are reached only through the provider's own methods and types:
+These are reached only through the provider's own methods and types, or, where listed under [Provider options](#provider-options), through `with_options`:
 
-- sampling parameters (`temperature`, `top_p`, `top_k`): Anthropic API version `2026-10-21` removed them;
+- sampling parameters (`temperature`, `top_p`, `top_k`): Anthropic API version `2026-10-21` removed them; OpenAI's are provider options;
 - system or developer turns inside `input` (use `instructions`), images, audio and files;
 - tools, tool calls and tool results, server tools;
 - reasoning and thinking settings and their content;
 - structured output (JSON schemas);
-- continuing a stored response (`previous_response_id`, `store`) and stop sequences;
+- continuing a stored response (`previous_response_id`, `store`) and stop sequences, which are provider options;
 - background responses, cancellation and polling.

@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, Unpack, overload
+from typing import TYPE_CHECKING, Any, Self, Unpack, overload
 
 from pydantic import MISSING
 
-from aiollm.adapters.protocols import ICompositeAdapter
 from aiollm.resources.base import BaseResource
+from aiollm.resources.protocols import IGenerationAdapter
 from aiollm.resources.stream import GenerationStream
 from aiollm.resources.usecases import (
     AdapterCompositeUseCase,
     open_adapted_stream,
 )
 from aiollm.session.protocols import CallOptions, ISession, Timeout
-from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.requests.generation import (
+    GenerationRequest,
+    NoProviderOptions,
+)
 from aiollm.types.responses.events import (
     GENERATION_TERMINAL,
-    GenerationEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
 
@@ -27,16 +31,13 @@ if TYPE_CHECKING:
     from aiollm.session.retry.policy import RetryPolicy
     from aiollm.types.requests.generation import Turn
 
-type GenerationAdapter[RawT, RawItemT] = ICompositeAdapter[
-    GenerationRequest,
+
+class GenerationResource[
     RawT,
-    GenerationResponse[RawT],
     RawItemT,
-    GenerationEvent[RawItemT],
-]
-
-
-class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
+    OptionsT: Mapping[str, object] = NoProviderOptions,
+    SessionT: ISession = ISession,
+](
     BaseResource[SessionT],
 ):
     """Generates text with any provider through that provider's adapter.
@@ -44,12 +45,16 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     The class is the same for every provider: a provider's client builds
     it with its own adapter, so calling code reads the same for all of
     them and only the type of ``raw`` differs. ``RawT`` is the provider's
-    response, ``RawItemT`` one item of its stream.
+    response, ``RawItemT`` one item of its stream, ``OptionsT`` the
+    ``TypedDict`` of its own options (``NoProviderOptions`` for none).
 
     Both methods take the request's fields as keyword arguments, as the
     providers' SDKs do, or a ready ``GenerationRequest``; not both. The
     options of the call (``headers``, ``timeout``, ``retry_policy``) are
-    passed on to the session, as ``send_request`` takes them.
+    passed on to the session, as ``send_request`` takes them. The
+    provider's own fields, which the shared request does not hold, are
+    set with ``with_options``, which code that works with any provider
+    (``IGenerationResource``) does not have.
 
     Example:
         >>> generation = GenerationResource(session, ResponsesAdapter())
@@ -63,7 +68,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     def __init__(
         self,
         session: SessionT,
-        adapter: GenerationAdapter[RawT, RawItemT],
+        adapter: IGenerationAdapter[RawT, RawItemT, OptionsT],
     ) -> None:
         """Keep the session and build the use case on the adapter.
 
@@ -73,9 +78,42 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
                 and its stream items.
         """
         super().__init__(session)
+        self._adapter = adapter
         self._generate = AdapterCompositeUseCase(
             session, adapter, terminal=GENERATION_TERMINAL
         )
+
+    def with_options(self, options: OptionsT, /) -> Self:
+        """Return a copy that sends the provider's own options.
+
+        The options are fields that only this provider has, such as
+        OpenAI's ``store``; a key left out is not sent. The copy shares
+        the session, and this resource is left as it is, so it can be
+        kept for many calls.
+
+        Args:
+            options: The provider's options, a ``TypedDict`` such as
+                ``OpenAIGenerationOptions``.
+
+        Returns:
+            A resource whose requests carry the options.
+
+        Raises:
+            RequestValidationError: A key is not one of the provider's
+                options; the shared fields are set in the request. An
+                invalid value is raised when a request is built.
+
+        Example:
+            >>> unstored = client.generation.with_options({"store": False})
+            >>> response = await unstored.create(model="gpt-5", input="Hi")
+        """
+        adapter = self._adapter.with_options(options)
+        resource = copy.copy(self)
+        resource._adapter = adapter
+        resource._generate = AdapterCompositeUseCase(
+            self.session, adapter, terminal=GENERATION_TERMINAL
+        )
+        return resource
 
     @overload
     async def create(

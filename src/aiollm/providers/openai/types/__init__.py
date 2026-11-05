@@ -15,6 +15,9 @@ from aiollm.providers.openai.types.events import (
     ResponseStreamEvent,
     UnknownEvent,
 )
+from aiollm.providers.openai.types.options import (
+    OpenAIGenerationOptions,
+)
 from aiollm.providers.openai.types.responses import (
     IncompleteDetails,
     InputTokensDetails,
@@ -37,6 +40,7 @@ __all__ = [
     "ContentPartEvent",
     "IncompleteDetails",
     "InputTokensDetails",
+    "OpenAIGenerationOptions",
     "OutputContent",
     "OutputItem",
     "OutputItemEvent",

@@ -11,6 +11,7 @@ from aiollm.resources.generation import (
 )
 from aiollm.resources.protocols import (
     ICompositeUseCase,
+    IGenerationAdapter,
     IGenerationClient,
     IGenerationResource,
     IResource,
@@ -42,6 +43,7 @@ __all__ = [
     "GenerationResource",
     "GenerationStream",
     "ICompositeUseCase",
+    "IGenerationAdapter",
     "IGenerationClient",
     "IGenerationResource",
     "IResource",

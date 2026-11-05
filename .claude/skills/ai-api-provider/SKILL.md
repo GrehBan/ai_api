@@ -32,7 +32,10 @@ which shared resources it will support. Code starts on the owner's go.
    and each resource as `name = bind_resource(Resource[...], Adapter)`
    (`adapter_factory=` for an adapter with options, read from the client);
    `__init__` types `**session_kwargs`, keeps the adapter options and calls
-   `super().__init__()`, which builds adapters before the session.
+   `super().__init__()`, which builds adapters before the session. The
+   generation adapter has `with_options` with the provider's options
+   `TypedDict` (`types/options.py`), and the client binds
+   `GenerationResource[Raw, Event, Options]`.
 4. `__init__.py` re-exports the client (the one `__init__` allowed to import a
    transport), sorted `__all__`.
 

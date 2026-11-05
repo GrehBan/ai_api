@@ -16,6 +16,7 @@ from aiollm.providers.openai.resolver import (
     OpenAIErrorResolver,
 )
 from aiollm.providers.openai.types.events import ResponseStreamEvent
+from aiollm.providers.openai.types.options import OpenAIGenerationOptions
 from aiollm.providers.openai.types.responses import Response
 from aiollm.resources.generation import GenerationResource
 from aiollm.session.aiohttp import AiohttpSession, AiohttpSessionOptions
@@ -57,7 +58,9 @@ class OpenAIClient(BaseProviderClient):
     auth_headers = frozenset({AUTHORIZATION})
 
     generation = bind_resource(
-        GenerationResource[Response, ResponseStreamEvent],
+        GenerationResource[
+            Response, ResponseStreamEvent, OpenAIGenerationOptions
+        ],
         OpenAIGenerationAdapter,
     )
 

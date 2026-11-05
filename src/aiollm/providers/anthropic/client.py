@@ -16,6 +16,7 @@ from aiollm.providers.anthropic.api import ANTHROPIC_API, PROVIDER
 from aiollm.providers.anthropic.resolver import AnthropicErrorResolver
 from aiollm.providers.anthropic.types.events import MessageStreamEvent
 from aiollm.providers.anthropic.types.messages import Message
+from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
 from aiollm.resources.generation import GenerationResource
 from aiollm.session.aiohttp import AiohttpSession, AiohttpSessionOptions
 from aiollm.session.factory import SessionFactory
@@ -68,7 +69,9 @@ class AnthropicClient(BaseProviderClient):
         )
 
     generation = bind_resource(
-        GenerationResource[Message, MessageStreamEvent],
+        GenerationResource[
+            Message, MessageStreamEvent, AnthropicGenerationOptions
+        ],
         AnthropicGenerationAdapter,
         adapter_factory=_generation_adapter,
     )
