@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- towncrier release notes start -->
 
+## [0.8.0] - 2026-11-05
+
+### Added
+
+- The versioning guide says when 1.0 comes: not after 0.9 (0.10 follows it),
+  but once two releases in a row have no breaking change, the core and the
+  shared generation layer are declared stable and outside users have given
+  feedback; `1.0.0a1`, `b1` and `rc1` pre-releases may come before it.
+- `client.generation.create()` and `stream()` take `provider_options=`, a
+  provider's own fields of that call that the shared request does not hold:
+  `store`, `previous_response_id`, `temperature` and `top_p` for OpenAI
+  (`OpenAIGenerationOptions`), `stop_sequences` for Anthropic
+  (`AnthropicGenerationOptions`). The options are a `TypedDict` of the client's
+  provider, so a wrong key or value is a type error; at run time an unknown key
+  or an invalid value raises `RequestValidationError` before anything is sent.
+  Code typed as `IGenerationClient` cannot pass them.
+
+### Changed
+
+- **Breaking:** `GenerationResource` takes the provider's options as its third
+  type parameter, `GenerationResource[RawT, RawItemT, OptionsT =
+  NoProviderOptions, SessionT = ISession]`, so a session type given as the
+  third argument moves to the fourth. Its adapter is an `IGenerationAdapter`,
+  which adds `with_options(options, /) -> Self` to `ICompositeAdapter`: a
+  generation adapter of your own without provider options adds a
+  `with_options(self, options: NoProviderOptions, /) -> Self` that calls
+  `checked_options(options, NoProviderOptions, self.provider)` (from
+  `aiollm.adapters.validation`), so no key is dropped silently, and returns
+  `self`. `NoProviderOptions` is closed: only `{}` matches it. `CallOptions` is
+  now closed (PEP 728): a `**options: Unpack[CallOptions]` takes no other key,
+  and `typing-extensions` is a direct dependency.
+
+### Fixed
+
+- A retry policy's `retry_if` and `backoff` are no longer called after the last
+  attempt `max_attempts` allows, when no retry can follow: a `backoff` that
+  counts retries or a `retry_if` that logs counted one call too many. With a
+  `deadline`, `backoff` is still asked for the wait it would cut, since whether
+  the deadline stops the retries depends on that wait.
+- The resources guide's custom adapter example has the `with_options` that a
+  `GenerationResource` adapter now needs (type checkers refused the example
+  without it), and the design guide's limitations say that `client.generation`
+  is text only.
+
 ## [0.7.0] - 2026-11-05
 
 ### Added
@@ -924,7 +968,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/GrehBan/aiollm/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/GrehBan/aiollm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/GrehBan/aiollm/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/GrehBan/aiollm/compare/v0.4.4...v0.5.0

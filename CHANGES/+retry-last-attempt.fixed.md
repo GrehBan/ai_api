@@ -1,1 +1,0 @@
-A retry policy's `retry_if` and `backoff` are no longer called after the last attempt `max_attempts` allows, when no retry can follow: a `backoff` that counts retries or a `retry_if` that logs counted one call too many. With a `deadline`, `backoff` is still asked for the wait it would cut, since whether the deadline stops the retries depends on that wait.

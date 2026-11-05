@@ -1,1 +1,0 @@
-The versioning guide says when 1.0 comes: not after 0.9 (0.10 follows it), but once two releases in a row have no breaking change, the core and the shared generation layer are declared stable and outside users have given feedback; `1.0.0a1`, `b1` and `rc1` pre-releases may come before it.
