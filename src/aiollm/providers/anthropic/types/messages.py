@@ -26,17 +26,36 @@ class TextBlock(BaseAPITypeExtra):
     citations: list[dict[str, Any]] | None = None
 
 
+class ThinkingBlock(BaseAPITypeExtra):
+    """The model's thinking, a summary of it on the Claude 5.x models.
+
+    Attributes:
+        type: Always ``"thinking"``.
+        thinking: The thinking; empty when its display is ``omitted``.
+        signature: Proof of the thinking, sent back with tool use.
+    """
+
+    __upstream_schema__ = "ThinkingBlock"
+
+    type: Literal["thinking"] = "thinking"
+    thinking: str
+    signature: str
+
+
 class UnknownBlock(BaseUnknown):
     """A content block of a type the library does not model yet.
 
-    Thinking, tool use, server tool results and every block Anthropic
+    Redacted thinking, tool use, server tool results and every block
+    Anthropic
     adds later arrive as this, with all their fields as extra fields.
     """
 
 
 type ContentBlock = Annotated[
-    Annotated[TextBlock, Tag("text")] | Annotated[UnknownBlock, Tag(UNKNOWN)],
-    Discriminator(by_type({"text": "text"})),
+    Annotated[TextBlock, Tag("text")]
+    | Annotated[ThinkingBlock, Tag("thinking")]
+    | Annotated[UnknownBlock, Tag(UNKNOWN)],
+    Discriminator(by_type({"text": "text", "thinking": "thinking"})),
 ]
 """A content block of a message, told apart by ``type``."""
 
@@ -137,3 +156,19 @@ class Message(BaseAPITypeExtra):
             if isinstance(block, TextBlock)
         ]
         return "".join(texts) if texts else None
+
+    @property
+    def thinking(self) -> str | None:
+        """Join the thinking of the message.
+
+        Returns:
+            The text of all ``thinking`` blocks, or ``None`` if there are
+            none or all are empty (thinking whose display is
+            ``omitted``).
+        """
+        thinking = "".join(
+            block.thinking
+            for block in self.content
+            if isinstance(block, ThinkingBlock)
+        )
+        return thinking or None

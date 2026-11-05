@@ -31,11 +31,12 @@ Two rules decide what is shared:
 | `GenerationResponse.id` | `id` | `id` | — |
 | `GenerationResponse.provider` | `Provider.OPENAI` | `Provider.ANTHROPIC` | — |
 | `GenerationResponse.model` | `model` | `model` | — |
-| `GenerationResponse.text` | The `output_text` parts of the `message` items, joined (as the SDKs' `output_text`) | The `text` blocks, joined | `None` without text. Annotations, citations, reasoning, thinking and tool calls stay in `raw`. |
+| `GenerationResponse.text` | The `output_text` parts of the `message` items, joined (as the SDKs' `output_text`) | The `text` blocks, joined | `None` without text. Annotations, citations, encrypted or raw reasoning and tool calls stay in `raw`. |
 | `GenerationResponse.usage` | `usage`, see [Token usage](#token-usage) | `usage`, see [Token usage](#token-usage) | `None` if OpenAI sends no usage. |
 | `GenerationResponse.incomplete_reason` | `REFUSAL` if the output has a `refusal` part; else, for `status: "incomplete"`, `MAX_TOKENS` for `max_output_tokens` and `OTHER` for any other reason (`content_filter`, `max_messages`, `steered`, none given) | `MAX_TOKENS` for `stop_reason: "max_tokens"`, `REFUSAL` for `"refusal"`, `OTHER` for any other early stop (`model_context_window_exceeded`, `pause_turn`, `tool_use`, a new reason); `None` for `end_turn` and `stop_sequence` | Only the values both providers have are shared; the provider's reason is in `raw_incomplete_reason`. A `failed` OpenAI response raises an `APIStatusError`, any status other than `completed` or `incomplete` raises `APIResponseError`, and an Anthropic message without a `stop_reason` raises `APIResponseError`. |
 | `GenerationResponse.raw_incomplete_reason` | `incomplete_details.reason` of an incomplete response | `stop_reason` of an early stop | `None` when the provider gives no reason, such as a completed OpenAI response with a refusal part. |
 | `GenerationResponse.refusal` | The `refusal` parts, joined | `stop_details.explanation`, else `stop_details.category`, of a `refusal` stop | A refusal is an answer, not an error, as in both SDKs. `None` if the provider gives no explanation. |
+| `GenerationResponse.reasoning` | The `summary_text` parts of the `reasoning` items, joined; there only when the request asks for them with `provider_options={"reasoning": {"summary": "auto"}}` | The `thinking` blocks, joined; a summary on the 5.x models, there only with `provider_options={"thinking": {"type": "adaptive", "display": "summarized"}}` | `None` without a summary, the same for both. OpenAI's raw `reasoning_text` and `encrypted_content`, and Anthropic's `signature` and `redacted_thinking`, stay in `raw`. |
 | `GenerationResponse.raw` | `Response` | `Message` | Holds everything the shared fields leave out. |
 
 `response.to_turn()` turns a response into an `assistant` turn for the next request; a response without text raises `ValueError`.
@@ -62,8 +63,9 @@ Server tool use, service tier, speed and inference region (Anthropic) and tool u
 | Shared event | OpenAI | Anthropic | Lost, or when it raises |
 | --- | --- | --- | --- |
 | `TextDeltaEvent` | `response.output_text.delta` | `content_block_delta` with a `text_delta` | — |
+| `ReasoningDeltaEvent` | `response.reasoning_summary_text.delta` | `content_block_delta` with a non-empty `thinking_delta` | Only when a summary was asked for, as `GenerationResponse.reasoning`; `GenerationStream.text()` skips it. |
 | `CompletedEvent` | `response.completed`, `response.incomplete` | `message_stop`, with the counts of `message_start` and the last (cumulative) `message_delta` | Exactly one, as the last event: a stream that ends without it raises `APIStreamInterruptedError`, an event after it raises `APIResponseError`. `response.failed` and `error` events raise an `APIStatusError`. |
-| `OtherEvent` | Every other event, refusal deltas included | Every other event | The provider's event is in `raw`. |
+| `OtherEvent` | Every other event, refusal deltas included | Every other event, `signature_delta` included | The provider's event is in `raw`. |
 
 `CompletedEvent` carries the fields of the whole response that a stream has:
 
@@ -78,6 +80,7 @@ Server tool use, service tier, speed and inference region (Anthropic) and tool u
 | `CompletedEvent.incomplete_reason` | As `GenerationResponse.incomplete_reason` | As `GenerationResponse.incomplete_reason`, from the last `message_delta` | — |
 | `CompletedEvent.raw_incomplete_reason` | As `GenerationResponse.raw_incomplete_reason` | As `GenerationResponse.raw_incomplete_reason` | — |
 | `CompletedEvent.refusal` | As `GenerationResponse.refusal` | As `GenerationResponse.refusal`, from `message_delta.delta.stop_details` | — |
+| `CompletedEvent.reasoning` | As `GenerationResponse.reasoning`, from the event's `response` | The `thinking_delta`s joined | `None` without a summary. |
 | `CompletedEvent.raw` | The terminal event | `message_stop` | — |
 
 ## Errors
@@ -106,8 +109,8 @@ Not shared, but reachable through `client.generation`: `create(..., provider_opt
 
 | Provider | Options type | Keys |
 |---|---|---|
-| OpenAI | `OpenAIGenerationOptions` | `metadata`, `store`, `previous_response_id`, `temperature`, `top_p` |
-| Anthropic | `AnthropicGenerationOptions` | `stop_sequences` |
+| OpenAI | `OpenAIGenerationOptions` | `metadata`, `reasoning` (`summary`, `context`, `mode`; its `effort` is the shared field, and the two are merged), `store`, `previous_response_id`, `temperature`, `top_p` |
+| Anthropic | `AnthropicGenerationOptions` | `stop_sequences`, `thinking` |
 
 ## Not unified
 

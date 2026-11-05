@@ -9,6 +9,11 @@ from aiollm.providers.anthropic.methods.base import (
     MessageParams,
     Metadata,
     OutputConfig,
+    ThinkingAdaptive,
+    ThinkingBetweenTools,
+    ThinkingConfig,
+    ThinkingDisabled,
+    ThinkingEnabled,
 )
 from aiollm.providers.anthropic.methods.messages import (
     CreateMessage,
@@ -23,5 +28,10 @@ __all__ = [
     "Metadata",
     "OutputConfig",
     "StreamMessage",
+    "ThinkingAdaptive",
+    "ThinkingBetweenTools",
+    "ThinkingConfig",
+    "ThinkingDisabled",
+    "ThinkingEnabled",
     "VERSION_HEADERS",
 ]

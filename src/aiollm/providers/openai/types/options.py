@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from aiollm.providers.openai.methods.base import Metadata
+
+
+class OpenAIReasoningOptions(TypedDict, total=False):
+    """The parts of ``reasoning`` that the shared request does not set.
+
+    ``effort`` is the shared ``GenerationRequest.effort``, so it is not
+    here: the adapter merges these keys with it into one ``reasoning``.
+
+    Attributes:
+        summary: Ask for a summary of the reasoning, which comes back as
+            ``GenerationResponse.reasoning`` and ``ReasoningDeltaEvent``.
+        context: Which earlier reasoning the model sees.
+        mode: The reasoning mode, such as ``standard`` or ``pro``.
+    """
+
+    summary: Literal["auto", "concise", "detailed"] | None
+    context: Literal["auto", "current_turn", "all_turns"] | None
+    mode: str
 
 
 class OpenAIGenerationOptions(TypedDict, total=False):
@@ -16,6 +34,8 @@ class OpenAIGenerationOptions(TypedDict, total=False):
 
     Attributes:
         metadata: Up to 16 key-value pairs stored with the response.
+        reasoning: Reasoning settings besides the shared ``effort``,
+            such as ``{"summary": "auto"}``.
         store: Whether OpenAI keeps the response; ``None`` sends ``null``.
         previous_response_id: The response this one continues.
         temperature: Sampling temperature, 0 to 2.
@@ -28,6 +48,7 @@ class OpenAIGenerationOptions(TypedDict, total=False):
     """
 
     metadata: Metadata | None
+    reasoning: OpenAIReasoningOptions
     store: bool | None
     previous_response_id: str | None
     temperature: float | None

@@ -31,6 +31,7 @@ from aiollm.providers.openai.types import (
     OutputText,
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
+    ReasoningItem,
     RefusalDeltaEvent,
     RefusalDoneEvent,
     Response,
@@ -198,9 +199,11 @@ def test_response_reads_the_reference_example() -> None:
 
 def test_response_keeps_unknown_items_and_parts_whole() -> None:
     reasoning = {
-        "type": "reasoning",
-        "id": "rs_1",
-        "summary": [{"type": "summary_text", "text": "Thinking"}],
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "lookup",
+        "arguments": "{}",
     }
     message = MESSAGE | {
         "content": [
@@ -222,6 +225,24 @@ def test_response_keeps_unknown_items_and_parts_whole() -> None:
     assert isinstance(second.content[2], UnknownContent)
     assert second.content[2].model_dump() == message["content"][2]
     assert response.output_text == "Hello"
+    assert response.reasoning_summary is None
+
+
+def test_reasoning_summaries_are_joined() -> None:
+    reasoning = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [
+            {"type": "summary_text", "text": "First, "},
+            {"type": "summary_text", "text": "then."},
+        ],
+    }
+    response = Response.model_validate(
+        RESPONSE | {"output": [reasoning, MESSAGE]}
+    )
+
+    assert isinstance(response.output[0], ReasoningItem)
+    assert response.reasoning_summary == "First, then."
 
 
 def test_an_item_without_a_type_is_rejected() -> None:

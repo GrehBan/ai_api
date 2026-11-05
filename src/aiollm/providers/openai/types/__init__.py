@@ -9,6 +9,7 @@ from aiollm.providers.openai.types.events import (
     OutputItemEvent,
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
+    ReasoningSummaryTextDeltaEvent,
     RefusalDeltaEvent,
     RefusalDoneEvent,
     ResponseStateEvent,
@@ -17,6 +18,7 @@ from aiollm.providers.openai.types.events import (
 )
 from aiollm.providers.openai.types.options import (
     OpenAIGenerationOptions,
+    OpenAIReasoningOptions,
 )
 from aiollm.providers.openai.types.responses import (
     IncompleteDetails,
@@ -27,6 +29,8 @@ from aiollm.providers.openai.types.responses import (
     OutputRefusal,
     OutputText,
     OutputTokensDetails,
+    ReasoningItem,
+    ReasoningSummary,
     Response,
     ResponseError,
     ResponseUsage,
@@ -41,6 +45,7 @@ __all__ = [
     "IncompleteDetails",
     "InputTokensDetails",
     "OpenAIGenerationOptions",
+    "OpenAIReasoningOptions",
     "OutputContent",
     "OutputItem",
     "OutputItemEvent",
@@ -50,6 +55,9 @@ __all__ = [
     "OutputTextDeltaEvent",
     "OutputTextDoneEvent",
     "OutputTokensDetails",
+    "ReasoningItem",
+    "ReasoningSummary",
+    "ReasoningSummaryTextDeltaEvent",
     "RefusalDeltaEvent",
     "RefusalDoneEvent",
     "Response",

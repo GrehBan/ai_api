@@ -46,6 +46,23 @@ class TextDeltaEvent[RawT](RawResponseEvent[RawT]):
     text: str
 
 
+class ReasoningDeltaEvent[RawT](RawResponseEvent[RawT]):
+    """A piece of a summary of the model's reasoning.
+
+    Only sent when the request asked for a summary through
+    ``provider_options``; ``GenerationStream.text()`` skips it.
+
+    Attributes:
+        type: Always ``GenerationEventType.REASONING_DELTA``.
+        text: The new text of the summary.
+    """
+
+    type: Literal[GenerationEventType.REASONING_DELTA] = (
+        GenerationEventType.REASONING_DELTA
+    )
+    text: str
+
+
 class CompletedEvent[RawT](RawResponseEvent[RawT]):
     """The generation finished, or stopped early.
 
@@ -72,6 +89,10 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
             one.
         refusal: Why the model refused, if it did and the provider says
             why.
+        reasoning: A summary of the model's reasoning, when the
+            provider sent one (OpenAI's ``reasoning.summary``,
+            Anthropic's ``thinking.display`` of ``summarized``, both
+            set through ``provider_options``); ``None`` otherwise.
     """
 
     type: Literal[GenerationEventType.COMPLETED] = (
@@ -85,6 +106,7 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
     incomplete_reason: IncompleteReason | None = None
     raw_incomplete_reason: str | None = None
     refusal: str | None = None
+    reasoning: str | None = None
 
 
 class OtherEvent[RawT](RawResponseEvent[RawT]):
@@ -98,7 +120,10 @@ class OtherEvent[RawT](RawResponseEvent[RawT]):
 
 
 type GenerationEvent[RawT] = Annotated[
-    TextDeltaEvent[RawT] | CompletedEvent[RawT] | OtherEvent[RawT],
+    TextDeltaEvent[RawT]
+    | ReasoningDeltaEvent[RawT]
+    | CompletedEvent[RawT]
+    | OtherEvent[RawT],
     Field(discriminator="type"),
 ]
 """Any shared event of a generation stream, told apart by ``type``."""

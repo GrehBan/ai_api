@@ -79,18 +79,56 @@ class OutputMessage(BaseAPITypeExtra):
     phase: str | None = None
 
 
+class ReasoningSummary(BaseAPITypeExtra):
+    """A summary of a reasoning model's reasoning.
+
+    Attributes:
+        type: Always ``"summary_text"``.
+        text: The summary.
+    """
+
+    __upstream_schema__ = "Summary"
+
+    type: Literal["summary_text"] = "summary_text"
+    text: str
+
+
+class ReasoningItem(BaseAPITypeExtra):
+    """The reasoning of a reasoning model, one of the output items.
+
+    Attributes:
+        type: Always ``"reasoning"``.
+        id: Item identifier.
+        summary: Summaries of the reasoning, when the request asked for
+            them with ``reasoning.summary``.
+        content: The reasoning text, as sent, when the model gives it.
+        encrypted_content: The reasoning, encrypted, when requested.
+        status: ``"in_progress"``, ``"completed"`` or ``"incomplete"``.
+    """
+
+    __upstream_schema__ = "ResponseReasoningItem"
+
+    type: Literal["reasoning"] = "reasoning"
+    id: str
+    summary: list[ReasoningSummary]
+    content: list[dict[str, Any]] | None = None
+    encrypted_content: str | None = None
+    status: str | None = None
+
+
 class UnknownOutputItem(BaseUnknown):
     """An output item the library does not model yet.
 
-    Reasoning, tool calls and the other item types are kept whole, with
-    all their fields as extra fields.
+    Tool calls and the other item types are kept whole, with all their
+    fields as extra fields.
     """
 
 
 type OutputItem = Annotated[
     Annotated[OutputMessage, Tag("message")]
+    | Annotated[ReasoningItem, Tag("reasoning")]
     | Annotated[UnknownOutputItem, Tag(UNKNOWN)],
-    Discriminator(by_type({"message": "message"})),
+    Discriminator(by_type({"message": "message", "reasoning": "reasoning"})),
 ]
 """An item of ``Response.output``, told apart by ``type``."""
 
@@ -214,6 +252,22 @@ class Response(BaseAPITypeExtra):
     instructions: str | list[Any] | None = None
     metadata: dict[str, str] | None = None
     previous_response_id: str | None = None
+
+    @property
+    def reasoning_summary(self) -> str | None:
+        """The summaries of all reasoning items joined together.
+
+        Returns:
+            The joined summaries, or ``None`` if there are none (the
+            request did not ask for them).
+        """
+        summary = "".join(
+            part.text
+            for item in self.output
+            if isinstance(item, ReasoningItem)
+            for part in item.summary
+        )
+        return summary or None
 
     @property
     def output_text(self) -> str | None:

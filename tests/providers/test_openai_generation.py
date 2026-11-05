@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from aiollm.enums import IncompleteReason, Provider
+from aiollm.enums import Effort, IncompleteReason, Provider
 from aiollm.exceptions import RequestValidationError
 from aiollm.http.exceptions.response import APIResponseError
 from aiollm.http.exceptions.status import (
@@ -28,6 +28,7 @@ from aiollm.types.requests import GenerationRequest, Turn
 from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
     TokenUsage,
 )
@@ -315,6 +316,70 @@ async def test_stream_events_are_converted() -> None:
     assert completed.model == completed.raw.response.model
     # The text of the final response, as OpenAI sends it in the event.
     assert completed.text == completed.raw.response.output_text
+
+
+REASONING = {
+    "type": "reasoning",
+    "id": "rs_1",
+    "summary": [{"type": "summary_text", "text": "Weighing it."}],
+}
+"""A reasoning item with a summary, as a request for one brings."""
+
+
+def test_a_reasoning_summary_becomes_the_reasoning() -> None:
+    converted = adapter.to_response(
+        response(output=[REASONING, *RESPONSE["output"]]), REQUEST
+    )
+    plain = adapter.to_response(response(), REQUEST)
+
+    assert converted.reasoning == "Weighing it."
+    assert converted.text == plain.text
+    assert plain.reasoning is None
+
+
+async def test_summary_deltas_become_reasoning_deltas() -> None:
+    delta = {
+        "type": "response.reasoning_summary_text.delta",
+        "item_id": "rs_1",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": "Weighing",
+        "sequence_number": 1,
+    }
+    done = state("response.completed", 2, output=[REASONING])
+
+    reasoning, completed = await convert([delta, done])
+
+    assert isinstance(reasoning, ReasoningDeltaEvent)
+    assert reasoning.text == "Weighing"
+    assert reasoning.raw.summary_index == 0
+    assert isinstance(completed, CompletedEvent)
+    assert completed.reasoning == "Weighing it."
+
+
+def test_reasoning_options_merge_with_the_shared_effort() -> None:
+    # effort is the shared field; the options fill the rest of reasoning.
+    request = REQUEST.model_copy(update={"effort": Effort.HIGH})
+    tuned = adapter.with_options({"reasoning": {"summary": "auto"}})
+
+    assert tuned.to_method(request).reasoning == {
+        "effort": "high",
+        "summary": "auto",
+    }
+    assert tuned.to_method(REQUEST).reasoning == {"summary": "auto"}
+
+
+def test_an_option_that_sets_a_shared_path_is_refused() -> None:
+    request = REQUEST.model_copy(update={"effort": Effort.HIGH})
+    options: Any = {"reasoning": {"effort": "low"}}
+    tuned = adapter.with_options(options)
+
+    with pytest.raises(
+        RequestValidationError, match="reasoning.effort is set by a shared"
+    ) as caught:
+        tuned.to_method(request)
+
+    assert caught.value.field == "reasoning.effort"
 
 
 async def test_incomplete_stream_completes_with_its_reason() -> None:

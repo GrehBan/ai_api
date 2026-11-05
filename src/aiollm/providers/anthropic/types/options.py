@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from aiollm.providers.anthropic.methods.base import ThinkingConfig
+
 
 class AnthropicGenerationOptions(TypedDict, total=False):
     """Fields of ``POST /v1/messages`` that the shared request does not hold.
@@ -14,6 +16,9 @@ class AnthropicGenerationOptions(TypedDict, total=False):
 
     Attributes:
         stop_sequences: Texts that stop generation.
+        thinking: How the model thinks; ``{"type": "adaptive",
+            "display": "summarized"}`` brings a summary back as
+            ``GenerationResponse.reasoning`` and ``ReasoningDeltaEvent``.
 
     Example:
         >>> await client.generation.create(
@@ -24,3 +29,4 @@ class AnthropicGenerationOptions(TypedDict, total=False):
     """
 
     stop_sequences: list[str]
+    thinking: ThinkingConfig

@@ -12,6 +12,7 @@ from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
     check_last_turn,
     checked_options,
+    merge_options,
     request_errors,
 )
 from aiollm.providers.anthropic.adapters.conversions import (
@@ -32,6 +33,7 @@ from aiollm.providers.anthropic.types.events import (
     MessageStopEvent,
     MessageStreamEvent,
     TextDelta,
+    ThinkingDelta,
 )
 from aiollm.providers.anthropic.types.messages import Message
 from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
@@ -40,6 +42,7 @@ from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
@@ -210,6 +213,7 @@ class AnthropicGenerationAdapter(
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
+            reasoning=raw.thinking,
             raw=raw,
         )
 
@@ -236,7 +240,8 @@ class AnthropicGenerationAdapter(
     ) -> AsyncGenerator[GenerationEvent[MessageStreamEvent]]:
         """Convert the events of a message stream.
 
-        Text deltas become ``TextDeltaEvent``; ``message_stop`` becomes
+        Text deltas become ``TextDeltaEvent`` and non-empty thinking
+        deltas ``ReasoningDeltaEvent``; ``message_stop`` becomes
         ``CompletedEvent`` with the counts and stop reason collected from
         ``message_start`` and ``message_delta``; every other event is an
         ``OtherEvent``.
@@ -262,6 +267,14 @@ class AnthropicGenerationAdapter(
                         text=delta.text, raw=item
                     )
                     continue
+                case ContentBlockDeltaEvent(
+                    delta=ThinkingDelta(thinking=str(thinking))
+                ) if thinking:
+                    state.add_thinking(thinking)
+                    yield ReasoningDeltaEvent[MessageStreamEvent](
+                        text=thinking, raw=item
+                    )
+                    continue
                 case MessageStartEvent():
                     state.start(item)
                 case MessageDeltaEvent():
@@ -278,6 +291,7 @@ class AnthropicGenerationAdapter(
                         incomplete_reason=stop.incomplete_reason,
                         raw_incomplete_reason=stop.raw_incomplete_reason,
                         refusal=stop.refusal,
+                        reasoning=state.thinking(),
                         raw=item,
                     )
                     continue
@@ -300,7 +314,7 @@ class AnthropicGenerationAdapter(
                 ``user`` turn.
         """
         check_last_turn(request, self.provider)
-        return {
+        fields = {
             "model": request.model,
             "messages": self.input_conversion(request.input),
             "max_tokens": (
@@ -315,8 +329,8 @@ class AnthropicGenerationAdapter(
                 else {"user_id": request.end_user_id}
             ),
             "output_config": _output_config(request),
-            **self.provider_options,
         }
+        return merge_options(fields, self.provider_options, self.provider)
 
 
 def _output_config(request: GenerationRequest) -> dict[str, Any] | MISSING:

@@ -62,6 +62,20 @@ class TextDelta(BaseAPITypeExtra):
     text: str
 
 
+class ThinkingDelta(BaseAPITypeExtra):
+    """A piece of thinking in a ``content_block_delta``.
+
+    Attributes:
+        type: Always ``"thinking_delta"``.
+        thinking: The new thinking.
+    """
+
+    __upstream_schema__ = "ThinkingDelta"
+
+    type: Literal["thinking_delta"] = "thinking_delta"
+    thinking: str
+
+
 class UnknownDelta(BaseUnknown):
     """A delta the library does not model yet, kept whole.
 
@@ -71,8 +85,13 @@ class UnknownDelta(BaseUnknown):
 
 type ContentDelta = Annotated[
     Annotated[TextDelta, Tag("text_delta")]
+    | Annotated[ThinkingDelta, Tag("thinking_delta")]
     | Annotated[UnknownDelta, Tag(UNKNOWN)],
-    Discriminator(by_type({"text_delta": "text_delta"})),
+    Discriminator(
+        by_type(
+            {"text_delta": "text_delta", "thinking_delta": "thinking_delta"}
+        )
+    ),
 ]
 """A delta of a content block, told apart by ``type``."""
 

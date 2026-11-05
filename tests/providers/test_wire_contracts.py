@@ -147,6 +147,7 @@ ANTHROPIC = Case(
             "effort": "high",
             "format": {"type": "json_schema", "schema": {"type": "object"}},
         },
+        "thinking": {"type": "adaptive", "display": "summarized"},
         "stop_sequences": ["END"],
     },
     response=Message,

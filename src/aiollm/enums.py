@@ -119,11 +119,14 @@ class GenerationEventType(StrEnum):
 
     Attributes:
         TEXT_DELTA: A piece of generated text, ``TextDeltaEvent``.
+        REASONING_DELTA: A piece of a reasoning summary,
+            ``ReasoningDeltaEvent``.
         COMPLETED: The end of the generation, ``CompletedEvent``.
         OTHER: A provider event without a shared counterpart,
             ``OtherEvent``.
     """
 
     TEXT_DELTA = "text_delta"
+    REASONING_DELTA = "reasoning_delta"
     COMPLETED = "completed"
     OTHER = "other"

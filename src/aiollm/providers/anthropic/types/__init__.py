@@ -15,6 +15,7 @@ from aiollm.providers.anthropic.types.events import (
     MessageStreamEvent,
     PingEvent,
     TextDelta,
+    ThinkingDelta,
     UnknownDelta,
     UnknownEvent,
 )
@@ -24,6 +25,7 @@ from aiollm.providers.anthropic.types.messages import (
     OutputTokensDetails,
     StopDetails,
     TextBlock,
+    ThinkingBlock,
     UnknownBlock,
     Usage,
 )
@@ -50,6 +52,8 @@ __all__ = [
     "StopDetails",
     "TextBlock",
     "TextDelta",
+    "ThinkingBlock",
+    "ThinkingDelta",
     "UnknownBlock",
     "UnknownDelta",
     "UnknownEvent",

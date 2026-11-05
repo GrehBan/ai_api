@@ -133,6 +133,7 @@ from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import (
@@ -203,6 +204,7 @@ __all__ = [
     "Provider",
     "QuotaExceededError",
     "RateLimitError",
+    "ReasoningDeltaEvent",
     "RequestTimeoutError",
     "RequestValidationError",
     "ResponseFormat",

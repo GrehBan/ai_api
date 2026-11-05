@@ -12,6 +12,7 @@ from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
     check_last_turn,
     checked_options,
+    merge_options,
     request_errors,
 )
 from aiollm.providers.openai.adapters.conversions import (
@@ -27,6 +28,7 @@ from aiollm.providers.openai.methods.responses import (
 )
 from aiollm.providers.openai.types.events import (
     OutputTextDeltaEvent,
+    ReasoningSummaryTextDeltaEvent,
     ResponseStateEvent,
     ResponseStreamEvent,
 )
@@ -37,6 +39,7 @@ from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
+    ReasoningDeltaEvent,
     TextDeltaEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
@@ -189,6 +192,7 @@ class OpenAIGenerationAdapter(
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
+            reasoning=raw.reasoning_summary,
             raw=raw,
         )
 
@@ -236,14 +240,19 @@ class OpenAIGenerationAdapter(
             event: The event OpenAI sent.
 
         Returns:
-            A text delta, the completion (also of an incomplete
-            response), or ``OtherEvent`` for every other event.
+            A text or reasoning summary delta, the completion (also of
+            an incomplete response), or ``OtherEvent`` for every other
+            event.
             ``response.failed`` never gets here: ``StreamResponse``
             raises it as an ``APIStatusError``.
         """
         match event:
             case OutputTextDeltaEvent():
                 return TextDeltaEvent[ResponseStreamEvent](
+                    text=event.delta, raw=event
+                )
+            case ReasoningSummaryTextDeltaEvent():
+                return ReasoningDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
                 )
             case ResponseStateEvent(
@@ -260,6 +269,7 @@ class OpenAIGenerationAdapter(
                     incomplete_reason=stop.incomplete_reason,
                     raw_incomplete_reason=stop.raw_incomplete_reason,
                     refusal=stop.refusal,
+                    reasoning=response.reasoning_summary,
                     raw=event,
                 )
             case _:
@@ -291,7 +301,7 @@ class OpenAIGenerationAdapter(
                 ``user`` turn.
         """
         check_last_turn(request, self.provider)
-        return {
+        fields = {
             "model": request.model,
             "input": self.input_conversion(request.input),
             "instructions": request.instructions,
@@ -314,5 +324,5 @@ class OpenAIGenerationAdapter(
                     }
                 }
             ),
-            **self.provider_options,
         }
+        return merge_options(fields, self.provider_options, self.provider)
