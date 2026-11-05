@@ -7,6 +7,7 @@ from aiollm.providers.anthropic.methods.base import (
     MessageParam,
     MessageParams,
     Metadata,
+    OutputConfig,
 )
 from aiollm.providers.anthropic.methods.messages import (
     CreateMessage,
@@ -18,6 +19,7 @@ __all__ = [
     "MessageParam",
     "MessageParams",
     "Metadata",
+    "OutputConfig",
     "StreamMessage",
     "VERSION_HEADERS",
 ]

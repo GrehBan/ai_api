@@ -22,6 +22,7 @@ from aiollm.types.responses.events import BaseResponseEvent, GenerationEvent
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
+    from aiollm.enums import Effort
     from aiollm.http.protocols import HeadersType
     from aiollm.resources.stream import GenerationStream
     from aiollm.session.retry.policy import RetryPolicy
@@ -166,6 +167,7 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        effort: Effort | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
@@ -214,6 +216,7 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        effort: Effort | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 

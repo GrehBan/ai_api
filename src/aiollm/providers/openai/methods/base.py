@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, TypedDict
 
 from annotated_types import MaxLen
-from pydantic import MISSING, BaseModel, Field, StringConstraints
+from pydantic import (
+    MISSING,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    with_config,
+)
 
 type Metadata = Annotated[
     dict[
@@ -16,6 +23,29 @@ type Metadata = Annotated[
 ]
 """OpenAI metadata: up to 16 pairs, keys up to 64 and values up to 512
 characters, checked before the request is sent."""
+
+
+@with_config(ConfigDict(extra="forbid"))
+class Reasoning(TypedDict, total=False):
+    """Configuration of a reasoning model.
+
+    Any other key is rejected before the request is sent.
+
+    Attributes:
+        effort: How much the model reasons; ``none`` and ``minimal``
+            only for the models that take them.
+        summary: A summary of the reasoning to return.
+        context: Which earlier reasoning the model sees.
+        mode: The reasoning mode, such as ``standard`` or ``pro``.
+    """
+
+    effort: (
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        | None
+    )
+    summary: Literal["auto", "concise", "detailed"] | None
+    context: Literal["auto", "current_turn", "all_turns"] | None
+    mode: str
 
 
 class ResponseParams(BaseModel):
@@ -36,6 +66,8 @@ class ResponseParams(BaseModel):
         max_output_tokens: Upper bound on output tokens, reasoning
             included; at least 16.
         metadata: Key-value pairs stored with the response.
+        reasoning: Configuration of a reasoning model, such as its
+            effort.
         previous_response_id: Response to continue from.
         store: Whether OpenAI stores the response; ``True`` by default.
         temperature: Sampling temperature, 0 to 2.
@@ -47,6 +79,7 @@ class ResponseParams(BaseModel):
     instructions: str | None | MISSING = MISSING
     max_output_tokens: int | None | MISSING = Field(default=MISSING, ge=16)
     metadata: Metadata | None | MISSING = MISSING
+    reasoning: Reasoning | None | MISSING = MISSING
     previous_response_id: str | None | MISSING = MISSING
     store: bool | None | MISSING = MISSING
     temperature: float | None | MISSING = Field(default=MISSING, ge=0, le=2)

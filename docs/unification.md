@@ -21,6 +21,7 @@ Two rules decide what is shared:
 | `GenerationRequest.instructions` | `instructions` | `system` | System and developer turns are not shared: instructions go here. Not sent when not given. |
 | `GenerationRequest.max_output_tokens` | `max_output_tokens`, at least 16, reasoning included; without it, the model's limit | `max_tokens`, thinking included; required, so without it the adapter's `default_max_tokens` (16000, room for thinking) | Must be positive. Below 16 raises for OpenAI. Not sent to OpenAI when not given. |
 | `GenerationRequest.metadata` | `metadata`: up to 16 pairs, keys up to 64 and values up to 512 characters | `metadata.user_id` only, up to 512 characters | A key other than `user_id` raises for Anthropic instead of being dropped; OpenAI's limits raise too. Not sent when not given. |
+| `GenerationRequest.effort` | `reasoning.effort`: how deeply a reasoning model reasons | `output_config.effort`: all output tokens, thinking and reply | An `Effort`: `low`, `medium`, `high`, `xhigh` or `max`, the levels both have. OpenAI's `none` and `minimal` have no Anthropic counterpart and are not shared (`CreateResponse` takes them). A model that does not take a level answers 400, an `APIStatusError`. Not sent when not given, so the model's own default applies. |
 
 ## Response
 

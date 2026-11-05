@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from aiohttp import ClientTimeout
 
-from aiollm.enums import IncompleteReason, Provider
+from aiollm.enums import Effort, IncompleteReason, Provider
 from aiollm.exceptions import RequestValidationError
 from aiollm.http.exceptions.status import (
     BadRequestError,
@@ -103,6 +103,7 @@ class Case:
         options: Valid provider options, sent as they are.
         other_options: Other valid options, for a concurrent call.
         bad_option: A provider option with a value the method refuses.
+        effort: What ``effort=Effort.HIGH`` becomes in the body.
     """
 
     provider: Provider
@@ -125,6 +126,7 @@ class Case:
     options: dict[str, Any]
     other_options: dict[str, Any]
     bad_option: dict[str, Any]
+    effort: dict[str, Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -198,6 +200,7 @@ OPENAI = Case(
     options={"store": False, "temperature": 0.2},
     other_options={"store": True, "top_p": 0.5},
     bad_option={"temperature": 5},
+    effort={"reasoning": {"effort": "high"}},
 )
 
 ANTHROPIC = Case(
@@ -243,6 +246,7 @@ ANTHROPIC = Case(
     options={"stop_sequences": ["END"]},
     other_options={"stop_sequences": ["STOP", "HALT"]},
     bad_option={"stop_sequences": "END"},
+    effort={"output_config": {"effort": "high"}},
 )
 
 
@@ -342,6 +346,30 @@ async def test_refusal_is_an_answer(
 def test_generation_shares_the_client_session(client: Client) -> None:
     assert isinstance(client.generation, GenerationResource)
     assert client.generation.session is client.session
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_effort_reaches_the_wire(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    if mode == "create":
+        recorder.reply(Reply(json=case.response))
+    else:
+        recorder.reply(events(case.stream))
+    request = REQUEST.model_copy(update={"effort": Effort.HIGH})
+
+    async with client:
+        if mode == "create":
+            await client.generation.create(request)
+        else:
+            async with client.generation.stream(request) as stream:
+                await stream.final()
+
+    body = json.loads(recorder.last.body)
+    assert {key: body[key] for key in case.effort} == case.effort
 
 
 @pytest.mark.parametrize("mode", ["create", "stream"])

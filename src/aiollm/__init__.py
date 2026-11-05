@@ -23,6 +23,7 @@ from aiollm.client.binding import (
 )
 from aiollm.enums import (
     BodyFormat,
+    Effort,
     GenerationEventType,
     IncompleteReason,
     Provider,
@@ -177,6 +178,7 @@ __all__ = [
     "CompletedEvent",
     "ConflictError",
     "ContentTooLargeError",
+    "Effort",
     "FullJitterBackoff",
     "GatewayTimeoutError",
     "GenerationEvent",

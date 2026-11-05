@@ -58,6 +58,20 @@ class Metadata(TypedDict, total=False):
     user_id: Annotated[str, StringConstraints(max_length=512)] | None
 
 
+@with_config(ConfigDict(extra="forbid"))
+class OutputConfig(TypedDict, total=False):
+    """Configuration of the output.
+
+    Any other key is rejected before the request is sent.
+
+    Attributes:
+        effort: How much work the model puts into the response; thinking
+            and the reply both count.
+    """
+
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None
+
+
 class MessageParams(BaseModel):
     """Request fields of creating a message, buffered or streamed.
 
@@ -76,6 +90,7 @@ class MessageParams(BaseModel):
             0 (0 only fills the prompt cache).
         system: System prompt: text, or a list of text blocks.
         metadata: Metadata of the request.
+        output_config: Configuration of the output, such as its effort.
         stop_sequences: Texts that stop generation.
     """
 
@@ -84,4 +99,5 @@ class MessageParams(BaseModel):
     max_tokens: int = Field(ge=0)
     system: str | list[dict[str, Any]] | MISSING = MISSING
     metadata: Metadata | MISSING = MISSING
+    output_config: OutputConfig | MISSING = MISSING
     stop_sequences: list[str] | MISSING = MISSING

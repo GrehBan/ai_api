@@ -6,6 +6,8 @@ import copy
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Any, Self
 
+from pydantic import MISSING
+
 from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
     check_last_turn,
@@ -282,5 +284,10 @@ class OpenAIGenerationAdapter(
             "instructions": request.instructions,
             "max_output_tokens": request.max_output_tokens,
             "metadata": request.metadata,
+            "reasoning": (
+                MISSING
+                if request.effort is MISSING
+                else {"effort": request.effort.value}
+            ),
             **self.provider_options,
         }

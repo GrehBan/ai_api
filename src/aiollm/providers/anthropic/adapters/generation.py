@@ -328,5 +328,10 @@ class AnthropicGenerationAdapter(
             ),
             "system": request.instructions,
             "metadata": request.metadata,
+            "output_config": (
+                MISSING
+                if request.effort is MISSING
+                else {"effort": request.effort.value}
+            ),
             **self.provider_options,
         }

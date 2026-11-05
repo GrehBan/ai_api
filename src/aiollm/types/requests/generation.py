@@ -7,7 +7,7 @@ from typing import Annotated, Self
 from pydantic import MISSING, ConfigDict, Field
 from typing_extensions import TypedDict
 
-from aiollm.enums import Role
+from aiollm.enums import Effort, Role
 from aiollm.types.base import BaseAPIType
 from aiollm.types.requests.base import BaseRequest
 
@@ -83,6 +83,8 @@ class GenerationRequest(BaseRequest):
             input, such as a system prompt.
         max_output_tokens: Upper bound on generated tokens; positive.
         metadata: Free-form key-value pairs stored with the request.
+        effort: How much work the model puts into the response; the
+            model's own default when left out.
 
     An optional field is left out until it is given; ``None`` is not
     taken (it would mean ``null``, which not every provider accepts),
@@ -104,3 +106,4 @@ class GenerationRequest(BaseRequest):
     instructions: str | MISSING = MISSING
     max_output_tokens: int | MISSING = Field(default=MISSING, gt=0)
     metadata: dict[str, str] | MISSING = MISSING
+    effort: Effort | MISSING = MISSING

@@ -91,6 +91,29 @@ class IncompleteReason(StrEnum):
 
 
 @unique
+class Effort(StrEnum):
+    """How much work the model puts into a response, for every provider.
+
+    The levels both providers share: OpenAI's ``reasoning.effort`` and
+    Anthropic's ``output_config.effort``. More effort trades speed and
+    cost for quality. A model that does not take a level answers 400.
+
+    Attributes:
+        LOW: The least work, the fastest and cheapest.
+        MEDIUM: A balance of quality, speed and cost.
+        HIGH: More work for harder tasks.
+        XHIGH: More still, for the hardest tasks.
+        MAX: The most work the model can put in.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
+@unique
 class GenerationEventType(StrEnum):
     """``type`` of a shared generation event.
 
