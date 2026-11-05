@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- towncrier release notes start -->
 
+## [0.9.0] - 2026-11-05
+
+### Added
+
+- `GenerationRequest` and `client.generation.create()`/`stream()` take
+  `effort=`, an `Effort` (`low`, `medium`, `high`, `xhigh`, `max`): how much
+  work the model puts into the response, sent as OpenAI's `reasoning.effort`
+  and Anthropic's `output_config.effort`. Left out, nothing is sent and the
+  model's default applies. `CreateResponse`/`StreamResponse` gain `reasoning`
+  (`Reasoning`) and `CreateMessage`/`StreamMessage` `output_config`
+  (`OutputConfig`), as the providers' schemas define them.
+- `GenerationRequest` and `client.generation` take `output_schema=`, a JSON
+  Schema the response `text` then follows as JSON: OpenAI's `text.format`
+  (`json_schema`, `strict: true`, named by
+  `OpenAIGenerationAdapter(schema_name=...)`, `"output"` by default) and
+  Anthropic's `output_config.format`. The schema is sent as it is.
+  `CreateResponse`/`StreamResponse` gain `text` (`TextConfig`) and Anthropic's
+  `OutputConfig` its `format`; `JSONSchema` and `JSONValue` are in
+  `aiollm.types.requests`.
+- `GenerationResponse.reasoning` and `CompletedEvent.reasoning` hold a summary
+  of the model's reasoning, and `stream()` yields it as `ReasoningDeltaEvent`s,
+  when the request asks for one through `provider_options`: OpenAI's
+  `{"reasoning": {"summary": "auto"}}` (`OpenAIReasoningOptions`, merged with
+  the shared `effort`) or Anthropic's `{"thinking": {"type": "adaptive",
+  "display": "summarized"}}` (`thinking`, a new field of `CreateMessage`).
+  OpenAI's `ReasoningItem` and `ReasoningSummaryTextDeltaEvent` and Anthropic's
+  `ThinkingBlock` and `ThinkingDelta` are modeled.
+
+### Changed
+
+- **Breaking:** `GenerationRequest.metadata` is replaced by `end_user_id`, an
+  opaque id of the end user (a hash, never personal data) that both providers
+  use to detect abuse: OpenAI's `safety_identifier` (up to 128 characters, now
+  a field of `CreateResponse`) and Anthropic's `metadata.user_id` (up to 512).
+  The shared `metadata` meant different things (free-form pairs stored by
+  OpenAI, only `user_id` at Anthropic). Pass `end_user_id=...` where you passed
+  `metadata={"user_id": ...}`, and OpenAI's free-form pairs as
+  `provider_options={"metadata": {...}}` (`OpenAIGenerationOptions`).
+- **Breaking:** a stream's reasoning summary pieces (OpenAI's
+  `response.reasoning_summary_text.delta`, Anthropic's non-empty
+  `thinking_delta`) come as `ReasoningDeltaEvent` instead of `OtherEvent`, and
+  `GenerationEventType` has `REASONING_DELTA`; code that matched them as
+  `OtherEvent` matches `ReasoningDeltaEvent` now. OpenAI's `reasoning` output
+  items and Anthropic's `thinking` blocks are `ReasoningItem` and
+  `ThinkingBlock`, no longer `UnknownOutputItem` and `UnknownBlock`.
+- `client.generation` of `AnthropicClient` sends `max_tokens` 16000, not 1024,
+  when a request has no `max_output_tokens`: thinking is always on for the
+  Claude 5.x models and counts toward `max_tokens`, so 1024 could end a reply
+  in its thinking, with little or no text. Pass `default_max_tokens=` to the
+  client to keep another value.
+
 ## [0.8.0] - 2026-11-05
 
 ### Added
@@ -968,7 +1019,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/GrehBan/aiollm/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/GrehBan/aiollm/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/GrehBan/aiollm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/GrehBan/aiollm/compare/v0.5.0...v0.6.0
