@@ -117,13 +117,22 @@ class IGenerationAdapter[
     Besides converting, it takes the provider's own options of one call
     (``provider_options``): fields that only its provider has, such as
     OpenAI's ``store``. ``OptionsT`` is a ``TypedDict`` of them.
+
+    Concurrent calls share the adapter and its shallow copies, so an
+    adapter, its conversions included, holds no mutable state that
+    outlives one method call; what belongs to one call (the options)
+    lives only on the copy ``with_options`` makes.
     """
 
     def with_options(self, options: OptionsT, /) -> Self:
         """Return a copy that adds the options to every method it builds.
 
         The adapter itself is left as it is, so concurrent calls with
-        other options do not meet.
+        other options do not meet. The copy may be shallow: it shares
+        the conversions, which hold no mutable state. Every key is
+        checked, also by an adapter that takes no options
+        (``checked_options(options, NoProviderOptions, provider)``), so
+        a key is never dropped silently.
 
         Args:
             options: The provider's options of one call.

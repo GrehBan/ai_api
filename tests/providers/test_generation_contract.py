@@ -101,6 +101,7 @@ class Case:
         bad_request: Body of a 400 response.
         raw_stream: Builds the provider's own stream method.
         options: Valid provider options, sent as they are.
+        other_options: Other valid options, for a concurrent call.
         bad_option: A provider option with a value the method refuses.
     """
 
@@ -122,6 +123,7 @@ class Case:
     bad_request: dict[str, Any]
     raw_stream: Callable[[], BaseStreamMethod[Any]]
     options: dict[str, Any]
+    other_options: dict[str, Any]
     bad_option: dict[str, Any]
 
     @property
@@ -194,6 +196,7 @@ OPENAI = Case(
     },
     raw_stream=lambda: StreamResponse(model="model-1", input="Hi"),
     options={"store": False, "temperature": 0.2},
+    other_options={"store": True, "top_p": 0.5},
     bad_option={"temperature": 5},
 )
 
@@ -238,6 +241,7 @@ ANTHROPIC = Case(
     },
     raw_stream=lambda: StreamMessage(**anthropic.request()),
     options={"stop_sequences": ["END"]},
+    other_options={"stop_sequences": ["STOP", "HALT"]},
     bad_option={"stop_sequences": "END"},
 )
 
@@ -370,6 +374,63 @@ async def test_provider_options_reach_the_wire_of_their_call_only(
     with_options, without = (json.loads(r.body) for r in recorder.requests)
     assert {key: with_options[key] for key in case.options} == case.options
     assert set(case.options).isdisjoint(without)
+
+
+async def concurrently(
+    client: Any,
+    mode: str,
+    calls: list[dict[str, Any]],
+) -> None:
+    """Run one call per options at once on the client's one resource."""
+
+    async def call(options: dict[str, Any]) -> None:
+        if mode == "create":
+            await client.generation.create(REQUEST, provider_options=options)
+        else:
+            async with client.generation.stream(
+                REQUEST, provider_options=options
+            ) as stream:
+                await stream.final()
+
+    await asyncio.gather(*(call(options) for options in calls))
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_concurrent_calls_keep_their_own_provider_options(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    # The calls share the resource and its adapter; each copy carries
+    # only its own options, and a later call without any sends none: an
+    # adapter that kept a call's options on itself would leak them there.
+    calls = [case.options, case.other_options, case.options]
+    for _ in [*calls, None]:
+        if mode == "create":
+            recorder.reply(Reply(json=case.response))
+        else:
+            recorder.reply(events(case.stream))
+
+    async with client:
+        await concurrently(client, mode, calls)
+        if mode == "create":
+            await client.generation.create(REQUEST)
+        else:
+            async with client.generation.stream(REQUEST) as stream:
+                await stream.final()
+
+    keys = set(case.options) | set(case.other_options)
+    *sent, last = [
+        {key: body[key] for key in keys if key in body}
+        for body in (json.loads(r.body) for r in recorder.requests)
+    ]
+
+    def key(options: dict[str, Any]) -> str:
+        return json.dumps(options, sort_keys=True)
+
+    assert sorted(map(key, sent)) == sorted(map(key, calls))
+    assert last == {}
 
 
 @pytest.mark.parametrize("mode", ["create", "stream"])

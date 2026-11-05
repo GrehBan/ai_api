@@ -21,6 +21,7 @@ from aiollm.adapters.base import (
     BaseStreamAdapter,
 )
 from aiollm.adapters.protocols import ICompositeAdapter
+from aiollm.adapters.validation import checked_options
 from aiollm.enums import (
     BodyFormat,
     GenerationEventType,
@@ -29,6 +30,7 @@ from aiollm.enums import (
     ResponseFormat,
     Role,
 )
+from aiollm.exceptions import RequestValidationError
 from aiollm.http.exceptions.response import APIResponseError
 from aiollm.http.exceptions.transport import APIStreamInterruptedError
 from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
@@ -273,6 +275,7 @@ class ResponsesAdapter(
     provider = Provider.OPENAI
 
     def with_options(self, options: NoProviderOptions, /) -> Self:
+        checked_options(options, NoProviderOptions, self.provider)
         return self
 
     def to_method(self, request: GenerationRequest) -> Create:
@@ -417,6 +420,31 @@ async def test_generation_resource_creates() -> None:
         "model": "gpt",
         "input": "Hi",
     }
+
+
+async def test_an_adapter_without_options_refuses_a_key() -> None:
+    # An untyped caller gets past NoProviderOptions; the adapter's check
+    # refuses the key instead of dropping it, before anything is sent.
+    transport = FakeTransport([BufferedResponse(200, {}, RESPONSE_BODY)])
+    options: Any = {"store": True}
+
+    with pytest.raises(RequestValidationError, match="store") as caught:
+        await GenerationResource(transport, ADAPTER).create(
+            REQUEST, provider_options=options
+        )
+
+    assert caught.value.field == "store"
+    assert transport.execute_calls == []
+
+
+async def test_an_adapter_without_options_takes_an_empty_dict() -> None:
+    transport = FakeTransport([BufferedResponse(200, {}, RESPONSE_BODY)])
+
+    response = await GenerationResource(transport, ADAPTER).create(
+        REQUEST, provider_options={}
+    )
+
+    assert response.text == "Hello"
 
 
 async def test_generation_resource_streams_and_closes_on_break() -> None:

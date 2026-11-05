@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, is_typeddict
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
+from typing_extensions import is_typeddict
 
 from aiollm.enums import Role
 from aiollm.exceptions import RequestValidationError
@@ -41,6 +42,8 @@ def checked_options(
             key that is not one of the provider's options; ``field`` is
             the first such key.
     """
+    # typing_extensions' check: typing's does not know a TypedDict made
+    # by typing_extensions (a closed one, such as NoProviderOptions).
     if not is_typeddict(options_type):
         message = f"{options_type!r} is not a TypedDict"
         raise TypeError(message)
