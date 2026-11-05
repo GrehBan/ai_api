@@ -1,0 +1,63 @@
+# Default
+* text=auto
+
+# Python source
+*.py        text eol=lf diff=python
+*.pyi       text eol=lf diff=python
+*.pyw       text eol=lf diff=python
+*.py3       text eol=lf diff=python
+*.pyx       text eol=lf diff=python
+*.pxd       text eol=lf diff=python
+
+# Configuration and documentation
+*.toml      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.jsonl     text eol=lf
+*.ini       text eol=lf
+*.cfg       text eol=lf
+*.md        text eol=lf
+*.rst       text eol=lf
+*.txt       text eol=lf
+
+# Scripts
+*.sh        text eol=lf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=lf
+
+# Jupyter notebooks
+*.ipynb     text eol=lf
+
+# Python bytecode and compiled extensions
+*.pyc       binary
+*.pyo       binary
+*.pyd       binary
+*.so        binary
+*.dll       binary
+*.dylib     binary
+
+# Serialized objects and databases
+*.p         binary
+*.pkl       binary
+*.pickle    binary
+*.db        binary
+*.sqlite    binary
+*.sqlite3   binary
+
+# Archives and distributions
+*.pyz       binary
+*.zip       binary
+*.whl       binary
+*.gz        binary
+*.tar       binary
+*.7z        binary
+
+# Images
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
