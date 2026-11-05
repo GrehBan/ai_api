@@ -9,8 +9,6 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Self
 
-from tenacity import RetryCallState
-
 from aiollm.http.exceptions.protocols import IErrorResolver
 from aiollm.http.headers import Headers
 from aiollm.http.protocols import IAPI, HeadersType, IAuth, IHeaders
@@ -22,6 +20,7 @@ from aiollm.serialization.json import JsonDumps, JsonLoads, dumps, loads
 from aiollm.session.protocols import Timeout
 from aiollm.session.retry.policy import DEFAULT_RETRY_POLICY, RetryPolicy
 from aiollm.session.retry.runner import build_retrying
+from aiollm.session.retry.state import RetryState
 from aiollm.types.files import closing_source
 
 if TYPE_CHECKING:
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _log_retry(state: RetryCallState) -> None:
+def _log_retry(state: RetryState, delay: float) -> None:
     """Log a retry before its wait: the next attempt, the wait, the cause.
 
     The failed attempt's error is not logged elsewhere, since it is not
@@ -39,15 +38,14 @@ def _log_retry(state: RetryCallState) -> None:
     message: either may hold a file path or a value of the request.
 
     Args:
-        state: Tenacity's state of the current retry loop.
+        state: The failed attempt.
+        delay: Seconds to wait before the next one.
     """
-    exc = state.outcome.exception() if state.outcome else None
-    delay = state.next_action.sleep if state.next_action else 0.0
-    notes = len(getattr(exc, "__notes__", ()))
+    notes = len(getattr(state.error, "__notes__", ()))
     logger.warning(
         "Retrying request after %s: attempt=%d, delay=%.2fs%s",
-        type(exc).__name__,
-        state.attempt_number + 1,
+        type(state.error).__name__,
+        state.attempt + 1,
         delay,
         f", notes={notes}" if notes else "",
     )

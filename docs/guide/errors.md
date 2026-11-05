@@ -99,8 +99,8 @@ The reasons behind these rules:
 | `max_attempts` | `4` | Attempts in total, the first one included; `1` turns retries off |
 | `deadline` | `900` | Seconds after the first attempt after which no retry starts; `None` for no limit |
 | `max_retry_after` | `60` | Longest `Retry-After` worth waiting for, in seconds |
-| `backoff` | `FullJitterBackoff()` | Gives the wait before each retry, from a `RetryState`; the session still waits at least `Retry-After` |
-| `retry_if` | `None` | Asked about each transient error, the last attempt's too; `False` raises it at once |
+| `backoff` | `FullJitterBackoff()` | Gives the wait before each retry, from a `RetryState`; the session still waits at least `Retry-After`. Not called after the last attempt `max_attempts` allows; with a `deadline`, called for a wait the deadline then cuts, since the deadline depends on it |
+| `retry_if` | `None` | Asked about each transient error that `max_attempts` allows to retry, never the last attempt's; `False` raises it at once |
 
 A `RetryState` holds the failed attempt's number (`attempt`, from 1), the seconds since the first attempt (`elapsed`) and its `error`, always a transient `APIStatusError` or `APITransportError`. `FullJitterBackoff(multiplier=0.5, max_delay=30)` draws the wait after attempt *n* from zero to `multiplier * 2 ** (n - 1)`, capped at `max_delay`.
 

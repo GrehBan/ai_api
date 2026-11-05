@@ -120,13 +120,19 @@ def is_retried(state: RetryCallState, policy: RetryPolicy) -> bool:
         policy: The call's retry policy.
 
     Returns:
-        ``False`` for a success and for an error ``should_retry``
-        refuses; otherwise what the policy's ``retry_if`` answers, or
-        ``True`` without one.
+        ``False`` for a success, for an error ``should_retry`` refuses
+        and after the last attempt ``max_attempts`` allows; otherwise
+        what the policy's ``retry_if`` answers, or ``True`` without one.
     """
     error = state.outcome.exception() if state.outcome else None
 
     if error is None or not should_retry(error, policy.max_retry_after):
+        return False
+
+    # Tenacity asks for the wait before it checks the stop, so without
+    # this the last attempt would reach retry_if and backoff too, though
+    # no retry can follow it.
+    if state.attempt_number >= policy.max_attempts:
         return False
 
     if policy.retry_if is None:
@@ -208,7 +214,7 @@ def _stop(policy: RetryPolicy) -> stop_base:
 def build_retrying(
     policy: RetryPolicy,
     *,
-    before_sleep: Callable[[RetryCallState], None],
+    before_sleep: Callable[[RetryState, float], None],
 ) -> AsyncRetrying:
     """Build the tenacity loop of one call.
 
@@ -217,7 +223,9 @@ def build_retrying(
 
     Args:
         policy: The call's retry policy.
-        before_sleep: Called before each wait, to log the retry.
+        before_sleep: Called before each wait with the failed attempt
+            and the wait in seconds, to log the retry; it never sees
+            tenacity's own state.
 
     Returns:
         A retry loop to call with the attempt's coroutine function.
@@ -226,6 +234,8 @@ def build_retrying(
         retry=lambda state: is_retried(state, policy),
         wait=lambda state: calculate_wait(state, policy),
         stop=_stop(policy),
-        before_sleep=before_sleep,
+        before_sleep=lambda state: before_sleep(
+            _retry_state(state), state.upcoming_sleep
+        ),
         reraise=True,
     )
