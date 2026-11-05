@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Self, TypedDict
+from typing import Annotated, Self
 
 from pydantic import MISSING, ConfigDict, Field
+from typing_extensions import TypedDict
 
 from aiollm.enums import Role
 from aiollm.types.base import BaseAPIType
@@ -56,11 +57,14 @@ class Turn(BaseAPIType):
         return cls(role=Role.ASSISTANT, content=content)
 
 
-class NoProviderOptions(TypedDict, total=False):
+class NoProviderOptions(TypedDict, total=False, closed=True):
     """Provider options of a generation resource that takes none.
 
-    The default of ``GenerationResource``'s ``OptionsT``: only ``{}``
-    matches it, so a resource without options of its own refuses any.
+    The default of ``GenerationResource``'s ``OptionsT``. It is closed
+    (PEP 728): only ``{}`` matches it, not even a ``TypedDict`` with keys
+    of its own, which an open empty ``TypedDict`` would take. An adapter
+    without options still checks what it is given at run time with
+    ``checked_options(options, NoProviderOptions, provider)``.
     """
 
 

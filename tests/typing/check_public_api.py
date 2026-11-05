@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Annotated, Literal, Self, Unpack, assert_type
+from typing import Annotated, Literal, Self, TypedDict, Unpack, assert_type
 
 from pydantic import Field
 
@@ -41,6 +41,7 @@ from aiollm.adapters import (
     IConversion,
 )
 from aiollm.adapters import Stop as GenerationStop
+from aiollm.adapters.validation import checked_options
 from aiollm.client import IClient
 from aiollm.http import IAPI, BearerAuth
 from aiollm.methods import IAPIMethod, IStreamMethod
@@ -412,6 +413,7 @@ class TextGeneration(
     provider = Provider.GENERIC
 
     def with_options(self, options: NoProviderOptions, /) -> Self:
+        checked_options(options, NoProviderOptions, self.provider)
         return self
 
     def to_method(self, request: GenerationRequest) -> GetText:
@@ -663,3 +665,14 @@ async def neutral_resource_has_no_options(
 ) -> None:
     await generation.create(request, provider_options={})  # type: ignore[call-overload]
     await generation.create(request, extra=1)  # type: ignore[call-overload]
+
+
+class StoreOptions(TypedDict, total=False):
+    store: bool
+
+
+def no_provider_options_is_closed(other: StoreOptions) -> None:
+    none: NoProviderOptions = {}
+    keyed: NoProviderOptions = {"store": True}  # type: ignore[typeddict-unknown-key]
+    taken: NoProviderOptions = other  # type: ignore[assignment]
+    assert none == keyed == taken

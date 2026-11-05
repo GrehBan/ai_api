@@ -52,6 +52,14 @@ The version follows [Semantic Versioning](https://semver.org/). Before 1.0 the p
 
 Pin the minor version (`aiollm ~= 0.5.0`) to get fixes without breaking changes. Every breaking change is marked **Breaking** in the [changelog](../changelog.md), with how to migrate. From 1.0, breaking changes bump the major version and are announced by a deprecation warning one release before.
 
+A version is not a decimal and not a countdown: after 0.9 comes 0.10, then 0.11, so breaking changes do not bring 1.0 closer. 1.0 is a promise that the public API stays as it is, not a mark of a finished library, and it is released when these hold:
+
+- two releases in a row without a breaking change;
+- the core (methods, sessions, HTTP primitives, errors) and the shared generation layer are both declared stable;
+- the library has users outside the project, and their feedback is in.
+
+Before it, `1.0.0a1`, `1.0.0b1` and `1.0.0rc1` pre-releases may try the final API out; pip installs them only when asked with `--pre`. Features added after 1.0 bump the minor version (1.1, 1.2).
+
 The public API is what `aiollm` and the `__all__` of its packages export. Everything else (modules and helpers whose names start with `_`, the internal helper modules such as `aiollm.methods.fields`, log messages) may change in any release. The provider types follow the providers' own schemas, so a field can appear or change when the provider changes it.
 
 ## Limitations and roadmap
