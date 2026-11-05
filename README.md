@@ -1,4 +1,9 @@
-# aiollm
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GrehBan/aiollm/master/docs/assets/aiollm_dark.png">
+    <img alt="aiollm" src="https://raw.githubusercontent.com/GrehBan/aiollm/master/docs/assets/aiollm.png" width="420">
+  </picture>
+</h1>
 
 An async-first toolkit for building typed HTTP API clients, aimed at AI providers.
 

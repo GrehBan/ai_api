@@ -300,6 +300,10 @@ reportUnknownVariableType = false
 [tool.rumdl.MD024]
 siblings_only = true
 
+[tool.rumdl.MD033]
+# The README logo: <picture> switches it with the light or dark theme.
+allowed_elements = ["h1", "img", "picture", "source"]
+
 [tool.rumdl.per-file-ignores]
 "CHANGELOG.md" = ["MD024"]
 "README.md" = ["MD013"]
