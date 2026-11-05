@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- towncrier release notes start -->
 
+## [0.7.0] - 2026-11-05
+
+### Added
+
+- A contributing guide, `CONTRIBUTING.md` (also the site's Contributing page):
+  setting up with pip or uv, the checks, the docs, changelog fragments, what CI
+  requires, and directives for contributors who work with Claude.
+- Fuller package metadata on PyPI: maintainers, keywords, classifiers
+  (pre-alpha, asyncio, aiohttp, Pydantic 2, CPython 3.13–3.15, typed) and links
+  to the issue tracker and the home page; the author's address is now
+  `maximfeedback19@gmail.com`.
+- Retries are configured with a `RetryPolicy`: the number of attempts
+  (`max_attempts`, still 4 by default), the deadline, the longest `Retry-After`
+  worth waiting for, the backoff (`FullJitterBackoff` by default, or any
+  callable that takes a `RetryState`) and `retry_if`, which can refuse a
+  transient error. Give one to a session or a client as `retry_policy=`, or to
+  a single `send_request` or `stream` call to replace the session's for that
+  call. A policy only narrows what is retried: methods still opt in with
+  `__retryable__`, and only transient errors are retried. If `retry_if` or
+  `backoff` fails, its error keeps the request's error as its `__cause__`.
+- `client.generation.create()` and `stream()` take the options of the call,
+  `headers=`, `timeout=` and `retry_policy=`, as `send_request` does, and pass
+  them to the session unchanged for every provider: an idempotency key, a
+  longer limit for one generation or a single attempt no longer needs the
+  provider's own methods. The use cases of `aiollm.resources` pass them on too,
+  and `aiollm.session.CallOptions` names them for `**options`.
+
+### Changed
+
+- **Breaking:** `IUseCase.__call__` and `IStreamUseCase.stream`, and the
+  abstract methods of `BaseUseCase`, `BaseStreamUseCase` and
+  `BaseCompositeUseCase`, take the options of the call as `**options:
+  Unpack[CallOptions]`. A use case of your own adds that parameter and passes
+  `**options` to `session.send_request` or `session.stream`; without it, type
+  checkers report an incompatible override.
+- **Breaking:** a provider client declares its shared resources with
+  `bind_resource`: `generation = bind_resource(GenerationResource[Response,
+  ResponseStreamEvent], MyGenerationAdapter)`, with `adapter_factory=` for an
+  adapter that takes options from the client. `BaseProviderClient` builds every
+  adapter before the session (a bad option still fails without one) and every
+  resource after it, and checks each adapter's provider when the class is
+  defined. `adapter_types` and `BaseProviderClient.adapter()` are removed.
+
+### Removed
+
+- **Breaking:** Sessions and provider clients no longer take `max_retry_after`
+  and `retry_deadline`, and sessions no longer have attributes of those names;
+  pass `retry_policy=RetryPolicy(max_retry_after=..., deadline=...)` instead
+  and read `session.retry_policy`. The DEBUG record of a `Retry-After` above
+  the limit now comes from the `aiollm.session.retry.runner` logger instead of
+  `aiollm.session.retry`.
+- **Breaking:** The import package and distribution are now named `aiollm`;
+  change imports from `ai_api` to `aiollm` and dependency declarations from
+  `ai-api` to `aiollm`.
+
+### Fixed
+
+- The README's quick start and the methods guide still said that a field set to
+  `None` is not sent. Since 0.5.0 a field left `MISSING` is not sent, and
+  `None` is sent as `null`; both now say so.
+
 ## [0.6.0] - 2026-11-02
 
 ### Added
@@ -863,14 +924,15 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/ai_api/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/GrehBan/ai_api/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/GrehBan/ai_api/compare/v0.4.4...v0.5.0
-[0.4.4]: https://github.com/GrehBan/ai_api/compare/v0.4.3...v0.4.4
-[0.4.3]: https://github.com/GrehBan/ai_api/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/GrehBan/ai_api/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/GrehBan/ai_api/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/GrehBan/ai_api/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/GrehBan/ai_api/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/GrehBan/ai_api/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/GrehBan/ai_api/compare/2b58dfc...v0.1.0
+[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/GrehBan/aiollm/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/GrehBan/aiollm/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/GrehBan/aiollm/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/GrehBan/aiollm/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/GrehBan/aiollm/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/GrehBan/aiollm/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/GrehBan/aiollm/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/GrehBan/aiollm/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/GrehBan/aiollm/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/GrehBan/aiollm/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/GrehBan/aiollm/compare/2b58dfc...v0.1.0
