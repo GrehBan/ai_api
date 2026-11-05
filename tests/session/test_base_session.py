@@ -429,6 +429,63 @@ async def test_a_custom_backoff_decides_the_wait(
     assert attempts == [1, 2]
 
 
+@pytest.mark.parametrize("max_attempts", [1, 3])
+async def test_the_last_attempt_asks_neither_retry_if_nor_backoff(
+    no_retry_wait: MagicMock,
+    max_attempts: int,
+) -> None:
+    # No retry can follow it, so a callable with a side effect (a backoff
+    # that counts retries) must not see it.
+    no_retry_wait.side_effect = calculate_wait
+    asked: list[int] = []
+    waited: list[int] = []
+
+    def retry_if(state: RetryState) -> bool:
+        asked.append(state.attempt)
+        return True
+
+    def backoff(state: RetryState) -> float:
+        waited.append(state.attempt)
+        return 0.0
+
+    transport = FakeTransport(
+        [failed(503)] * max_attempts,
+        retry_policy=RetryPolicy(
+            max_attempts=max_attempts, retry_if=retry_if, backoff=backoff
+        ),
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        await transport.send_request(buffered_method(retryable=True))
+
+    assert transport.attempts == max_attempts
+    assert asked == waited == list(range(1, max_attempts))
+
+
+async def test_a_deadline_asks_backoff_for_the_wait_it_would_cut(
+    no_retry_wait: MagicMock,
+) -> None:
+    # Whether the next wait ends after the deadline depends on the wait,
+    # so backoff is asked; then the deadline stops the retries.
+    no_retry_wait.side_effect = calculate_wait
+    waited: list[int] = []
+
+    def long_wait(state: RetryState) -> float:
+        waited.append(state.attempt)
+        return 60.0
+
+    transport = FakeTransport(
+        [failed(503), ok()],
+        retry_policy=RetryPolicy(deadline=1.0, backoff=long_wait),
+    )
+
+    with pytest.raises(ServiceUnavailableError):
+        await transport.send_request(buffered_method(retryable=True))
+
+    assert transport.attempts == 1
+    assert waited == [1]
+
+
 async def test_retries_stop_after_four_attempts() -> None:
     transport = FakeTransport([failed(503)] * 4 + [ok()])
 

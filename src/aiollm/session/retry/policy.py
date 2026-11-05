@@ -131,10 +131,13 @@ class RetryPolicy:
             seconds; an API that asks for longer gets its error raised
             at once.
         backoff: Computes the wait before each retry; the session waits
-            at least the error's ``Retry-After``.
-        retry_if: Called for each transient error, the last attempt's
-            too; ``False`` raises the error at once. ``None`` retries
-            every transient error.
+            at least the error's ``Retry-After``. Called only when
+            ``max_attempts`` allows another attempt; with a
+            ``deadline``, also for a wait the deadline then cuts.
+        retry_if: Called for each transient error that ``max_attempts``
+            allows to retry, never for the last attempt's; ``False``
+            raises the error at once. ``None`` retries every transient
+            error.
 
     Example:
         >>> patient = RetryPolicy(max_attempts=6, deadline=None)
