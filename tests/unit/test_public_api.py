@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib
+import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -43,6 +45,21 @@ def test_all_names_exist_and_are_sorted(name: str) -> None:
 
     assert exported == sorted(exported)
     assert all(hasattr(package, item) for item in exported)
+
+
+SNAPSHOT = Path(__file__).with_name("public_api.json")
+"""The public names of every package, as the last release left them."""
+
+
+def test_the_public_api_matches_its_snapshot() -> None:
+    # A public name added, renamed or removed must be a decision: update
+    # public_api.json in the same change, with a changelog fragment.
+    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    current = {
+        name: list(importlib.import_module(name).__all__) for name in PACKAGES
+    }
+
+    assert current == snapshot
 
 
 def test_root_reexports_the_error_tree() -> None:

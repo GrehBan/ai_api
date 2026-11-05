@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import socket
 import ssl
@@ -39,6 +40,7 @@ from aiollm.http.headers import SERVER_SOFTWARE, Headers
 from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
 from aiollm.serialization.values import BaseValueFormatter
 from aiollm.session.aiohttp import AiohttpSession
+from aiollm.session.retry import RetryPolicy
 from aiollm.types.base import BaseAPIType
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 
@@ -184,6 +186,50 @@ async def test_call_headers_are_not_kept(
 
     assert "X-Call" in recorder.requests[0].headers
     assert "X-Call" not in recorder.requests[1].headers
+
+
+async def test_concurrent_calls_keep_their_own_headers(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    # The headers of a call are built for that call only, so calls that
+    # run at once on one session never send each other's.
+    calls = [str(index) for index in range(8)]
+    recorder.reply(*[Reply()] * len(calls))
+
+    await asyncio.gather(
+        *(
+            session.send_request(Ping(), headers={"X-Call": call})
+            for call in calls
+        )
+    )
+
+    sent = [request.headers.getall("X-Call") for request in recorder.requests]
+    assert sorted(sent) == sorted([call] for call in calls)
+
+
+async def test_concurrent_calls_keep_their_own_retry_policy(
+    session: AiohttpSession,
+    recorder: Recorder,
+) -> None:
+    # Both first attempts fail before any retry can start, so the third
+    # request is the retry of the call whose policy allows one.
+    recorder.reply(Reply(status=503), Reply(status=503), Reply(body=b"ok"))
+
+    once, retried = await asyncio.gather(
+        session.send_request(
+            RetryablePing(),
+            headers={"X-Call": "once"},
+            retry_policy=RetryPolicy(max_attempts=1),
+        ),
+        session.send_request(RetryablePing(), headers={"X-Call": "retried"}),
+        return_exceptions=True,
+    )
+
+    assert isinstance(once, ServiceUnavailableError)
+    assert retried == b"ok"
+    assert [r.headers["X-Call"] for r in recorder.requests][2] == "retried"
+    assert len(recorder.requests) == 3
 
 
 async def test_path_query_and_json_body_in_one_request(
