@@ -97,6 +97,30 @@ def test_unset_fields_are_not_sent() -> None:
     assert method.get_body_map() == {"model": "m", "input": "Hi"}
 
 
+def test_the_schema_name_comes_from_the_adapter() -> None:
+    # OpenAI requires a name with a JSON Schema; the shared request has
+    # none, so the adapter's setting gives it, as it is.
+    request = GenerationRequest(
+        model="m", input="Hi", output_schema={"type": "object"}
+    )
+    named = OpenAIGenerationAdapter(schema_name="answer")
+
+    assert named.to_method(request).text == {
+        "format": {
+            "type": "json_schema",
+            "name": "answer",
+            "schema": {"type": "object"},
+            "strict": True,
+        }
+    }
+    assert (
+        adapter.to_stream_method(request).get_body_map()["text"]["format"][
+            "name"
+        ]
+        == "output"
+    )
+
+
 @pytest.mark.parametrize(
     ("changes", "field"),
     [

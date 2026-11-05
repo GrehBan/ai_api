@@ -57,6 +57,15 @@ class Turn(BaseAPIType):
         return cls(role=Role.ASSISTANT, content=content)
 
 
+type JSONValue = (
+    str | int | float | bool | None | list[JSONValue] | dict[str, JSONValue]
+)
+"""A JSON value, as ``json.loads`` gives it."""
+
+type JSONSchema = dict[str, JSONValue]
+"""A JSON Schema, as a JSON object."""
+
+
 class NoProviderOptions(TypedDict, total=False, closed=True):
     """Provider options of a generation resource that takes none.
 
@@ -85,6 +94,10 @@ class GenerationRequest(BaseRequest):
         metadata: Free-form key-value pairs stored with the request.
         effort: How much work the model puts into the response; the
             model's own default when left out.
+        output_schema: A JSON Schema the response text must follow; the
+            text is then JSON. Each provider takes its own subset of
+            JSON Schema and answers 400 to the rest; the schema is sent
+            as it is, never rewritten.
 
     An optional field is left out until it is given; ``None`` is not
     taken (it would mean ``null``, which not every provider accepts),
@@ -107,3 +120,4 @@ class GenerationRequest(BaseRequest):
     max_output_tokens: int | MISSING = Field(default=MISSING, gt=0)
     metadata: dict[str, str] | MISSING = MISSING
     effort: Effort | MISSING = MISSING
+    output_schema: JSONSchema | MISSING = MISSING

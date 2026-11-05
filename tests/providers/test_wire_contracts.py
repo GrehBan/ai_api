@@ -102,6 +102,16 @@ OPENAI = Case(
             "context": "auto",
             "mode": "standard",
         },
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer",
+                "schema": {"type": "object"},
+                "description": "The answer",
+                "strict": True,
+            },
+            "verbosity": "low",
+        },
         "previous_response_id": "resp_1",
         "store": False,
         "temperature": 0.5,
@@ -132,7 +142,10 @@ ANTHROPIC = Case(
         "max_tokens": 64,
         "system": [{"type": "text", "text": "Be brief"}],
         "metadata": {"user_id": "u-1"},
-        "output_config": {"effort": "high"},
+        "output_config": {
+            "effort": "high",
+            "format": {"type": "json_schema", "schema": {"type": "object"}},
+        },
         "stop_sequences": ["END"],
     },
     response=Message,

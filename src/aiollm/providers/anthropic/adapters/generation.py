@@ -328,10 +328,29 @@ class AnthropicGenerationAdapter(
             ),
             "system": request.instructions,
             "metadata": request.metadata,
-            "output_config": (
-                MISSING
-                if request.effort is MISSING
-                else {"effort": request.effort.value}
-            ),
+            "output_config": _output_config(request),
             **self.provider_options,
         }
+
+
+def _output_config(request: GenerationRequest) -> dict[str, Any] | MISSING:
+    """Build ``output_config`` from the shared effort and output schema.
+
+    Args:
+        request: The shared request.
+
+    Returns:
+        The fields of ``output_config`` the request gives, or ``MISSING``
+        when it gives neither, so nothing is sent.
+    """
+    config: dict[str, Any] = {}
+
+    if request.effort is not MISSING:
+        config["effort"] = request.effort.value
+    if request.output_schema is not MISSING:
+        config["format"] = {
+            "type": "json_schema",
+            "schema": request.output_schema,
+        }
+
+    return config or MISSING

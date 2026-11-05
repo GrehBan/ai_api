@@ -59,6 +59,19 @@ class Metadata(TypedDict, total=False):
 
 
 @with_config(ConfigDict(extra="forbid"))
+class JSONOutputFormat(TypedDict):
+    """Output that follows a JSON Schema.
+
+    Attributes:
+        type: Always ``json_schema``.
+        schema: The JSON Schema.
+    """
+
+    type: Literal["json_schema"]
+    schema: dict[str, Any]
+
+
+@with_config(ConfigDict(extra="forbid"))
 class OutputConfig(TypedDict, total=False):
     """Configuration of the output.
 
@@ -67,9 +80,11 @@ class OutputConfig(TypedDict, total=False):
     Attributes:
         effort: How much work the model puts into the response; thinking
             and the reply both count.
+        format: A JSON Schema the response must follow.
     """
 
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None
+    format: JSONOutputFormat | None
 
 
 class MessageParams(BaseModel):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiollm.providers.anthropic.methods.base import (
     VERSION_HEADERS,
+    JSONOutputFormat,
     MessageParam,
     MessageParams,
     Metadata,
@@ -16,6 +17,7 @@ from aiollm.providers.anthropic.methods.messages import (
 
 __all__ = [
     "CreateMessage",
+    "JSONOutputFormat",
     "MessageParam",
     "MessageParams",
     "Metadata",

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from aiollm.enums import Effort
     from aiollm.http.protocols import HeadersType
     from aiollm.session.retry.policy import RetryPolicy
-    from aiollm.types.requests.generation import Turn
+    from aiollm.types.requests.generation import JSONSchema, Turn
 
 
 class GenerationResource[
@@ -95,6 +95,7 @@ class GenerationResource[
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
         effort: Effort | MISSING = MISSING,
+        output_schema: JSONSchema | MISSING = MISSING,
         provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
@@ -170,6 +171,7 @@ class GenerationResource[
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
         effort: Effort | MISSING = MISSING,
+        output_schema: JSONSchema | MISSING = MISSING,
         provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...

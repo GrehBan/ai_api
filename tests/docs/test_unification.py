@@ -108,6 +108,7 @@ TAKEN_AS_IS = {
     "GenerationRequest.max_output_tokens",
     "GenerationRequest.metadata",
     "GenerationRequest.effort",
+    "GenerationRequest.output_schema",
     "GenerationResponse.id",
     "GenerationResponse.provider",
     "GenerationResponse.model",

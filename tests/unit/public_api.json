@@ -153,6 +153,7 @@
   ],
   "aiollm.providers.anthropic.methods": [
     "CreateMessage",
+    "JSONOutputFormat",
     "MessageParam",
     "MessageParams",
     "Metadata",
@@ -198,7 +199,11 @@
     "Metadata",
     "Reasoning",
     "ResponseParams",
-    "StreamResponse"
+    "StreamResponse",
+    "TextConfig",
+    "TextFormatJSONObject",
+    "TextFormatJSONSchema",
+    "TextFormatText"
   ],
   "aiollm.providers.openai.types": [
     "BaseContentEvent",
@@ -324,6 +329,8 @@
   "aiollm.types.requests": [
     "BaseRequest",
     "GenerationRequest",
+    "JSONSchema",
+    "JSONValue",
     "NoProviderOptions",
     "Turn"
   ],

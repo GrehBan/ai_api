@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import MISSING
 
@@ -47,6 +47,10 @@ if TYPE_CHECKING:
     from aiollm.providers.openai.types.responses import ResponseUsage
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
+
+
+DEFAULT_SCHEMA_NAME: Final = "output"
+"""``name`` of a JSON Schema format when the adapter is given none."""
 
 
 class OpenAIGenerationAdapter(
@@ -96,18 +100,22 @@ class OpenAIGenerationAdapter(
             ResponseUsage, TokenUsage
         ] = USAGE_CONVERSION,
         stop_conversion: IConversion[Response, Stop] = STOP_CONVERSION,
+        schema_name: str = DEFAULT_SCHEMA_NAME,
     ) -> None:
-        """Store the conversions.
+        """Store the conversions and the name of an output schema.
 
         Args:
             input_conversion: Turns the shared ``input`` into OpenAI's.
             usage_conversion: Turns OpenAI's ``ResponseUsage`` into
                 shared counts.
             stop_conversion: Tells how a finished response stopped.
+            schema_name: The ``name`` OpenAI requires with a JSON Schema
+                format; the shared ``output_schema`` has none.
         """
         self.input_conversion = input_conversion
         self.usage_conversion = usage_conversion
         self.stop_conversion = stop_conversion
+        self.schema_name = schema_name
         self.provider_options: dict[str, Any] = {}
 
     def with_options(self, options: OpenAIGenerationOptions, /) -> Self:
@@ -288,6 +296,18 @@ class OpenAIGenerationAdapter(
                 MISSING
                 if request.effort is MISSING
                 else {"effort": request.effort.value}
+            ),
+            "text": (
+                MISSING
+                if request.output_schema is MISSING
+                else {
+                    "format": {
+                        "type": "json_schema",
+                        "name": self.schema_name,
+                        "schema": request.output_schema,
+                        "strict": True,
+                    }
+                }
             ),
             **self.provider_options,
         }

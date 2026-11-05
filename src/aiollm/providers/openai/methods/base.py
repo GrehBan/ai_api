@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from annotated_types import MaxLen
 from pydantic import (
@@ -48,6 +48,62 @@ class Reasoning(TypedDict, total=False):
     mode: str
 
 
+@with_config(ConfigDict(extra="forbid"))
+class TextFormatText(TypedDict):
+    """Plain text output, the default.
+
+    Attributes:
+        type: Always ``text``.
+    """
+
+    type: Literal["text"]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class TextFormatJSONSchema(TypedDict):
+    """Output that follows a JSON Schema.
+
+    Attributes:
+        type: Always ``json_schema``.
+        name: Name of the format; letters, digits, ``_`` and ``-``.
+        schema: The JSON Schema.
+        description: What the format is for.
+        strict: Whether the output must follow the schema exactly.
+    """
+
+    type: Literal["json_schema"]
+    name: str
+    schema: dict[str, Any]
+    description: NotRequired[str]
+    strict: NotRequired[bool | None]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class TextFormatJSONObject(TypedDict):
+    """Output that is some JSON object, the older JSON mode.
+
+    Attributes:
+        type: Always ``json_object``.
+    """
+
+    type: Literal["json_object"]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class TextConfig(TypedDict, total=False):
+    """Configuration of the text output.
+
+    Any other key is rejected before the request is sent.
+
+    Attributes:
+        format: Plain text, a JSON Schema or any JSON object.
+        verbosity: How long the response is.
+    """
+
+    format: TextFormatText | TextFormatJSONSchema | TextFormatJSONObject
+    verbosity: Literal["low", "medium", "high"] | None
+
+
 class ResponseParams(BaseModel):
     """Request fields of creating a response, buffered or streamed.
 
@@ -68,6 +124,7 @@ class ResponseParams(BaseModel):
         metadata: Key-value pairs stored with the response.
         reasoning: Configuration of a reasoning model, such as its
             effort.
+        text: Configuration of the text output, such as a JSON Schema.
         previous_response_id: Response to continue from.
         store: Whether OpenAI stores the response; ``True`` by default.
         temperature: Sampling temperature, 0 to 2.
@@ -80,6 +137,7 @@ class ResponseParams(BaseModel):
     max_output_tokens: int | None | MISSING = Field(default=MISSING, ge=16)
     metadata: Metadata | None | MISSING = MISSING
     reasoning: Reasoning | None | MISSING = MISSING
+    text: TextConfig | MISSING = MISSING
     previous_response_id: str | None | MISSING = MISSING
     store: bool | None | MISSING = MISSING
     temperature: float | None | MISSING = Field(default=MISSING, ge=0, le=2)

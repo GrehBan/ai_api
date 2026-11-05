@@ -104,6 +104,7 @@ class Case:
         other_options: Other valid options, for a concurrent call.
         bad_option: A provider option with a value the method refuses.
         effort: What ``effort=Effort.HIGH`` becomes in the body.
+        output_schema: What ``SCHEMA`` with ``Effort.HIGH`` becomes.
     """
 
     provider: Provider
@@ -127,6 +128,7 @@ class Case:
     other_options: dict[str, Any]
     bad_option: dict[str, Any]
     effort: dict[str, Any]
+    output_schema: dict[str, Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -201,6 +203,17 @@ OPENAI = Case(
     other_options={"store": True, "top_p": 0.5},
     bad_option={"temperature": 5},
     effort={"reasoning": {"effort": "high"}},
+    output_schema={
+        "reasoning": {"effort": "high"},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "output",
+                "schema": {"type": "object", "required": ["n"]},
+                "strict": True,
+            }
+        },
+    },
 )
 
 ANTHROPIC = Case(
@@ -247,6 +260,15 @@ ANTHROPIC = Case(
     other_options={"stop_sequences": ["STOP", "HALT"]},
     bad_option={"stop_sequences": "END"},
     effort={"output_config": {"effort": "high"}},
+    output_schema={
+        "output_config": {
+            "effort": "high",
+            "format": {
+                "type": "json_schema",
+                "schema": {"type": "object", "required": ["n"]},
+            },
+        }
+    },
 )
 
 
@@ -370,6 +392,38 @@ async def test_effort_reaches_the_wire(
 
     body = json.loads(recorder.last.body)
     assert {key: body[key] for key in case.effort} == case.effort
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_an_output_schema_reaches_the_wire_as_it_is(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    # With effort too: Anthropic sends both in one output_config.
+    if mode == "create":
+        recorder.reply(Reply(json=case.response))
+    else:
+        recorder.reply(events(case.stream))
+    request = REQUEST.model_copy(
+        update={
+            "effort": Effort.HIGH,
+            "output_schema": {"type": "object", "required": ["n"]},
+        }
+    )
+
+    async with client:
+        if mode == "create":
+            await client.generation.create(request)
+        else:
+            async with client.generation.stream(request) as stream:
+                await stream.final()
+
+    body = json.loads(recorder.last.body)
+    assert {key: body[key] for key in case.output_schema} == (
+        case.output_schema
+    )
 
 
 @pytest.mark.parametrize("mode", ["create", "stream"])
