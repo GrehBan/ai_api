@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, Self, Unpack, overload
+from typing import TYPE_CHECKING, Any, Unpack, overload
 
 from pydantic import MISSING
 
@@ -52,9 +51,10 @@ class GenerationResource[
     providers' SDKs do, or a ready ``GenerationRequest``; not both. The
     options of the call (``headers``, ``timeout``, ``retry_policy``) are
     passed on to the session, as ``send_request`` takes them. The
-    provider's own fields, which the shared request does not hold, are
-    set with ``with_options``, which code that works with any provider
-    (``IGenerationResource``) does not have.
+    provider's own fields of a call, which the shared request does not
+    hold, go in ``provider_options``, a ``TypedDict`` of the provider;
+    code that works with any provider (``IGenerationResource``) has no
+    such parameter.
 
     Example:
         >>> generation = GenerationResource(session, ResponsesAdapter())
@@ -83,38 +83,6 @@ class GenerationResource[
             session, adapter, terminal=GENERATION_TERMINAL
         )
 
-    def with_options(self, options: OptionsT, /) -> Self:
-        """Return a copy that sends the provider's own options.
-
-        The options are fields that only this provider has, such as
-        OpenAI's ``store``; a key left out is not sent. The copy shares
-        the session, and this resource is left as it is, so it can be
-        kept for many calls.
-
-        Args:
-            options: The provider's options, a ``TypedDict`` such as
-                ``OpenAIGenerationOptions``.
-
-        Returns:
-            A resource whose requests carry the options.
-
-        Raises:
-            RequestValidationError: A key is not one of the provider's
-                options; the shared fields are set in the request. An
-                invalid value is raised when a request is built.
-
-        Example:
-            >>> unstored = client.generation.with_options({"store": False})
-            >>> response = await unstored.create(model="gpt-5", input="Hi")
-        """
-        adapter = self._adapter.with_options(options)
-        resource = copy.copy(self)
-        resource._adapter = adapter
-        resource._generate = AdapterCompositeUseCase(
-            self.session, adapter, terminal=GENERATION_TERMINAL
-        )
-        return resource
-
     @overload
     async def create(
         self,
@@ -125,6 +93,7 @@ class GenerationResource[
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
@@ -133,6 +102,8 @@ class GenerationResource[
         self,
         request: GenerationRequest,
         /,
+        *,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
 
@@ -144,6 +115,7 @@ class GenerationResource[
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
         retry_policy: RetryPolicy | None = None,
+        provider_options: OptionsT | MISSING = MISSING,
         **fields: Any,
     ) -> GenerationResponse[RawT]:
         """Generate the whole response at once.
@@ -155,6 +127,9 @@ class GenerationResource[
                 limit; ``None`` to keep it.
             retry_policy: Retry policy of this request; ``None`` for the
                 session's.
+            provider_options: The provider's own fields of this request,
+                such as ``{"store": False}`` for OpenAI; a key left out
+                is not sent.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -164,8 +139,18 @@ class GenerationResource[
         Raises:
             TypeError: Both a request and fields are given.
             ValidationError: The fields do not make a valid request.
+            RequestValidationError: A key of ``provider_options`` is not
+                one of the provider's options, or a value is invalid;
+                raised before anything is sent.
         """
-        return await self._generate(
+        generate = self._generate
+        if provider_options is not MISSING:
+            generate = AdapterCompositeUseCase(
+                self.session,
+                self._adapter.with_options(provider_options),
+                terminal=GENERATION_TERMINAL,
+            )
+        return await generate(
             _request(request, fields),
             headers=headers,
             timeout=timeout,
@@ -182,6 +167,7 @@ class GenerationResource[
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         metadata: dict[str, str] | MISSING = MISSING,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
@@ -190,6 +176,8 @@ class GenerationResource[
         self,
         request: GenerationRequest,
         /,
+        *,
+        provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...
 
@@ -201,6 +189,7 @@ class GenerationResource[
         headers: HeadersType | None = None,
         timeout: Timeout | None = None,
         retry_policy: RetryPolicy | None = None,
+        provider_options: OptionsT | MISSING = MISSING,
         **fields: Any,
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]:
         """Open a stream of generation events; use with ``async with``.
@@ -212,6 +201,9 @@ class GenerationResource[
                 limit; ``None`` to keep it.
             retry_policy: Retry policy of this request; ``None`` for the
                 session's.
+            provider_options: The provider's own fields of this request,
+                such as ``{"store": False}`` for OpenAI; a key left out
+                is not sent.
             **fields: What to generate, as the fields of a
                 ``GenerationRequest``.
 
@@ -226,12 +218,18 @@ class GenerationResource[
         Raises:
             TypeError: Both a request and fields are given.
             ValidationError: The fields do not make a valid request.
+            RequestValidationError: A key of ``provider_options`` is not
+                one of the provider's options, or a value is invalid;
+                raised before anything is sent.
         """
+        adapter = self._adapter
+        if provider_options is not MISSING:
+            adapter = adapter.with_options(provider_options)
         # The use case's own stream would be a Stream that a
         # GenerationStream wraps once more; this builds it directly.
         return open_adapted_stream(
             self.session,
-            self._generate.adapter,
+            adapter,
             _request(request, fields),
             self._generate.terminal,
             GenerationStream,

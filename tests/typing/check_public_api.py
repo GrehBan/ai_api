@@ -634,24 +634,32 @@ def clients_bind_their_resources() -> None:
     assert_type(OpenAIClient.provider, Provider)
 
 
-def provider_options_are_typed() -> None:
+async def provider_options_are_typed(request: GenerationRequest) -> None:
     generation = OpenAIClient("sk").generation
-    tuned = generation.with_options({"store": False, "temperature": 0.2})
-    assert_type(
-        tuned,
-        GenerationResource[
-            Response, ResponseStreamEvent, OpenAIGenerationOptions
-        ],
+    response = await generation.create(
+        request, provider_options={"store": False, "temperature": 0.2}
     )
-    generation.with_options({"stor": False})  # type: ignore[typeddict-unknown-key]
-    generation.with_options({"temperature": "hot"})  # type: ignore[typeddict-item]
+    assert_type(response, GenerationResponse[Response])
+    await generation.create(
+        model="m", input="x", provider_options={"store": None}, timeout=5
+    )
+    async with generation.stream(
+        request, provider_options={"top_p": 0.5}
+    ) as events:
+        assert_type(events, GenerationStream[ResponseStreamEvent])
+    await generation.create(request, provider_options={"stor": False})  # type: ignore[call-overload]
+    await generation.create(request, provider_options={"temperature": "hot"})  # type: ignore[call-overload]
     anthropic = AnthropicClient("sk").generation
-    anthropic.with_options({"stop_sequences": ["END"]})
-    anthropic.with_options({"store": False})  # type: ignore[typeddict-unknown-key]
-    neutral_resource_has_no_options(generation)
+    await anthropic.create(
+        request, provider_options={"stop_sequences": ["END"]}
+    )
+    await anthropic.create(request, provider_options={"store": False})  # type: ignore[call-overload]
+    await neutral_resource_has_no_options(generation, request)
 
 
-def neutral_resource_has_no_options(
+async def neutral_resource_has_no_options(
     generation: IGenerationResource[Response, ResponseStreamEvent],
+    request: GenerationRequest,
 ) -> None:
-    generation.with_options({})  # type: ignore[attr-defined]
+    await generation.create(request, provider_options={})  # type: ignore[call-overload]
+    await generation.create(request, extra=1)  # type: ignore[call-overload]

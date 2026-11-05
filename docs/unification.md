@@ -102,7 +102,7 @@ Every case below is raised before the request is sent (requests) or before the s
 
 ## Provider options
 
-Not shared, but reachable through `client.generation`: `generation.with_options({...})` sends a provider's own fields with every request of the copy it returns. Each key is a field of the provider's method with its type, and none is a field the shared request fills, which `tests/providers/test_provider_options.py` checks.
+Not shared, but reachable through `client.generation`: `create(..., provider_options={...})` and `stream(...)` send a provider's own fields with that call. Each key is a field of the provider's method with its type, and none is a field the shared request fills, which `tests/providers/test_provider_options.py` checks.
 
 | Provider | Options type | Keys |
 |---|---|---|
@@ -111,7 +111,7 @@ Not shared, but reachable through `client.generation`: `generation.with_options(
 
 ## Not unified
 
-These are reached only through the provider's own methods and types, or, where listed under [Provider options](#provider-options), through `with_options`:
+These are reached only through the provider's own methods and types, or, where listed under [Provider options](#provider-options), through `provider_options`:
 
 - sampling parameters (`temperature`, `top_p`, `top_k`): Anthropic API version `2026-10-21` removed them; OpenAI's are provider options;
 - system or developer turns inside `input` (use `instructions`), images, audio and files;

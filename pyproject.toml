@@ -57,6 +57,7 @@ dependencies = [
     "orjson>=3.13.0",
     "pydantic>=2.14.1",
     "tenacity>=9.2.1",
+    "typing-extensions>=4.16.0",
     "yarl>=1.25.1",
 ]
 

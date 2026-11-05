@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Protocol, Self, TypedDict
+from typing import TYPE_CHECKING, Protocol, Self
+
+from typing_extensions import TypedDict
 
 from aiollm.http.exceptions.protocols import IErrorResolver
 from aiollm.http.protocols import HeadersType, IAuth
@@ -19,7 +21,7 @@ type Timeout = float
 a stream the longest silence between two chunks."""
 
 
-class CallOptions(TypedDict, total=False):
+class CallOptions(TypedDict, total=False, closed=True):
     """The options of one call, as ``send_request`` and ``stream`` take.
 
     The shared layer (use cases, ``client.generation``) takes them as
@@ -27,6 +29,12 @@ class CallOptions(TypedDict, total=False):
     checkers check them at the call. Each key is a keyword-only argument
     of ``ISession.send_request`` with the same type; a test keeps the
     two in step.
+
+    It is closed (PEP 728, from ``typing_extensions`` until Python
+    3.15): no other key can ride in ``**options``. So a method that
+    takes them may have keyword parameters of its own beside them, such
+    as ``GenerationResource.create``'s ``provider_options``, and still
+    match a protocol whose method has none.
 
     Attributes:
         headers: Headers for this request only; they override the

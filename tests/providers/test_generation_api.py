@@ -110,8 +110,12 @@ def test_keyword_overloads_name_the_request_fields(
         if field.is_required()
     }
 
+    # The concrete resource adds provider_options to both overloads; the
+    # protocol, for code that works with any provider, has none.
+    own = ["provider_options"] if owner is GenerationResource else []
+
     assert len(overloads) == 2
-    assert keyword == list(GenerationRequest.model_fields)
+    assert keyword == [*GenerationRequest.model_fields, *own, *own]
     signature = inspect.signature(overloads[0])
     assert {
         name
@@ -159,7 +163,16 @@ def test_generation_takes_the_call_options(
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     }
 
-    assert keyword == CallOptions.__optional_keys__
+    own = {"provider_options"} if owner is GenerationResource else set()
+
+    assert keyword == CallOptions.__optional_keys__ | own
+
+
+def test_call_options_are_closed() -> None:
+    # Only a closed TypedDict lets the resource's provider_options sit
+    # beside **options and still match IGenerationResource in pyright.
+    assert getattr(CallOptions, "__closed__", None) is True
+    assert "provider_options" not in CallOptions.__optional_keys__
 
 
 def test_no_request_field_is_named_like_a_call_option() -> None:
@@ -172,6 +185,7 @@ def test_no_request_field_is_named_like_a_call_option() -> None:
     }
 
     assert names.isdisjoint(CallOptions.__optional_keys__)
+    assert "provider_options" not in names
 
 
 def test_session_options_match_the_session_arguments() -> None:

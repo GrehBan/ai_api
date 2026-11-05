@@ -341,13 +341,13 @@ def test_generation_shares_the_client_session(client: Client) -> None:
 
 
 @pytest.mark.parametrize("mode", ["create", "stream"])
-async def test_provider_options_reach_the_wire_of_their_copy_only(
+async def test_provider_options_reach_the_wire_of_their_call_only(
     case: Case,
     client: Any,
     recorder: Recorder,
     mode: str,
 ) -> None:
-    # with_options returns a copy: the client's own resource sends none.
+    # The options belong to the call: the next one without them sends none.
     if mode == "create":
         reply = Reply(json=case.response)
     else:
@@ -356,12 +356,15 @@ async def test_provider_options_reach_the_wire_of_their_copy_only(
     recorder.reply(reply)
 
     async with client:
-        tuned = client.generation.with_options(case.options)
-        for generation in (tuned, client.generation):
+        for options in (case.options, {}):
             if mode == "create":
-                await generation.create(REQUEST)
+                await client.generation.create(
+                    REQUEST, provider_options=options
+                )
             else:
-                async with generation.stream(REQUEST) as stream:
+                async with client.generation.stream(
+                    REQUEST, provider_options=options
+                ) as stream:
                     await stream.final()
 
     with_options, without = (json.loads(r.body) for r in recorder.requests)
@@ -369,17 +372,29 @@ async def test_provider_options_reach_the_wire_of_their_copy_only(
     assert set(case.options).isdisjoint(without)
 
 
-async def test_an_unknown_provider_option_is_refused_at_once(
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_an_unknown_provider_option_is_refused_before_sending(
     case: Case,
     client: Any,
     recorder: Recorder,
+    mode: str,
 ) -> None:
     # A shared field is no option: it is set in the request.
+    shared = {"model": "m", "input": "x"}
+
     async with client:
         with pytest.raises(
             RequestValidationError, match="input, model"
         ) as caught:
-            client.generation.with_options({"model": "m", "input": "x"})
+            if mode == "create":
+                await client.generation.create(
+                    REQUEST, provider_options=shared
+                )
+            else:
+                async with client.generation.stream(
+                    REQUEST, provider_options=shared
+                ):
+                    pass
 
     assert caught.value.provider is case.provider
     assert caught.value.field == "input"
@@ -394,12 +409,15 @@ async def test_an_invalid_provider_option_is_refused_before_sending(
     mode: str,
 ) -> None:
     async with client:
-        tuned = client.generation.with_options(case.bad_option)
         with pytest.raises(RequestValidationError) as caught:
             if mode == "create":
-                await tuned.create(REQUEST)
+                await client.generation.create(
+                    REQUEST, provider_options=case.bad_option
+                )
             else:
-                async with tuned.stream(REQUEST):
+                async with client.generation.stream(
+                    REQUEST, provider_options=case.bad_option
+                ):
                     pass
 
     assert caught.value.field == next(iter(case.bad_option))
