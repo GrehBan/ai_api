@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from aiollm.client.binding import bind_resource
 from aiollm.enums import IncompleteReason, Provider
 from aiollm.exceptions import RequestValidationError
 from aiollm.http.exceptions.response import APIResponseError
@@ -21,6 +22,7 @@ from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.client import session_factory
 from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
 from aiollm.providers.anthropic.types import Message, MessageStreamEvent
+from aiollm.resources.generation import GenerationResource
 from aiollm.types.requests import GenerationRequest, Turn
 from aiollm.types.responses import (
     CompletedEvent,
@@ -455,6 +457,35 @@ def client(
     """``AnthropicClient`` built from a token, sent to the local server."""
     monkeypatch.setattr(session_factory, "api", api)
     return AnthropicClient(TEST_TOKEN)
+
+
+class LongAnthropicClient(AnthropicClient):
+    """Swaps the adapter by declaring the resource again, not ``__init__``."""
+
+    def _long_adapter(self) -> AnthropicGenerationAdapter:
+        return AnthropicGenerationAdapter(default_max_tokens=4096)
+
+    generation = bind_resource(
+        GenerationResource[Message, MessageStreamEvent],
+        AnthropicGenerationAdapter,
+        adapter_factory=_long_adapter,
+    )
+
+
+async def test_a_subclass_swaps_the_adapter_by_declaring_it_again(
+    api: LocalAPI,
+    recorder: Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(Reply(json=MESSAGE))
+    request = GenerationRequest(model=MODEL, input="Hi")
+
+    async with LongAnthropicClient(TEST_TOKEN) as client:
+        await client.generation.create(request)
+
+    (sent,) = recorder.requests
+    assert json.loads(sent.body)["max_tokens"] == 4096
 
 
 def test_client_checks_default_max_tokens_first() -> None:

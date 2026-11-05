@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Self
 
+from aiollm.client.binding import ResourceBinding
 from aiollm.client.validators import (
     check_same_provider,
     provider_of,
-    providers_of,
     resolve_token,
 )
 from aiollm.enums import Provider
@@ -35,7 +34,6 @@ _PARTS: Final = (
     "session_factory",
     "api_key_env",
     "auth_headers",
-    "adapter_types",
 )
 """Class attributes every provider client sets."""
 
@@ -155,11 +153,18 @@ class BaseClient[SessionT: ISession]:
 class BaseProviderClient(BaseClient[ISession]):
     """What a provider's client shares: its session, from a token.
 
-    A subclass declares its parts and, in its own ``__init__``, builds
-    its resources from adapters made by ``adapter()``: the shared
-    resources are a higher layer than the client, so the base class
-    cannot build them. The parts name one provider, checked when the
-    subclass is defined, for every adapter it declares.
+    A subclass declares its parts and its shared resources, each with
+    ``bind_resource``: the resource class and the adapter it runs on.
+    The client builds every adapter before its session, so bad adapter
+    options fail without one, and every resource right after it. The
+    parts name one provider, checked when the subclass is defined, for
+    every adapter it declares.
+
+    The bindings are found among the class attributes of the client and
+    its bases, by MRO; a subclass replaces one under the same name or
+    drops it with any other value. On an instance the attribute is the
+    resource; on the class it stays the ``ResourceBinding``, though
+    type checkers see the resource (see ``bind_resource``).
 
     The client takes a token, a ready ``session=`` or, without either,
     the token in ``api_key_env``; ``session_kwargs`` configure the
@@ -174,8 +179,6 @@ class BaseProviderClient(BaseClient[ISession]):
             session, such as ``OPENAI_API_KEY``.
         auth_headers: Headers the provider takes the key in, such as
             ``Authorization``.
-        adapter_types: Every adapter class the client builds, one per
-            shared resource; empty for a client without one.
 
     Example:
         >>> class ExampleClient(BaseProviderClient):
@@ -183,21 +186,17 @@ class BaseProviderClient(BaseClient[ISession]):
         ...     session_factory = session_factory
         ...     api_key_env = "EXAMPLE_API_KEY"
         ...     auth_headers = frozenset({AUTHORIZATION})
-        ...     adapter_types = (ExampleGenerationAdapter,)
         ...
-        ...     def __init__(self, token=None, *, session=None):
-        ...         adapter = self.adapter(ExampleGenerationAdapter)
-        ...         super().__init__(token, session=session)
-        ...         self.generation = GenerationResource(
-        ...             self.session, adapter
-        ...         )
+        ...     generation = bind_resource(
+        ...         GenerationResource[Response, ResponseStreamEvent],
+        ...         ExampleGenerationAdapter,
+        ...     )
     """
 
     provider: ClassVar[Provider]
     session_factory: ClassVar[ISessionFactory[ISession, Any, ...]]
     api_key_env: ClassVar[str]
     auth_headers: ClassVar[frozenset[str]]
-    adapter_types: ClassVar[tuple[type, ...]]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Check that the parts of the client name one provider.
@@ -206,8 +205,8 @@ class BaseProviderClient(BaseClient[ISession]):
             **kwargs: Class keyword arguments.
 
         Raises:
-            TypeError: If a part is missing, two adapter classes share a
-                name, or the client, the session factory's error
+            TypeError: If a part is missing, an adapter class declares
+                no provider, or the client, the session factory's error
                 resolver and an adapter name different providers.
         """
         super().__init_subclass__(**kwargs)
@@ -217,53 +216,42 @@ class BaseProviderClient(BaseClient[ISession]):
             message = f"{cls.__name__} must set {', '.join(missing)}"
             raise TypeError(message)
 
+        # Keyed by attribute name, unique in a class, so no adapter can
+        # drop out of the check.
+        adapters = {
+            f"{name} adapter {binding.adapter_type.__name__}": provider_of(
+                binding.adapter_type, f"{name} adapter"
+            )
+            for name, binding in cls._resource_bindings().items()
+        }
         check_same_provider(
             client=cls.provider,
             error_resolver=provider_of(
                 cls.session_factory.error_resolver, "error resolver"
             ),
-            **providers_of(cls.adapter_types, "adapter"),
+            **adapters,
         )
 
-    def adapter[**P, A](
-        self,
-        adapter_type: Callable[P, A],
-        /,
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> A:
-        """Build one of the client's adapters.
+    @classmethod
+    def _resource_bindings(cls) -> dict[str, ResourceBinding[Any, Any]]:
+        """Find the shared resources of the client, inherited ones too.
 
-        Type checkers check the arguments as a call of the adapter class
-        itself and give its type back. It may be called before
-        ``super().__init__()``, so an adapter rejects its options before
-        a session exists.
-
-        Args:
-            adapter_type: An adapter class listed in ``adapter_types``;
-                only listed classes had their provider checked.
-            *args: Positional arguments of the adapter.
-            **kwargs: Keyword arguments of the adapter.
+        A subclass replaces an inherited binding with another one under
+        the same name, or drops it with any other value.
 
         Returns:
-            The new adapter.
-
-        Raises:
-            TypeError: If the class is not in ``adapter_types``.
+            The bindings, by attribute name, in declaration order.
         """
-        # Kept apart from the if: an "in" test would narrow the type of
-        # adapter_type to the tuple's and lose the adapter's own type.
-        declared = adapter_type in self.adapter_types
+        bindings: dict[str, ResourceBinding[Any, Any]] = {}
 
-        if not declared:
-            name = getattr(adapter_type, "__name__", repr(adapter_type))
-            message = (
-                f"{type(self).__name__} builds {name}, which is not in "
-                "its adapter_types"
-            )
-            raise TypeError(message)
+        for base in reversed(cls.__mro__):
+            for name, value in vars(base).items():
+                if isinstance(value, ResourceBinding):
+                    bindings[name] = value
+                else:
+                    bindings.pop(name, None)
 
-        return adapter_type(*args, **kwargs)
+        return bindings
 
     def __init__(
         self,
@@ -274,7 +262,10 @@ class BaseProviderClient(BaseClient[ISession]):
     ) -> None:
         """Create the client from a token or a ready session.
 
-        A subclass types ``session_kwargs`` by its session's options.
+        A subclass types ``session_kwargs`` by its session's options
+        and sets the options its adapter factories read before calling
+        this. The adapters are built first, the resources once the
+        session exists.
 
         Args:
             token: API key; the session is built from it by
@@ -289,7 +280,14 @@ class BaseProviderClient(BaseClient[ISession]):
             ValueError: If both ``token`` and ``session`` are given, or
                 neither is and ``api_key_env`` is unset or empty, or
                 ``session_kwargs`` are given with a ``session``.
+            TypeError: If an adapter factory returns another class than
+                its binding declares.
         """
+        bindings = self._resource_bindings()
+        adapters = {
+            name: binding.build_adapter(self)
+            for name, binding in bindings.items()
+        }
         token = resolve_token(token, session, self.api_key_env)
 
         if session is None:
@@ -306,6 +304,10 @@ class BaseProviderClient(BaseClient[ISession]):
             self.warn_about_session(session)
 
         super().__init__(session)
+
+        for name, binding in bindings.items():
+            resource = binding.build_resource(self.session, adapters[name])
+            setattr(self, name, resource)
 
     @classmethod
     def warn_about_session(cls, session: ISession) -> None:

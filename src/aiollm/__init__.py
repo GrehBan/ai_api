@@ -18,6 +18,9 @@ from aiollm.client.base import (
     BaseClient,
     BaseProviderClient,
 )
+from aiollm.client.binding import (
+    bind_resource,
+)
 from aiollm.enums import (
     BodyFormat,
     GenerationEventType,
@@ -210,4 +213,5 @@ __all__ = [
     "Turn",
     "UnprocessableEntityError",
     "__version__",
+    "bind_resource",
 ]

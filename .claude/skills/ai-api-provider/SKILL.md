@@ -28,9 +28,11 @@ which shared resources it will support. Code starts on the owner's go.
    are never transient.
 3. `client.py`: module-level `session_factory = SessionFactory(AiohttpSession,
    auth_factory=..., api=..., error_resolver=...)`, and a `BaseProviderClient`
-   subclass with `provider`, `session_factory`, `api_key_env`, `auth_headers`,
-   `adapter_types`; `__init__` types `**session_kwargs`, builds adapters with
-   `self.adapter(...)` and resources after `super().__init__()`.
+   subclass with `provider`, `session_factory`, `api_key_env`, `auth_headers`
+   and each resource as `name = bind_resource(Resource[...], Adapter)`
+   (`adapter_factory=` for an adapter with options, read from the client);
+   `__init__` types `**session_kwargs`, keeps the adapter options and calls
+   `super().__init__()`, which builds adapters before the session.
 4. `__init__.py` re-exports the client (the one `__init__` allowed to import a
    transport), sorted `__all__`.
 

@@ -6,6 +6,10 @@ from aiollm.client.base import (
     BaseClient,
     BaseProviderClient,
 )
+from aiollm.client.binding import (
+    ResourceBinding,
+    bind_resource,
+)
 from aiollm.client.protocols import (
     IClient,
 )
@@ -14,4 +18,6 @@ __all__ = [
     "BaseClient",
     "BaseProviderClient",
     "IClient",
+    "ResourceBinding",
+    "bind_resource",
 ]

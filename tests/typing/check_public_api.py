@@ -33,6 +33,7 @@ from aiollm import (
     Role,
     ServerSentEvent,
     Stream,
+    bind_resource,
 )
 from aiollm.adapters import (
     BaseAdapter,
@@ -582,13 +583,29 @@ def session_factories_are_typed() -> None:
     assert session
 
 
-def clients_build_their_adapters() -> None:
-    client = OpenAIClient("sk")
+def openai_adapter(client: object) -> OpenAIGenerationAdapter:
+    return OpenAIGenerationAdapter()
+
+
+def clients_bind_their_resources() -> None:
     assert_type(
-        client.adapter(OpenAIGenerationAdapter), OpenAIGenerationAdapter
+        OpenAIClient("sk").generation,
+        GenerationResource[Response, ResponseStreamEvent],
     )
-    client.adapter(OpenAIGenerationAdapter, stop_conversion=1)  # type: ignore[arg-type]
-    client.adapter(OpenAIGenerationAdapter, max_tokens=1)  # type: ignore[call-arg]
-    anthropic = AnthropicClient("sk")
-    anthropic.adapter(AnthropicGenerationAdapter, default_max_tokens="8")  # type: ignore[arg-type]
+    assert_type(
+        AnthropicClient("sk").generation,
+        GenerationResource[Message, MessageStreamEvent],
+    )
+    resource = bind_resource(
+        GenerationResource[Response, ResponseStreamEvent],
+        OpenAIGenerationAdapter,
+        adapter_factory=openai_adapter,
+    )
+    assert_type(resource, GenerationResource[Response, ResponseStreamEvent])
+    bind_resource(
+        GenerationResource[Response, ResponseStreamEvent],
+        OpenAIGenerationAdapter,
+        adapter_factory=lambda client: 1,  # type: ignore[arg-type, return-value]
+    )
+    bind_resource(GenerationResource[Response, ResponseStreamEvent])  # type: ignore[call-arg]
     assert_type(OpenAIClient.provider, Provider)

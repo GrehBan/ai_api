@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Final, Unpack
 
 from aiollm.client.base import BaseProviderClient
+from aiollm.client.binding import bind_resource
 from aiollm.http.auth import BearerAuth
 from aiollm.http.headers import AUTHORIZATION
 from aiollm.providers.openai.adapters.generation import (
@@ -54,9 +55,11 @@ class OpenAIClient(BaseProviderClient):
     session_factory = session_factory
     api_key_env = OPENAI_API_KEY_ENV
     auth_headers = frozenset({AUTHORIZATION})
-    adapter_types = (OpenAIGenerationAdapter,)
 
-    generation: GenerationResource[Response, ResponseStreamEvent]
+    generation = bind_resource(
+        GenerationResource[Response, ResponseStreamEvent],
+        OpenAIGenerationAdapter,
+    )
 
     def __init__(
         self,
@@ -82,6 +85,4 @@ class OpenAIClient(BaseProviderClient):
                 neither is and ``OPENAI_API_KEY`` is unset or empty, or
                 ``session_kwargs`` are given with a ``session``.
         """
-        adapter = self.adapter(OpenAIGenerationAdapter)
         super().__init__(token, session=session, **session_kwargs)
-        self.generation = GenerationResource(self.session, adapter)

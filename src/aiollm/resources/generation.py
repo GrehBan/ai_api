@@ -27,6 +27,14 @@ if TYPE_CHECKING:
     from aiollm.session.retry.policy import RetryPolicy
     from aiollm.types.requests.generation import Turn
 
+type GenerationAdapter[RawT, RawItemT] = ICompositeAdapter[
+    GenerationRequest,
+    RawT,
+    GenerationResponse[RawT],
+    RawItemT,
+    GenerationEvent[RawItemT],
+]
+
 
 class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     BaseResource[SessionT],
@@ -55,13 +63,7 @@ class GenerationResource[RawT, RawItemT, SessionT: ISession = ISession](
     def __init__(
         self,
         session: SessionT,
-        adapter: ICompositeAdapter[
-            GenerationRequest,
-            RawT,
-            GenerationResponse[RawT],
-            RawItemT,
-            GenerationEvent[RawItemT],
-        ],
+        adapter: GenerationAdapter[RawT, RawItemT],
     ) -> None:
         """Keep the session and build the use case on the adapter.
 
