@@ -61,11 +61,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/GrehBan/ai_api"
-Documentation = "https://grehban.github.io/ai_api/"
-Repository = "https://github.com/GrehBan/ai_api"
-Issues = "https://github.com/GrehBan/ai_api/issues"
-Changelog = "https://github.com/GrehBan/ai_api/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/GrehBan/aiollm"
+Documentation = "https://grehban.github.io/aiollm/"
+Repository = "https://github.com/GrehBan/aiollm"
+Issues = "https://github.com/GrehBan/aiollm/issues"
+Changelog = "https://github.com/GrehBan/aiollm/blob/master/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
@@ -209,7 +209,7 @@ directory = "CHANGES"
 filename = "CHANGELOG.md"
 start_string = "<!-- towncrier release notes start -->\n"
 title_format = "## [{version}] - {project_date}"
-issue_format = "[#{issue}](https://github.com/GrehBan/ai_api/pull/{issue})"
+issue_format = "[#{issue}](https://github.com/GrehBan/aiollm/pull/{issue})"
 orphan_prefix = "+"
 ignore = [".gitkeep", "README.md"]
 wrap = true

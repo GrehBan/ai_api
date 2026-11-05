@@ -5,7 +5,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 <!-- --8<-- [start:intro] -->
 You describe each API call as a small declarative class: a Pydantic model whose generic argument is its result type. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming, and ships clients for OpenAI and Anthropic with one shared text generation API.
 
-> **Status: pre-alpha (0.6.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version, see [Versioning](https://grehban.github.io/ai_api/guide/design/#versioning).
+> **Status: pre-alpha (0.6.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version, see [Versioning](https://grehban.github.io/aiollm/guide/design/#versioning).
 
 ## Features
 
@@ -24,8 +24,8 @@ You describe each API call as a small declarative class: a Pydantic model whose 
 The library requires Python 3.13 or newer. It is not on PyPI yet, so install it from source:
 
 ```bash
-git clone https://github.com/GrehBan/ai_api.git
-cd ai_api
+git clone https://github.com/GrehBan/aiollm.git
+cd aiollm
 uv sync
 ```
 
@@ -98,13 +98,13 @@ This sends `POST https://api.example.com/v1/completions` with the body `{"model"
 
 ## Documentation
 
-The guide and the API reference are at **[grehban.github.io/ai_api](https://grehban.github.io/ai_api/)**:
+The guide and the API reference are at **[grehban.github.io/aiollm](https://grehban.github.io/aiollm/)**:
 
-- [Methods](https://grehban.github.io/ai_api/guide/methods/): parameters, body, query and path, result types
-- [Uploads](https://grehban.github.io/ai_api/guide/uploads/) and [streaming](https://grehban.github.io/ai_api/guide/streaming/)
-- [Errors and retries](https://grehban.github.io/ai_api/guide/errors/) and [sessions](https://grehban.github.io/ai_api/guide/sessions/)
-- [Provider clients](https://grehban.github.io/ai_api/guide/providers/) and [shared generation](https://grehban.github.io/ai_api/guide/generation/)
-- [Reference](https://grehban.github.io/ai_api/reference/), generated from the code
+- [Methods](https://grehban.github.io/aiollm/guide/methods/): parameters, body, query and path, result types
+- [Uploads](https://grehban.github.io/aiollm/guide/uploads/) and [streaming](https://grehban.github.io/aiollm/guide/streaming/)
+- [Errors and retries](https://grehban.github.io/aiollm/guide/errors/) and [sessions](https://grehban.github.io/aiollm/guide/sessions/)
+- [Provider clients](https://grehban.github.io/aiollm/guide/providers/) and [shared generation](https://grehban.github.io/aiollm/guide/generation/)
+- [Reference](https://grehban.github.io/aiollm/reference/), generated from the code
 
 ## License
 

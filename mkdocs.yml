@@ -1,8 +1,8 @@
 site_name: aiollm
 site_description: Async-first toolkit for building typed HTTP API clients.
-site_url: https://grehban.github.io/ai_api/
-repo_url: https://github.com/GrehBan/ai_api
-repo_name: GrehBan/ai_api
+site_url: https://grehban.github.io/aiollm/
+repo_url: https://github.com/GrehBan/aiollm
+repo_name: GrehBan/aiollm
 edit_uri: edit/master/docs/
 copyright: MIT License
 
