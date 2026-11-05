@@ -10,7 +10,7 @@ An async-first toolkit for building typed HTTP API clients, aimed at AI provider
 <!-- --8<-- [start:intro] -->
 You describe each API call as a small declarative class: a Pydantic model whose generic argument is its result type. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming, and ships clients for OpenAI and Anthropic with one shared text generation API.
 
-> **Status: pre-alpha (0.8.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version (0.9 is followed by 0.10, not 1.0; 1.0 comes when the API is declared stable), see [Versioning](https://grehban.github.io/aiollm/guide/design/#versioning).
+> **Status: pre-alpha (0.9.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version (0.9 is followed by 0.10, not 1.0; 1.0 comes when the API is declared stable), see [Versioning](https://grehban.github.io/aiollm/guide/design/#versioning).
 
 ## Features
 
