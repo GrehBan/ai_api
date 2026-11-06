@@ -29,6 +29,7 @@ from aiollm.enums import (
     Provider,
     ResponseFormat,
     Role,
+    ToolChoice,
 )
 from aiollm.exceptions import (
     AIAPIError,
@@ -125,8 +126,10 @@ from aiollm.types.files import (
     StreamFile,
 )
 from aiollm.types.requests.generation import (
+    ForcedTool,
     GenerationRequest,
     NoProviderOptions,
+    Tool,
     Turn,
 )
 from aiollm.types.responses.events import (
@@ -180,6 +183,7 @@ __all__ = [
     "ConflictError",
     "ContentTooLargeError",
     "Effort",
+    "ForcedTool",
     "FullJitterBackoff",
     "GatewayTimeoutError",
     "GenerationEvent",
@@ -218,6 +222,8 @@ __all__ = [
     "StreamFile",
     "TextDeltaEvent",
     "TokenUsage",
+    "Tool",
+    "ToolChoice",
     "Turn",
     "UnprocessableEntityError",
     "__version__",

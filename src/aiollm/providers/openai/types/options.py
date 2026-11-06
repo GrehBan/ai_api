@@ -7,6 +7,7 @@ from typing import Literal, TypedDict
 from aiollm.providers.openai.methods.params.responses import (
     CreateResponseParamsTemperature,
     CreateResponseParamsTopP,
+    IncludeEnum,
     ReasoningModeEnum,
 )
 from aiollm.providers.openai.methods.responses import Metadata
@@ -45,6 +46,10 @@ class OpenAIGenerationOptions(TypedDict, total=False):
         previous_response_id: The response this one continues.
         temperature: Sampling temperature, 0 to 2.
         top_p: Nucleus sampling mass, 0 to 1.
+        include: Extra data to return, such as
+            ``"reasoning.encrypted_content"``, which a stateless tool loop
+            (``store: False``) needs to pass reasoning back.
+        max_tool_calls: Most built-in tool calls in one response.
 
     Example:
         >>> await client.generation.create(
@@ -58,3 +63,5 @@ class OpenAIGenerationOptions(TypedDict, total=False):
     previous_response_id: str | None
     temperature: CreateResponseParamsTemperature | None
     top_p: CreateResponseParamsTopP | None
+    include: list[IncludeEnum] | None
+    max_tool_calls: int | None

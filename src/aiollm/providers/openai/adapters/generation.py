@@ -15,6 +15,7 @@ from aiollm.adapters.validation import (
     merge_options,
     request_errors,
 )
+from aiollm.enums import ToolChoice
 from aiollm.providers.openai.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
@@ -37,7 +38,11 @@ from aiollm.providers.openai.types import (
     ResponseTextDeltaEvent,
 )
 from aiollm.providers.openai.types.options import OpenAIGenerationOptions
-from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.requests.generation import (
+    ForcedTool,
+    GenerationRequest,
+    Tool,
+)
 from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
@@ -325,5 +330,61 @@ class OpenAIGenerationAdapter(
                     }
                 }
             ),
+            "tools": (
+                MISSING
+                if request.tools is MISSING
+                else [_tool(tool) for tool in request.tools]
+            ),
+            "tool_choice": _tool_choice(request.tool_choice),
+            "parallel_tool_calls": request.parallel_tool_calls,
         }
         return merge_options(fields, self.provider_options, self.provider)
+
+
+TOOL_CHOICES: Final[Mapping[ToolChoice, str]] = {
+    ToolChoice.AUTO: "auto",
+    ToolChoice.NONE: "none",
+    ToolChoice.REQUIRED: "required",
+}
+"""OpenAI's ``tool_choice`` of each shared mode."""
+
+
+def _tool(tool: Tool) -> dict[str, Any]:
+    """Build OpenAI's function tool from a shared tool.
+
+    Args:
+        tool: The shared tool.
+
+    Returns:
+        A ``function`` tool. Its ``strict`` is required, so a tool that
+        leaves it out sends ``null``, which OpenAI takes as not strict
+        (seen in a live check, 2026-11-06), as Anthropic's default.
+    """
+    function: dict[str, Any] = {
+        "type": "function",
+        "name": tool.name,
+        "parameters": tool.parameters,
+        "strict": None if tool.strict is MISSING else tool.strict,
+    }
+    if tool.description is not MISSING:
+        function["description"] = tool.description
+    return function
+
+
+def _tool_choice(
+    choice: ToolChoice | ForcedTool | MISSING,
+) -> str | dict[str, Any] | MISSING:
+    """Build OpenAI's ``tool_choice``.
+
+    Args:
+        choice: The shared choice, if given.
+
+    Returns:
+        The mode, ``{"type": "function", "name": ...}`` for a forced
+        tool, or ``MISSING`` when no choice is given.
+    """
+    if choice is MISSING:
+        return MISSING
+    if isinstance(choice, ForcedTool):
+        return {"type": "function", "name": choice.name}
+    return TOOL_CHOICES[choice]

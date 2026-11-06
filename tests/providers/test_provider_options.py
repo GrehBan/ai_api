@@ -22,7 +22,7 @@ import pytest
 from pydantic import MISSING, BaseModel
 
 from aiollm.adapters.validation import checked_options
-from aiollm.enums import Effort, Provider
+from aiollm.enums import Effort, Provider, ToolChoice
 from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.methods import CreateMessage
@@ -32,7 +32,7 @@ from aiollm.providers.anthropic.types.options import (
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.methods import CreateResponse
 from aiollm.providers.openai.types.options import OpenAIGenerationOptions
-from aiollm.types.requests import GenerationRequest, NoProviderOptions
+from aiollm.types.requests import GenerationRequest, NoProviderOptions, Tool
 
 CASES = [
     (OpenAIGenerationOptions, CreateResponse, OpenAIGenerationAdapter()),
@@ -165,6 +165,9 @@ FULL_REQUEST = GenerationRequest(
     effort=Effort.HIGH,
     output_schema={"type": "object"},
     end_user_id="u-1",
+    tools=[Tool(name="f", parameters={"type": "object"})],
+    tool_choice=ToolChoice.REQUIRED,
+    parallel_tool_calls=False,
 )
 """A shared request with every field set."""
 

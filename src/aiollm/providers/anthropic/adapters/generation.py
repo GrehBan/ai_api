@@ -15,6 +15,7 @@ from aiollm.adapters.validation import (
     merge_options,
     request_errors,
 )
+from aiollm.enums import ToolChoice
 from aiollm.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
@@ -39,7 +40,11 @@ from aiollm.providers.anthropic.types import (
     ThinkingDelta,
 )
 from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
-from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.requests.generation import (
+    ForcedTool,
+    GenerationRequest,
+    Tool,
+)
 from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
@@ -327,8 +332,73 @@ class AnthropicGenerationAdapter(
                 else {"user_id": request.end_user_id}
             ),
             "output_config": _output_config(request),
+            "tools": (
+                MISSING
+                if request.tools is MISSING
+                else [_tool(tool) for tool in request.tools]
+            ),
+            "tool_choice": _tool_choice(request),
         }
         return merge_options(fields, self.provider_options, self.provider)
+
+
+TOOL_CHOICES: Final[Mapping[ToolChoice, str]] = {
+    ToolChoice.AUTO: "auto",
+    ToolChoice.NONE: "none",
+    ToolChoice.REQUIRED: "any",
+}
+"""Anthropic's ``tool_choice`` ``type`` of each shared mode."""
+
+
+def _tool(tool: Tool) -> dict[str, Any]:
+    """Build Anthropic's custom tool from a shared tool.
+
+    Args:
+        tool: The shared tool.
+
+    Returns:
+        The tool, its ``parameters`` as ``input_schema``; ``description``
+        and ``strict`` only when given (Anthropic is not strict by
+        default).
+    """
+    custom: dict[str, Any] = {
+        "name": tool.name,
+        "input_schema": tool.parameters,
+    }
+    if tool.description is not MISSING:
+        custom["description"] = tool.description
+    if tool.strict is not MISSING:
+        custom["strict"] = tool.strict
+    return custom
+
+
+def _tool_choice(request: GenerationRequest) -> dict[str, Any] | MISSING:
+    """Build Anthropic's ``tool_choice`` from the choice and parallel calls.
+
+    Anthropic has no ``parallel_tool_calls``: it is
+    ``disable_parallel_tool_use`` inside ``tool_choice``, so a request
+    that gives only it gets ``{"type": "auto", ...}``, the default mode.
+    The shared request refuses it with ``ToolChoice.NONE``, whose
+    ``tool_choice`` takes no such key.
+
+    Args:
+        request: The shared request.
+
+    Returns:
+        ``tool_choice``, or ``MISSING`` when the request sets neither.
+    """
+    choice = request.tool_choice
+    parallel = request.parallel_tool_calls
+    if choice is MISSING and parallel is MISSING:
+        return MISSING
+    if isinstance(choice, ForcedTool):
+        config: dict[str, Any] = {"type": "tool", "name": choice.name}
+    else:
+        mode = ToolChoice.AUTO if choice is MISSING else choice
+        config = {"type": TOOL_CHOICES[mode]}
+    if parallel is not MISSING:
+        config["disable_parallel_tool_use"] = not parallel
+    return config
 
 
 def _output_config(request: GenerationRequest) -> dict[str, Any] | MISSING:

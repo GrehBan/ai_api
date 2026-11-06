@@ -17,12 +17,15 @@ Two rules decide what is shared:
 | Shared field | OpenAI | Anthropic | Lost, or when it raises |
 | --- | --- | --- | --- |
 | `GenerationRequest.model` | `model` | `model` | Sent as given; the provider rejects an unknown model with an `APIStatusError`. |
-| `GenerationRequest.input` | `input`: a text as is; a list of turns as `EasyInputMessage` items (`role`, `content`) | `messages`: a text as one `user` turn; a list of turns as they are | A list must not be empty and must end with a `user` turn: Anthropic rejects an assistant prefill on current models, and OpenAI gives a last assistant turn another meaning. Images, files, tool calls and results are not shared. |
+| `GenerationRequest.input` | `input`: a text as is; a list of turns as `EasyInputMessage` items (`role`, `content`) | `messages`: a text as one `user` turn; a list of turns as they are | A list must not be empty and must end with a `user` turn: Anthropic rejects an assistant prefill on current models, and OpenAI gives a last assistant turn another meaning. Images and files are not shared. |
 | `GenerationRequest.instructions` | `instructions` | `system` | System and developer turns are not shared: instructions go here. Not sent when not given. |
 | `GenerationRequest.max_output_tokens` | `max_output_tokens`, at least 16, reasoning included; without it, the model's limit | `max_tokens`, thinking included; required, so without it the adapter's `default_max_tokens` (16000, room for thinking) | Must be positive. Below 16 raises for OpenAI. Not sent to OpenAI when not given. |
 | `GenerationRequest.end_user_id` | `safety_identifier`, up to 128 characters | `metadata.user_id`, up to 512 characters | An opaque id (a hash), never personal data; both providers use it to detect abuse. A longer value raises before sending. Not sent when not given. OpenAI's `metadata`, which has no Anthropic counterpart, is a provider option. |
 | `GenerationRequest.effort` | `reasoning.effort`: how deeply a reasoning model reasons | `output_config.effort`: all output tokens, thinking and reply | An `Effort`: `low`, `medium`, `high`, `xhigh` or `max`, the levels both have. OpenAI's `none` and `minimal` have no Anthropic counterpart and are not shared (`CreateResponse` takes them). A model that does not take a level answers 400, an `APIStatusError`. Not sent when not given, so the model's own default applies. |
 | `GenerationRequest.output_schema` | `text.format`: `json_schema` with the adapter's `schema_name` (`"output"` unless set) and `strict: true` | `output_config.format`: `json_schema`, next to `effort` in the same object | The schema is sent as it is: each provider takes its own subset of JSON Schema and answers 400 to the rest, an `APIStatusError`. The JSON comes back in `text`; a reply cut by the token limit is invalid JSON, with `incomplete_reason` `MAX_TOKENS`. Not sent when not given. |
+| `GenerationRequest.tools` | `tools`: each a `function` tool (`name`, `description`, `parameters`, `strict`; a tool without `strict` sends `strict: null`, which OpenAI takes as not strict) | `tools`: each a custom tool (`name`, `description`, `input_schema` from `parameters`, `strict` only when given) | A `Tool` holds what both take: a name (letters, digits, `_`, `-`, up to 128 characters, unique in the request), a description, a JSON Schema sent as it is, and `strict`. Left out, neither is strict; with `strict`, both need `additionalProperties: false`, and Anthropic answers 400 otherwise. OpenAI's built-in tools (web search, file search, MCP, ...), Anthropic's server tools and the providers' own tool fields (`cache_control`, `defer_loading`, ...) are not shared. Not sent when not given. |
+| `GenerationRequest.tool_choice` | `tool_choice`: `"auto"`, `"none"`, `"required"`, or `{"type": "function", "name"}` for a `ForcedTool` | `tool_choice`: `{"type": "auto"}`, `{"type": "none"}`, `{"type": "any"}` for `REQUIRED`, or `{"type": "tool", "name"}` for a `ForcedTool` | A `ToolChoice` or a `ForcedTool` naming one of `tools`; without `tools`, or naming another tool, it raises. OpenAI's `allowed_tools` is not shared. With manual thinking (`thinking: {"type": "enabled"}`), Anthropic takes only `auto` and `none` and answers 400 otherwise. Not sent when not given. |
+| `GenerationRequest.parallel_tool_calls` | `parallel_tool_calls` | `disable_parallel_tool_use` (its negation) inside `tool_choice`, which is `{"type": "auto"}` when the request gives no choice | Only with `tools`, and not with `ToolChoice.NONE`, whose Anthropic `tool_choice` takes no such key; both raise. Not sent when not given, so both allow parallel calls. |
 
 ## Response
 
@@ -101,6 +104,10 @@ Every case below is raised before the request is sent (requests) or before the s
 | `openai-unfinished-response` | OpenAI | — | `APIResponseError` |
 | `anthropic-message-without-stop-reason` | Anthropic | — | `APIResponseError` |
 | `stream-without-completion` | any | — | `APIStreamInterruptedError` |
+| `tool-choice-without-tools` | any | `tool_choice` | `ValidationError` |
+| `forced-tool-not-in-tools` | any | `tool_choice` | `ValidationError` |
+| `duplicate-tool-names` | any | `tools` | `ValidationError` |
+| `parallel-calls-with-tool-choice-none` | any | `parallel_tool_calls` | `ValidationError` |
 | `turn-from-response-without-text` | any | — | `ValueError` |
 
 ## Provider options
@@ -109,7 +116,7 @@ Not shared, but reachable through `client.generation`: `create(..., provider_opt
 
 | Provider | Options type | Keys |
 |---|---|---|
-| OpenAI | `OpenAIGenerationOptions` | `metadata`, `reasoning` (`summary`, `context`, `mode`; its `effort` is the shared field, and the two are merged), `store`, `previous_response_id`, `temperature`, `top_p` |
+| OpenAI | `OpenAIGenerationOptions` | `metadata`, `reasoning` (`summary`, `context`, `mode`; its `effort` is the shared field, and the two are merged), `store`, `previous_response_id`, `temperature`, `top_p`, `include` (such as `reasoning.encrypted_content` for a stateless tool loop), `max_tool_calls` |
 | Anthropic | `AnthropicGenerationOptions` | `stop_sequences`, `thinking` |
 
 ## Not unified

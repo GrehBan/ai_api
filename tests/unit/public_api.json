@@ -33,6 +33,7 @@
     "ConflictError",
     "ContentTooLargeError",
     "Effort",
+    "ForcedTool",
     "FullJitterBackoff",
     "GatewayTimeoutError",
     "GenerationEvent",
@@ -71,6 +72,8 @@
     "StreamFile",
     "TextDeltaEvent",
     "TokenUsage",
+    "Tool",
+    "ToolChoice",
     "Turn",
     "UnprocessableEntityError",
     "__version__",
@@ -1110,10 +1113,12 @@
   ],
   "aiollm.types.requests": [
     "BaseRequest",
+    "ForcedTool",
     "GenerationRequest",
     "JSONSchema",
     "JSONValue",
     "NoProviderOptions",
+    "Tool",
     "Turn"
   ],
   "aiollm.types.responses": [

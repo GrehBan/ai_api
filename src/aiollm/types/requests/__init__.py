@@ -6,18 +6,22 @@ from aiollm.types.requests.base import (
     BaseRequest,
 )
 from aiollm.types.requests.generation import (
+    ForcedTool,
     GenerationRequest,
     JSONSchema,
     JSONValue,
     NoProviderOptions,
+    Tool,
     Turn,
 )
 
 __all__ = [
     "BaseRequest",
+    "ForcedTool",
     "GenerationRequest",
     "JSONSchema",
     "JSONValue",
     "NoProviderOptions",
+    "Tool",
     "Turn",
 ]

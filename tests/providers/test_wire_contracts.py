@@ -38,7 +38,7 @@ from jsonschema import Draft202012Validator
 from pydantic import MISSING, BaseModel, TypeAdapter
 
 from aiollm.adapters import ICompositeAdapter
-from aiollm.enums import Effort
+from aiollm.enums import Effort, ToolChoice
 from aiollm.methods import BaseAPIMethod, BaseStreamMethod
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.adapters.conversions import message_text
@@ -56,7 +56,7 @@ from aiollm.response.parse.stream import StreamResponseParser
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import AnyOf, EventTypes
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import GenerationRequest, Tool, Turn
 from aiollm.types.unknown import BaseUnknown
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
@@ -154,6 +154,19 @@ OPENAI = Case(
         "store": False,
         "temperature": 0.5,
         "top_p": 0.9,
+        "include": ["reasoning.encrypted_content"],
+        "max_tool_calls": 3,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Current weather",
+                "parameters": {"type": "object", "properties": {}},
+                "strict": None,
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "get_weather"},
+        "parallel_tool_calls": False,
     },
     response=Response,
     events=TypeAdapter(ResponseStreamEvent),
@@ -190,6 +203,19 @@ ANTHROPIC = Case(
         },
         "thinking": {"type": "adaptive", "display": "summarized"},
         "stop_sequences": ["END"],
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Current weather",
+                "input_schema": {"type": "object", "properties": {}},
+                "strict": True,
+            }
+        ],
+        "tool_choice": {
+            "type": "tool",
+            "name": "get_weather",
+            "disable_parallel_tool_use": True,
+        },
     },
     response=Message,
     events=TypeAdapter(MessageStreamEvent),
@@ -324,6 +350,9 @@ FULL_REQUEST = GenerationRequest(
     effort=Effort.HIGH,
     output_schema={"type": "object"},
     end_user_id="u-1",
+    tools=[Tool(name="f", parameters={"type": "object"})],
+    tool_choice=ToolChoice.REQUIRED,
+    parallel_tool_calls=False,
 )
 """A shared request with every field set."""
 

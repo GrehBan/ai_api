@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 import aiollm
-from aiollm.enums import Provider
+from aiollm.enums import Provider, ToolChoice
 from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.types import Message
@@ -25,7 +25,7 @@ from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.types import Response
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import ForcedTool, GenerationRequest, Tool, Turn
 from aiollm.types.responses import (
     CompletedEvent,
     GenerationEvent,
@@ -54,6 +54,7 @@ ERRORS = {
 """Each case of the error table: provider, shared field and error."""
 
 REQUEST = GenerationRequest(model="m", input="Hi")
+TOOL = Tool(name="f", parameters={"type": "object"})
 
 TURNS = [Turn.user("Hi"), Turn.assistant("Hello")]
 
@@ -109,6 +110,9 @@ TAKEN_AS_IS = {
     "GenerationRequest.end_user_id",
     "GenerationRequest.effort",
     "GenerationRequest.output_schema",
+    "GenerationRequest.tools",
+    "GenerationRequest.tool_choice",
+    "GenerationRequest.parallel_tool_calls",
     "GenerationResponse.id",
     "GenerationResponse.provider",
     "GenerationResponse.model",
@@ -233,6 +237,22 @@ SYNC_CASES: dict[str, Callable[[], object]] = {
             Message.model_validate(anthropic.MESSAGE | {"stop_reason": None}),
             REQUEST,
         )
+    ),
+    "tool-choice-without-tools": lambda: GenerationRequest(
+        model="m", input="Hi", tool_choice=ToolChoice.AUTO
+    ),
+    "forced-tool-not-in-tools": lambda: GenerationRequest(
+        model="m", input="Hi", tools=[TOOL], tool_choice=ForcedTool(name="g")
+    ),
+    "duplicate-tool-names": lambda: GenerationRequest(
+        model="m", input="Hi", tools=[TOOL, TOOL]
+    ),
+    "parallel-calls-with-tool-choice-none": lambda: GenerationRequest(
+        model="m",
+        input="Hi",
+        tools=[TOOL],
+        tool_choice=ToolChoice.NONE,
+        parallel_tool_calls=False,
     ),
     "turn-from-response-without-text": text_less_turn,
 }

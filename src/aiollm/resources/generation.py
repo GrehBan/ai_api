@@ -26,10 +26,15 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
-    from aiollm.enums import Effort
+    from aiollm.enums import Effort, ToolChoice
     from aiollm.http.protocols import HeadersType
     from aiollm.session.retry.policy import RetryPolicy
-    from aiollm.types.requests.generation import JSONSchema, Turn
+    from aiollm.types.requests.generation import (
+        ForcedTool,
+        JSONSchema,
+        Tool,
+        Turn,
+    )
 
 
 class GenerationResource[
@@ -96,6 +101,9 @@ class GenerationResource[
         end_user_id: str | MISSING = MISSING,
         effort: Effort | MISSING = MISSING,
         output_schema: JSONSchema | MISSING = MISSING,
+        tools: list[Tool] | MISSING = MISSING,
+        tool_choice: ToolChoice | ForcedTool | MISSING = MISSING,
+        parallel_tool_calls: bool | MISSING = MISSING,
         provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
@@ -172,6 +180,9 @@ class GenerationResource[
         end_user_id: str | MISSING = MISSING,
         effort: Effort | MISSING = MISSING,
         output_schema: JSONSchema | MISSING = MISSING,
+        tools: list[Tool] | MISSING = MISSING,
+        tool_choice: ToolChoice | ForcedTool | MISSING = MISSING,
+        parallel_tool_calls: bool | MISSING = MISSING,
         provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...

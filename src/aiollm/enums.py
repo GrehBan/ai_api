@@ -114,6 +114,25 @@ class Effort(StrEnum):
 
 
 @unique
+class ToolChoice(StrEnum):
+    """Whether the model calls a tool, for every provider.
+
+    The modes both providers share; to make it call one tool, give a
+    ``ForcedTool`` instead.
+
+    Attributes:
+        AUTO: The model decides; the providers' default.
+        NONE: The model calls no tool and answers in text.
+        REQUIRED: The model calls at least one tool (OpenAI's
+            ``required``, Anthropic's ``any``).
+    """
+
+    AUTO = "auto"
+    NONE = "none"
+    REQUIRED = "required"
+
+
+@unique
 class GenerationEventType(StrEnum):
     """``type`` of a shared generation event.
 

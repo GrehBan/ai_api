@@ -18,8 +18,9 @@ from typing import Any
 
 import pytest
 from aiohttp import ClientTimeout
+from pydantic import ValidationError
 
-from aiollm.enums import Effort, IncompleteReason, Provider
+from aiollm.enums import Effort, IncompleteReason, Provider, ToolChoice
 from aiollm.exceptions import RequestValidationError
 from aiollm.http.exceptions.status import (
     BadRequestError,
@@ -45,7 +46,13 @@ from aiollm.response.stream import Stream
 from aiollm.session.factory import SessionFactory
 from aiollm.session.protocols import ISession
 from aiollm.session.retry import RetryPolicy
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import (
+    ForcedTool,
+    GenerationRequest,
+    JSONSchema,
+    Tool,
+    Turn,
+)
 from aiollm.types.responses import (
     CompletedEvent,
     TextDeltaEvent,
@@ -61,6 +68,25 @@ REQUEST = GenerationRequest(
     instructions="Be brief",
     max_output_tokens=64,
 )
+
+SCHEMA: JSONSchema = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+"""Parameters of the tools of the scenarios."""
+
+TOOLS = [
+    Tool(
+        name="get_weather",
+        description="Current weather",
+        parameters=SCHEMA,
+        strict=True,
+    ),
+    Tool(name="get_time", parameters={"type": "object", "properties": {}}),
+]
+"""A strict tool with a description, and a bare one."""
 
 
 class Client:
@@ -105,6 +131,10 @@ class Case:
         bad_option: A provider option with a value the method refuses.
         effort: What ``effort=Effort.HIGH`` becomes in the body.
         output_schema: What ``SCHEMA`` with ``Effort.HIGH`` becomes.
+        tools: What ``TOOLS`` with ``ToolChoice.REQUIRED`` and no
+            parallel calls become.
+        forced: What a ``ForcedTool`` becomes.
+        only_parallel: What ``parallel_tool_calls=True`` alone becomes.
     """
 
     provider: Provider
@@ -129,6 +159,9 @@ class Case:
     bad_option: dict[str, Any]
     effort: dict[str, Any]
     output_schema: dict[str, Any]
+    tools: dict[str, Any]
+    forced: dict[str, Any]
+    only_parallel: dict[str, Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -214,6 +247,27 @@ OPENAI = Case(
             }
         },
     },
+    tools={
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Current weather",
+                "parameters": SCHEMA,
+                "strict": True,
+            },
+            {
+                "type": "function",
+                "name": "get_time",
+                "parameters": {"type": "object", "properties": {}},
+                "strict": None,
+            },
+        ],
+        "tool_choice": "required",
+        "parallel_tool_calls": False,
+    },
+    forced={"tool_choice": {"type": "function", "name": "get_time"}},
+    only_parallel={"parallel_tool_calls": True},
 )
 
 ANTHROPIC = Case(
@@ -268,6 +322,25 @@ ANTHROPIC = Case(
                 "schema": {"type": "object", "required": ["n"]},
             },
         }
+    },
+    tools={
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Current weather",
+                "input_schema": SCHEMA,
+                "strict": True,
+            },
+            {
+                "name": "get_time",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ],
+        "tool_choice": {"type": "any", "disable_parallel_tool_use": True},
+    },
+    forced={"tool_choice": {"type": "tool", "name": "get_time"}},
+    only_parallel={
+        "tool_choice": {"type": "auto", "disable_parallel_tool_use": False}
     },
 )
 
@@ -424,6 +497,103 @@ async def test_an_output_schema_reaches_the_wire_as_it_is(
     assert {key: body[key] for key in case.output_schema} == (
         case.output_schema
     )
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_tools_reach_the_wire(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    if mode == "create":
+        recorder.reply(Reply(json=case.response))
+    else:
+        recorder.reply(events(case.stream))
+    request = REQUEST.model_copy(
+        update={
+            "tools": TOOLS,
+            "tool_choice": ToolChoice.REQUIRED,
+            "parallel_tool_calls": False,
+        }
+    )
+
+    async with client:
+        if mode == "create":
+            await client.generation.create(request)
+        else:
+            async with client.generation.stream(request) as stream:
+                await stream.final()
+
+    body = json.loads(recorder.last.body)
+    assert {key: body[key] for key in case.tools} == case.tools
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({"tool_choice": ForcedTool(name="get_time")}, "forced"),
+        ({"parallel_tool_calls": True}, "only_parallel"),
+    ],
+    ids=["forced", "only-parallel"],
+)
+async def test_tool_choices_reach_the_wire(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    changes: dict[str, Any],
+    expected: str,
+) -> None:
+    recorder.reply(Reply(json=case.response))
+    request = GenerationRequest(
+        model="model-1", input="Hi", tools=TOOLS, **changes
+    )
+
+    async with client:
+        await client.generation.create(request)
+
+    body = json.loads(recorder.last.body)
+    wanted = getattr(case, expected)
+    assert {key: body[key] for key in wanted} == wanted
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"tool_choice": ToolChoice.AUTO},
+        {"parallel_tool_calls": False},
+        {"tools": [TOOLS[0], TOOLS[0]]},
+        {"tools": TOOLS, "tool_choice": ForcedTool(name="other")},
+        {
+            "tools": TOOLS,
+            "tool_choice": ToolChoice.NONE,
+            "parallel_tool_calls": True,
+        },
+        {"tools": []},
+    ],
+    ids=[
+        "choice-without-tools",
+        "parallel-without-tools",
+        "duplicate-names",
+        "forced-unknown-tool",
+        "parallel-with-none",
+        "no-tools",
+    ],
+)
+def test_tool_settings_no_provider_takes_are_refused(
+    changes: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        GenerationRequest(model="model-1", input="Hi", **changes)
+
+
+@pytest.mark.parametrize(
+    "name", ["", "has space", "a" * 129, "dots.not.allowed"]
+)
+def test_tool_names_both_providers_take(name: str) -> None:
+    with pytest.raises(ValidationError, match="name"):
+        Tool(name=name, parameters={"type": "object"})
+    Tool(name="a" * 128, parameters={"type": "object"})
 
 
 @pytest.mark.parametrize("mode", ["create", "stream"])
