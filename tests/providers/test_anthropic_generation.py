@@ -27,7 +27,13 @@ from aiollm.providers.anthropic.types.options import (
     AnthropicGenerationOptions,
 )
 from aiollm.resources.generation import GenerationResource
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    ToolCall,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
@@ -465,6 +471,70 @@ async def test_arguments_without_their_tool_use_raise() -> None:
 
     with pytest.raises(APIResponseError, match="block 3 without its tool"):
         await convert([STREAM[0], delta])
+
+
+def test_a_user_turn_after_results_joins_their_message() -> None:
+    # Anthropic wants tool_result blocks first in the user message that
+    # follows the calls; text after them goes in the same message.
+    call = ToolCall(id="toolu_1", name="f", arguments='{"a": 1}')
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="toolu_1", output="ok"),
+                Turn.user("Now sum up"),
+            ]
+        }
+    )
+
+    messages = adapter.to_method(request).get_body_map()["messages"]
+
+    assert messages[1:] == [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "f",
+                    "input": {"a": 1},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "ok",
+                },
+                {"type": "text", "text": "Now sum up"},
+            ],
+        },
+    ]
+
+
+def test_calls_whose_arguments_are_no_object_are_refused() -> None:
+    call = ToolCall(id="toolu_1", name="f", arguments="[1]")
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="toolu_1", output="ok"),
+            ]
+        }
+    )
+
+    with pytest.raises(
+        RequestValidationError, match="not an object"
+    ) as caught:
+        adapter.to_method(request)
+
+    assert caught.value.field == "input"
+    assert isinstance(caught.value.__cause__, ValueError)
 
 
 def test_stream_state_without_message_start_raises() -> None:

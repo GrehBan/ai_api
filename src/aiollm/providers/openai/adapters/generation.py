@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import MISSING
 
 from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
-    check_last_turn,
+    check_conversation,
     checked_options,
     merge_options,
     request_errors,
@@ -21,6 +21,7 @@ from aiollm.providers.openai.adapters.conversions import (
     STOP_CONVERSION,
     USAGE_CONVERSION,
     check_status,
+    native_output,
     output_text,
     reasoning_summary,
     tool_calls,
@@ -42,6 +43,7 @@ from aiollm.providers.openai.types.options import OpenAIGenerationOptions
 from aiollm.types.requests.generation import (
     ForcedTool,
     GenerationRequest,
+    InputItem,
     Tool,
 )
 from aiollm.types.responses.events import (
@@ -57,7 +59,6 @@ if TYPE_CHECKING:
     from aiollm.adapters.protocols import IConversion
     from aiollm.adapters.stop import Stop
     from aiollm.providers.openai.types import ResponseUsage
-    from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
 
@@ -111,7 +112,7 @@ class OpenAIGenerationAdapter(
         self,
         *,
         input_conversion: IConversion[
-            str | list[Turn], str | list[dict[str, Any]]
+            str | Sequence[InputItem], str | list[dict[str, Any]]
         ] = INPUT_CONVERSION,
         usage_conversion: IConversion[
             ResponseUsage, TokenUsage
@@ -203,6 +204,7 @@ class OpenAIGenerationAdapter(
             refusal=stop.refusal,
             reasoning=reasoning_summary(raw),
             tool_calls=tool_calls(raw),
+            native=native_output(raw),
             raw=raw,
         )
 
@@ -309,7 +311,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: The conversation does not end with a
                 ``user`` turn.
         """
-        check_last_turn(request, self.provider)
+        check_conversation(request, self.provider)
         fields = {
             "model": request.model,
             "input": self.input_conversion(request.input),

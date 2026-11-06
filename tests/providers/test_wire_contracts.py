@@ -56,7 +56,13 @@ from aiollm.response.parse.stream import StreamResponseParser
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import AnyOf, EventTypes
-from aiollm.types.requests import GenerationRequest, Tool, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    Tool,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.unknown import BaseUnknown
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
@@ -428,6 +434,79 @@ def test_shared_conversation_passes_the_request_schema(case: Case) -> None:
     ):
         body = json.loads(json.dumps(method.get_body_map()))
         assert errors(schema, body) == []
+
+
+@pytest.mark.parametrize("native", [True, False], ids=["native", "shared"])
+@pytest.mark.parametrize("case", CASES)
+def test_a_tool_loop_passes_the_request_schema(
+    case: Case, native: bool
+) -> None:
+    # The response's own output (or, from another provider, the shared
+    # calls) and the results that follow it make a valid body, so the
+    # second request of a loop is what the provider takes.
+    adapter: Any = case.adapter
+    called = adapter.to_response(
+        case.response.model_validate(LOOP[case.name]), CONVERSATION
+    )
+    turn = called.to_turn()
+    assert isinstance(turn, ToolCallTurn)
+    if not native:
+        turn = turn.model_copy(update={"native": MISSING})
+    request = GenerationRequest(
+        model="model-1",
+        input=[
+            Turn.user("Weather in Paris?"),
+            turn,
+            ToolResult(call_id=turn.tool_calls[0].id, output="15 C"),
+            Turn.user("And in short?"),
+        ],
+        tools=[Tool(name="get_weather", parameters={"type": "object"})],
+    )
+    schema = validator(case, "request.schema.json")
+
+    body = json.loads(json.dumps(adapter.to_method(request).get_body_map()))
+
+    assert errors(schema, body) == []
+
+
+LOOP: Final = {
+    "openai/responses": openai.RESPONSE
+    | {
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [],
+                "encrypted_content": "gAAAA",
+            },
+            openai.MESSAGE,
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ]
+    },
+    "anthropic/messages": anthropic.MESSAGE
+    | {
+        "content": [
+            {"type": "thinking", "thinking": "Weather.", "signature": "sig"},
+            {"type": "text", "text": "Checking.", "citations": None},
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "get_weather",
+                "input": {"city": "Paris"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "stop_details": None,
+    },
+}
+"""A response of each provider that calls a tool, with reasoning."""
 
 
 def request_definition(

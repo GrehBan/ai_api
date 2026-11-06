@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, Protocol, Self, Unpack, overload
 
@@ -28,9 +28,9 @@ if TYPE_CHECKING:
     from aiollm.session.retry.policy import RetryPolicy
     from aiollm.types.requests.generation import (
         ForcedTool,
+        InputItem,
         JSONSchema,
         Tool,
-        Turn,
     )
 
 
@@ -168,7 +168,7 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         /,
         *,
         model: str,
-        input: str | list[Turn],
+        input: str | Sequence[InputItem],
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         end_user_id: str | MISSING = MISSING,
@@ -221,7 +221,7 @@ class IGenerationResource[RawT, RawItemT](IResource, Protocol):
         /,
         *,
         model: str,
-        input: str | list[Turn],
+        input: str | Sequence[InputItem],
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         end_user_id: str | MISSING = MISSING,

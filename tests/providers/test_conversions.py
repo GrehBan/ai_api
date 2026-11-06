@@ -7,6 +7,7 @@ stream alike, and gets the provider's own types.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from aiollm.adapters import BaseConversion, IConversion, Stop
@@ -33,7 +34,7 @@ from aiollm.providers.openai.adapters.conversions import (
     USAGE_CONVERSION as OPENAI_USAGE,
 )
 from aiollm.providers.openai.types import Response, ResponseUsage
-from aiollm.types.requests import Turn
+from aiollm.types.requests import InputItem
 from aiollm.types.responses import CompletedEvent, TokenUsage
 from tests.providers import test_anthropic_generation as anthropic
 from tests.providers import test_openai_generation as openai
@@ -62,21 +63,25 @@ class Recording:
 
 
 class OpenAIInput(
-    BaseConversion[str | list[Turn], str | list[dict[str, Any]]],
+    BaseConversion[str | Sequence[InputItem], str | list[dict[str, Any]]],
 ):
     """Sends a fixed text instead of the request's input."""
 
     def __call__(
-        self, source: str | list[Turn], /
+        self, source: str | Sequence[InputItem], /
     ) -> str | list[dict[str, Any]]:
         """Ignore the input."""
         return "swapped"
 
 
-class AnthropicInput(BaseConversion[str | list[Turn], list[dict[str, Any]]]):
+class AnthropicInput(
+    BaseConversion[str | Sequence[InputItem], list[dict[str, Any]]]
+):
     """Sends a fixed turn instead of the request's input."""
 
-    def __call__(self, source: str | list[Turn], /) -> list[dict[str, Any]]:
+    def __call__(
+        self, source: str | Sequence[InputItem], /
+    ) -> list[dict[str, Any]]:
         """Ignore the input."""
         return [{"role": "user", "content": "swapped"}]
 

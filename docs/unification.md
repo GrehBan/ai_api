@@ -41,9 +41,20 @@ Two rules decide what is shared:
 | `GenerationResponse.refusal` | The `refusal` parts, joined | `stop_details.explanation`, else `stop_details.category`, of a `refusal` stop | A refusal is an answer, not an error, as in both SDKs. `None` if the provider gives no explanation. |
 | `GenerationResponse.reasoning` | The `summary_text` parts of the `reasoning` items, joined; there only when the request asks for them with `provider_options={"reasoning": {"summary": "auto"}}` | The `thinking` blocks, joined; a summary on the 5.x models, there only with `provider_options={"thinking": {"type": "adaptive", "display": "summarized"}}` | `None` without a summary, the same for both. OpenAI's raw `reasoning_text` and `encrypted_content`, and Anthropic's `signature` and `redacted_thinking`, stay in `raw`. |
 | `GenerationResponse.tool_calls` | A `ToolCall` per `function_call` item, in output order | A `ToolCall` per `tool_use` block, in content order | Empty without calls. A response with calls finished normally (OpenAI `completed`, Anthropic `stop_reason: "tool_use"`) and waits for their results; with `incomplete_reason` set, the last call may be cut off, so run none of them and retry with a higher limit. Built-in and server tool calls stay in `raw`. |
+| `GenerationResponse.native` | The output items, with only the fields OpenAI sent | The content blocks, with only the fields Anthropic sent | The provider's own record of the turn, reasoning included (OpenAI's reasoning items, Anthropic's thinking with its `signature`); `to_turn()` puts it in a turn of calls. `None` without output. |
 | `GenerationResponse.raw` | `Response` | `Message` | Holds everything the shared fields leave out. |
 
-`response.to_turn()` turns a response into an `assistant` turn for the next request; a response without text raises `ValueError`.
+`response.to_turn()` turns a response into the next item of the conversation: a `ToolCallTurn` when the model called tools, else an `assistant` turn. A response with neither calls nor text raises `ValueError`, and so does one with calls that stopped early, since its last call may be cut off.
+
+## Conversation
+
+`GenerationRequest.input` is a text or a list of items: text turns (`Turn`), turns of calls (`ToolCallTurn`) and results (`ToolResult`). Before sending, every adapter checks the order both providers require (each answers 400 otherwise): the results of a turn of calls follow it at once, one per call; no result stands anywhere else; the conversation ends with a `user` turn or a result.
+
+| Item | OpenAI | Anthropic | Lost, or when it raises |
+| --- | --- | --- | --- |
+| `Turn` | An `EasyInputMessage` (`role`, `content`) | A message (`role`, `content`); a `user` turn right after results joins their message, after them | A dict without `type` is a `Turn`, as before the other items. |
+| `ToolCallTurn` | Its `native` items, when they are OpenAI's (reasoning items with them); else an `assistant` message with its `text` and a `function_call` per call | An `assistant` message: its `native` blocks, when they are Anthropic's (thinking with its `signature`); else a `text` block and a `tool_use` block per call | Another provider's `native` is not sent: it cannot read it, so the shared calls go, and the reasoning behind them is lost. For Anthropic, arguments that are not a JSON object raise `RequestValidationError`. With `store: false`, OpenAI's reasoning items carry their content only if the call asked for `include: ["reasoning.encrypted_content"]`. |
+| `ToolResult` | A `function_call_output` (`call_id`, `output`) | A `tool_result` block (`tool_use_id`, `content`) in one `user` message with the other results | Text only; images and files in results are not shared. Anthropic's `is_error` is not shared: OpenAI has no such flag, so describe a failure in `output`. |
 
 ## Tool calls
 
@@ -118,7 +129,11 @@ Every case below is raised before the request is sent (requests) or before the s
 | `forced-tool-not-in-tools` | any | `tool_choice` | `ValidationError` |
 | `duplicate-tool-names` | any | `tools` | `ValidationError` |
 | `parallel-calls-with-tool-choice-none` | any | `parallel_tool_calls` | `ValidationError` |
+| `tool-call-without-result` | any | `input` | `RequestValidationError` |
+| `result-without-call` | any | `input` | `RequestValidationError` |
+| `anthropic-arguments-not-an-object` | Anthropic | `input` | `RequestValidationError` |
 | `turn-from-response-without-text` | any | — | `ValueError` |
+| `turn-from-response-cut-mid-call` | any | — | `ValueError` |
 
 ## Provider options
 

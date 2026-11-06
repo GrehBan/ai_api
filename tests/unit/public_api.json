@@ -49,7 +49,9 @@
     "IValueFormatter",
     "IncompleteReason",
     "InputFile",
+    "InputItem",
     "InternalServerError",
+    "NativeOutput",
     "NoProviderOptions",
     "NotFoundError",
     "OtherEvent",
@@ -74,7 +76,9 @@
     "TokenUsage",
     "Tool",
     "ToolCall",
+    "ToolCallTurn",
     "ToolChoice",
+    "ToolResult",
     "Turn",
     "UnprocessableEntityError",
     "__version__",
@@ -1118,10 +1122,15 @@
     "BaseRequest",
     "ForcedTool",
     "GenerationRequest",
+    "InputItem",
     "JSONSchema",
     "JSONValue",
+    "NativeOutput",
     "NoProviderOptions",
     "Tool",
+    "ToolCall",
+    "ToolCallTurn",
+    "ToolResult",
     "Turn"
   ],
   "aiollm.types.responses": [
@@ -1135,7 +1144,6 @@
     "RawResponseEvent",
     "ReasoningDeltaEvent",
     "TextDeltaEvent",
-    "TokenUsage",
-    "ToolCall"
+    "TokenUsage"
   ]
 }

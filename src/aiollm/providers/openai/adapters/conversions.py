@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, TypeIs
+
+from pydantic import MISSING
 
 from aiollm.adapters.base import BaseConversion
 from aiollm.adapters.stop import Stop
-from aiollm.enums import IncompleteReason
+from aiollm.enums import IncompleteReason, Role
 from aiollm.http.exceptions.response import APIResponseError
+from aiollm.providers.openai.api import PROVIDER
 from aiollm.providers.openai.types import (
     FunctionToolCall,
     OutputMessage,
@@ -18,7 +21,12 @@ from aiollm.providers.openai.types import (
     Response,
     ResponseUsage,
 )
-from aiollm.types.requests.generation import Turn
+from aiollm.types.requests.generation import (
+    InputItem,
+    NativeOutput,
+    ToolCallTurn,
+    Turn,
+)
 from aiollm.types.responses.generation import TokenUsage, ToolCall
 
 INCOMPLETE_REASONS: Final[Mapping[str, IncompleteReason]] = {
@@ -32,31 +40,66 @@ none at all, a reason OpenAI adds later) is ``IncompleteReason.OTHER``.
 
 
 class InputConversion(
-    BaseConversion[str | list[Turn], str | list[dict[str, Any]]],
+    BaseConversion[str | Sequence[InputItem], str | list[dict[str, Any]]],
 ):
     """Converts the shared ``input`` into OpenAI's ``input``.
 
-    A text is sent as it is; a list of turns as ``EasyInputMessage``
-    items (``role``, ``content``).
+    A text is sent as it is. In a list, a text turn becomes an
+    ``EasyInputMessage`` (``role``, ``content``), a turn of calls its
+    OpenAI output items when it has them (``native``, reasoning items
+    with it), else an ``assistant`` message with its text and a
+    ``function_call`` per call, and a tool result a
+    ``function_call_output``.
     """
 
     def __call__(
-        self, source: str | list[Turn], /
+        self, source: str | Sequence[InputItem], /
     ) -> str | list[dict[str, Any]]:
         """Convert the input.
 
         Args:
-            source: The text or the turns of the shared request.
+            source: The text or the conversation of the shared request.
 
         Returns:
-            The text, or one input item per turn.
+            The text, or the input items.
         """
         if isinstance(source, str):
             return source
-        return [
-            {"role": turn.role.value, "content": turn.content}
-            for turn in source
-        ]
+        items: list[dict[str, Any]] = []
+        for item in source:
+            match item:
+                case Turn():
+                    items.append(
+                        {"role": item.role.value, "content": item.content}
+                    )
+                case ToolCallTurn() if _own(item.native):
+                    items += [dict(native) for native in item.native.items]
+                case ToolCallTurn():
+                    if item.text is not MISSING:
+                        items.append(
+                            {
+                                "role": Role.ASSISTANT.value,
+                                "content": item.text,
+                            }
+                        )
+                    items += [
+                        {
+                            "type": "function_call",
+                            "call_id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        }
+                        for call in item.tool_calls
+                    ]
+                case _:
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item.call_id,
+                            "output": item.output,
+                        }
+                    )
+        return items
 
 
 class UsageConversion(BaseConversion[ResponseUsage, TokenUsage]):
@@ -208,6 +251,37 @@ def tool_calls(response: Response) -> list[ToolCall]:
         for item in response.output
         if isinstance(item, FunctionToolCall)
     ]
+
+
+def _own(native: NativeOutput | MISSING) -> TypeIs[NativeOutput]:
+    """Tell OpenAI's own output from another provider's or none.
+
+    Args:
+        native: The ``native`` of a turn of calls.
+
+    Returns:
+        Whether it is OpenAI's output, to be sent in place of the turn.
+    """
+    return native is not MISSING and native.provider is PROVIDER
+
+
+def native_output(response: Response) -> NativeOutput | None:
+    """Keep a response's output as OpenAI's next request takes it.
+
+    Args:
+        response: A response.
+
+    Returns:
+        Its output items with only the fields OpenAI sent, which are
+        valid input items (reasoning items with their ``id`` or
+        ``encrypted_content``, function calls, messages); ``None``
+        without output.
+    """
+    items = [
+        item.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        for item in response.output
+    ]
+    return NativeOutput(provider=PROVIDER, items=items) if items else None
 
 
 def reasoning_summary(response: Response) -> str | None:

@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Final, Self
+import json
+from collections.abc import Sequence
+from typing import Annotated, Final, Literal, Self
 
-from pydantic import MISSING, ConfigDict, Field, model_validator
+from pydantic import (
+    MISSING,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    model_validator,
+)
 from typing_extensions import TypedDict
 
-from aiollm.enums import Effort, Role, ToolChoice
+from aiollm.enums import Effort, Provider, Role, ToolChoice
 from aiollm.types.base import BaseAPIType
 from aiollm.types.requests.base import BaseRequest
 
@@ -19,16 +28,19 @@ class Turn(BaseAPIType):
     turns: they go in ``GenerationRequest.instructions``.
 
     Attributes:
+        type: Always ``"text"``; tells the turn apart from the other
+            items of a conversation.
         role: Who wrote the turn.
         content: Text of the turn.
 
     Example:
         >>> Turn.user("Hi")
-        Turn(role=<Role.USER: 'user'>, content='Hi')
+        Turn(type='text', role=<Role.USER: 'user'>, content='Hi')
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    type: Literal["text"] = "text"
     role: Role
     content: str
 
@@ -126,6 +138,145 @@ class ForcedTool(BaseAPIType):
     name: str = Field(pattern=TOOL_NAME_PATTERN)
 
 
+class ToolCall(BaseAPIType):
+    """A call of one of the request's tools.
+
+    Immutable, and unknown fields are rejected. The arguments are the
+    JSON text the model wrote, as OpenAI sends them and as both stream
+    them; Anthropic's object is written as JSON. Without ``strict`` the
+    text may be invalid JSON, so it is parsed only on
+    ``parse_arguments()``.
+
+    Attributes:
+        id: The call's id, which its result refers to (OpenAI's
+            ``call_id``, Anthropic's ``tool_use.id``).
+        name: The tool called.
+        arguments: The arguments, a JSON object as text.
+
+    Example:
+        >>> for call in response.tool_calls:
+        ...     result = run(call.name, call.parse_arguments())
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1)
+    name: str
+    arguments: str
+
+    def parse_arguments(self) -> dict[str, JSONValue]:
+        """Parse the arguments.
+
+        Returns:
+            The arguments as a JSON object.
+
+        Raises:
+            ValueError: The arguments are not a JSON object.
+        """
+        try:
+            value = json.loads(self.arguments)
+        except json.JSONDecodeError as error:
+            message = f"arguments of tool call {self.id} are not JSON"
+            raise ValueError(message) from error
+        if not isinstance(value, dict):
+            message = f"arguments of tool call {self.id} are not an object"
+            raise ValueError(message)
+        return value
+
+
+class NativeOutput(BaseAPIType):
+    """A response's output as its provider's next request takes it.
+
+    The provider's own record of the turn: OpenAI's output items, its
+    reasoning items with ``encrypted_content`` among them, or Anthropic's
+    content blocks, thinking with its ``signature`` among them, each as
+    the response sent it. The provider's adapter sends it in place of the
+    shared fields of the turn, so the model sees its reasoning again;
+    another provider's adapter sends the shared fields only, since it
+    cannot read it.
+
+    Attributes:
+        provider: The provider whose output it is.
+        items: The items, in output order.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Provider
+    items: Annotated[list[dict[str, JSONValue]], Field(min_length=1)]
+
+
+class ToolCallTurn(BaseAPIType):
+    """A turn of the model that calls tools.
+
+    Made by ``GenerationResponse.to_turn()`` from a response with calls;
+    the next items of the conversation are a ``ToolResult`` for each of
+    its calls.
+
+    Attributes:
+        type: Always ``"tool_calls"``.
+        text: Text the model wrote with the calls, if any.
+        tool_calls: The calls; at least one.
+        native: The response's own output, which its provider gets back
+            in place of ``text`` and ``tool_calls``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["tool_calls"] = "tool_calls"
+    text: str | MISSING = MISSING
+    tool_calls: Annotated[list[ToolCall], Field(min_length=1)]
+    native: NativeOutput | MISSING = MISSING
+
+
+class ToolResult(BaseAPIType):
+    """What a tool returned for one call.
+
+    Immutable, and unknown fields are rejected. Describe a failure in
+    ``output``: OpenAI has no error flag, and both read the text.
+
+    Attributes:
+        type: Always ``"tool_result"``.
+        call_id: ``ToolCall.id`` of the call it answers.
+        output: The result as text, such as JSON.
+
+    Example:
+        >>> ToolResult(call_id=call.id, output='{"celsius": 15}')
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["tool_result"] = "tool_result"
+    call_id: str = Field(min_length=1)
+    output: str
+
+
+def _item_tag(value: object) -> object:
+    """Tell which item of a conversation a value is.
+
+    A dict without ``type`` is a text turn, as the conversations written
+    before the other items were.
+
+    Args:
+        value: An item, or a dict of one.
+
+    Returns:
+        Its ``type``.
+    """
+    if isinstance(value, dict):
+        return value.get("type", "text")
+    return getattr(value, "type", None)
+
+
+type InputItem = Annotated[
+    Annotated[Turn, Tag("text")]
+    | Annotated[ToolCallTurn, Tag("tool_calls")]
+    | Annotated[ToolResult, Tag("tool_result")],
+    Discriminator(_item_tag),
+]
+"""An item of a conversation: a text turn, a turn of calls or a result."""
+
+
 class NoProviderOptions(TypedDict, total=False, closed=True):
     """Provider options of a generation resource that takes none.
 
@@ -143,11 +294,12 @@ class GenerationRequest(BaseRequest):
     Attributes:
         model: Model identifier of the provider; not empty.
         input: Text to respond to, taken as one ``user`` turn, or the
-            conversation so far, a list of at least one turn; an empty
-            text or list is refused before anything is sent. Every
-            provider requires the last turn to be a ``user`` one; the
-            adapter checks it and raises ``RequestValidationError``
-            otherwise.
+            conversation so far, a list of at least one item: text turns,
+            turns of tool calls and tool results; an empty text or list
+            is refused before anything is sent. The conversation ends
+            with a ``user`` turn or a tool result, and the results of a
+            turn of calls follow it, one per call; the adapter checks it
+            and raises ``RequestValidationError`` otherwise.
         instructions: Instructions for the model given apart from the
             input, such as a system prompt.
         max_output_tokens: Upper bound on generated tokens; positive.
@@ -185,7 +337,7 @@ class GenerationRequest(BaseRequest):
     model: str = Field(min_length=1)
     input: (
         Annotated[str, Field(min_length=1)]
-        | Annotated[list[Turn], Field(min_length=1)]
+        | Annotated[Sequence[InputItem], Field(min_length=1)]
     )
     instructions: str | MISSING = MISSING
     max_output_tokens: int | MISSING = Field(default=MISSING, gt=0)

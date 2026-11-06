@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-from pydantic import BaseModel
+from pydantic import MISSING, BaseModel
 
 from aiollm.adapters.base import BaseConversion
 from aiollm.adapters.stop import Stop
 from aiollm.enums import IncompleteReason, Role
 from aiollm.http.exceptions.response import APIResponseError
+from aiollm.providers.anthropic.api import PROVIDER
 from aiollm.providers.anthropic.types import (
     Delta,
     Message,
@@ -23,7 +24,13 @@ from aiollm.providers.anthropic.types import (
     ToolUseBlock,
     Usage,
 )
-from aiollm.types.requests.generation import Turn
+from aiollm.types.requests.generation import (
+    InputItem,
+    NativeOutput,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.responses.generation import TokenUsage, ToolCall
 
 FINISHED: Final = frozenset({"end_turn", "stop_sequence", "tool_use"})
@@ -49,28 +56,94 @@ REFUSAL: Final = "refusal"
 
 
 class InputConversion(
-    BaseConversion[str | list[Turn], list[dict[str, Any]]],
+    BaseConversion[str | Sequence[InputItem], list[dict[str, Any]]],
 ):
     """Converts the shared ``input`` into ``messages``.
 
-    A text becomes one ``user`` turn; a list of turns is sent as it is.
+    A text becomes one ``user`` turn, and so does a text turn of a list.
+    A turn of calls becomes an ``assistant`` message: its Anthropic
+    content blocks when it has them (``native``, thinking with it), else
+    a ``text`` block and a ``tool_use`` block per call. The tool results
+    after it become one ``user`` message of ``tool_result`` blocks, and a
+    ``user`` turn right after them joins that message, after the results,
+    as Anthropic requires. The adapter checks first that the arguments
+    of the calls are JSON objects.
     """
 
-    def __call__(self, source: str | list[Turn], /) -> list[dict[str, Any]]:
+    def __call__(
+        self, source: str | Sequence[InputItem], /
+    ) -> list[dict[str, Any]]:
         """Convert the input.
 
         Args:
-            source: The text or the turns of the shared request.
+            source: The text or the conversation of the shared request.
 
         Returns:
-            One message per turn.
+            The messages.
         """
         if isinstance(source, str):
             return [{"role": Role.USER.value, "content": source}]
-        return [
-            {"role": turn.role.value, "content": turn.content}
-            for turn in source
-        ]
+        messages: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] | None = None
+        for item in source:
+            match item:
+                case ToolResult():
+                    block = {
+                        "type": "tool_result",
+                        "tool_use_id": item.call_id,
+                        "content": item.output,
+                    }
+                    if results is None:
+                        results = [block]
+                        messages.append(
+                            {"role": Role.USER.value, "content": results}
+                        )
+                    else:
+                        results.append(block)
+                    continue
+                case Turn(role=Role.USER) if results is not None:
+                    results.append({"type": "text", "text": item.content})
+                case Turn():
+                    messages.append(
+                        {"role": item.role.value, "content": item.content}
+                    )
+                case _:
+                    messages.append(
+                        {
+                            "role": Role.ASSISTANT.value,
+                            "content": _assistant_blocks(item),
+                        }
+                    )
+            results = None
+        return messages
+
+
+def _assistant_blocks(turn: ToolCallTurn) -> list[dict[str, Any]]:
+    """Build the content of a turn of calls.
+
+    Args:
+        turn: The turn.
+
+    Returns:
+        Its Anthropic content blocks when it has them, else a ``text``
+        block and a ``tool_use`` block per call, the arguments parsed.
+    """
+    native = turn.native
+    if native is not MISSING and native.provider is PROVIDER:
+        return [dict(block) for block in native.items]
+    blocks: list[dict[str, Any]] = []
+    if turn.text is not MISSING:
+        blocks.append({"type": "text", "text": turn.text})
+    blocks += [
+        {
+            "type": "tool_use",
+            "id": call.id,
+            "name": call.name,
+            "input": call.parse_arguments(),
+        }
+        for call in turn.tool_calls
+    ]
+    return blocks
 
 
 class UsageConversion(BaseConversion[Usage, TokenUsage]):
@@ -191,6 +264,24 @@ def message_tool_calls(message: Message) -> list[ToolCall]:
         for block in message.content
         if isinstance(block, ToolUseBlock)
     ]
+
+
+def message_native(message: Message) -> NativeOutput | None:
+    """Keep a message's content as Anthropic's next request takes it.
+
+    Args:
+        message: A message.
+
+    Returns:
+        Its content blocks with only the fields Anthropic sent (thinking
+        with its ``signature``, text, ``tool_use``), which an
+        ``assistant`` message takes back; ``None`` without content.
+    """
+    blocks = [
+        block.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        for block in message.content
+    ]
+    return NativeOutput(provider=PROVIDER, items=blocks) if blocks else None
 
 
 def message_thinking(message: Message) -> str | None:

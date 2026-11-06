@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import MISSING
 
 from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
-    check_last_turn,
+    check_conversation,
     checked_options,
     merge_options,
     request_errors,
 )
 from aiollm.enums import ToolChoice
+from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
     USAGE_CONVERSION,
     StreamState,
+    message_native,
     message_text,
     message_thinking,
     message_tool_calls,
@@ -47,7 +49,9 @@ from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
 from aiollm.types.requests.generation import (
     ForcedTool,
     GenerationRequest,
+    InputItem,
     Tool,
+    ToolCallTurn,
 )
 from aiollm.types.responses.events import (
     CompletedEvent,
@@ -62,7 +66,6 @@ if TYPE_CHECKING:
     from aiollm.adapters.protocols import IConversion
     from aiollm.adapters.stop import Stop
     from aiollm.providers.anthropic.types import Delta, Usage
-    from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
 DEFAULT_MAX_TOKENS: Final = 16000
@@ -125,7 +128,7 @@ class AnthropicGenerationAdapter(
         *,
         default_max_tokens: int = DEFAULT_MAX_TOKENS,
         input_conversion: IConversion[
-            str | list[Turn], list[dict[str, Any]]
+            str | Sequence[InputItem], list[dict[str, Any]]
         ] = INPUT_CONVERSION,
         usage_conversion: IConversion[Usage, TokenUsage] = USAGE_CONVERSION,
         stop_conversion: IConversion[Message | Delta, Stop] = STOP_CONVERSION,
@@ -222,6 +225,7 @@ class AnthropicGenerationAdapter(
             refusal=stop.refusal,
             reasoning=message_thinking(raw),
             tool_calls=message_tool_calls(raw),
+            native=message_native(raw),
             raw=raw,
         )
 
@@ -327,10 +331,13 @@ class AnthropicGenerationAdapter(
             ``with_options`` included.
 
         Raises:
-            RequestValidationError: The conversation does not end with a
-                ``user`` turn.
+            RequestValidationError: The conversation is out of order (see
+                ``check_conversation``), or a call of a turn without
+                Anthropic's own content has arguments that are not a JSON
+                object, which ``tool_use.input`` must be.
         """
-        check_last_turn(request, self.provider)
+        check_conversation(request, self.provider)
+        _check_arguments(request)
         fields = {
             "model": request.model,
             "messages": self.input_conversion(request.input),
@@ -354,6 +361,35 @@ class AnthropicGenerationAdapter(
             "tool_choice": _tool_choice(request),
         }
         return merge_options(fields, self.provider_options, self.provider)
+
+
+def _check_arguments(request: GenerationRequest) -> None:
+    """Check that the calls Anthropic gets as ``tool_use`` parse.
+
+    A turn with Anthropic's own content is sent as it came; the calls of
+    any other turn are sent as ``tool_use`` blocks, whose ``input`` is a
+    JSON object, so their arguments must parse as one.
+
+    Args:
+        request: The shared request.
+
+    Raises:
+        RequestValidationError: A call's arguments are not a JSON object.
+    """
+    if isinstance(request.input, str):
+        return
+    for item in request.input:
+        if not isinstance(item, ToolCallTurn):
+            continue
+        if item.native is not MISSING and item.native.provider is PROVIDER:
+            continue
+        for call in item.tool_calls:
+            try:
+                call.parse_arguments()
+            except ValueError as error:
+                raise RequestValidationError(
+                    str(error), provider=PROVIDER, field="input"
+                ) from error
 
 
 TOOL_CHOICES: Final[Mapping[ToolChoice, str]] = {

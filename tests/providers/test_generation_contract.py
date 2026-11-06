@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 from aiohttp import ClientTimeout
-from pydantic import ValidationError
+from pydantic import MISSING, ValidationError
 
 from aiollm.enums import Effort, IncompleteReason, Provider, ToolChoice
 from aiollm.exceptions import RequestValidationError
@@ -50,7 +50,11 @@ from aiollm.types.requests import (
     ForcedTool,
     GenerationRequest,
     JSONSchema,
+    NativeOutput,
     Tool,
+    ToolCall,
+    ToolCallTurn,
+    ToolResult,
     Turn,
 )
 from aiollm.types.responses import (
@@ -267,6 +271,11 @@ class Case:
         only_parallel: What ``parallel_tool_calls=True`` alone becomes.
         called: A finished response with ``CALLS``, text first.
         called_stream: A finished stream with ``CALLS``, text first.
+        cut_off: What makes ``called`` stop at the token limit.
+        input_field: The body field of the conversation.
+        continued: The body's conversation after its first turn, when
+            ``called`` comes back with its results.
+        continued_shared: The same from the shared calls only.
     """
 
     provider: Provider
@@ -296,6 +305,10 @@ class Case:
     only_parallel: dict[str, Any]
     called: dict[str, Any]
     called_stream: list[dict[str, Any]]
+    cut_off: dict[str, Any]
+    input_field: str
+    continued: list[Any]
+    continued_shared: list[Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -404,6 +417,42 @@ OPENAI = Case(
     only_parallel={"parallel_tool_calls": True},
     called=openai_called(),
     called_stream=openai_called_stream(),
+    cut_off={
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+    },
+    input_field="input",
+    continued=[
+        *openai_called()["output"],
+        *(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": f"result of {name}",
+            }
+            for call_id, name, _ in CALLS
+        ),
+    ],
+    continued_shared=[
+        {"role": "assistant", "content": "Checking."},
+        *(
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": name,
+                "arguments": json.dumps(arguments),
+            }
+            for call_id, name, arguments in CALLS
+        ),
+        *(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": f"result of {name}",
+            }
+            for call_id, name, _ in CALLS
+        ),
+    ],
 )
 
 ANTHROPIC = Case(
@@ -480,6 +529,50 @@ ANTHROPIC = Case(
     },
     called=anthropic_called(),
     called_stream=anthropic_called_stream(),
+    cut_off={"stop_reason": "max_tokens"},
+    input_field="messages",
+    continued=[
+        {"role": "assistant", "content": anthropic_called()["content"]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": f"result of {name}",
+                }
+                for call_id, name, _ in CALLS
+            ],
+        },
+    ],
+    continued_shared=[
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Checking."},
+                *(
+                    {
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": name,
+                        "input": arguments,
+                    }
+                    for call_id, name, arguments in CALLS
+                ),
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": f"result of {name}",
+                }
+                for call_id, name, _ in CALLS
+            ],
+        },
+    ],
 )
 
 
@@ -695,6 +788,136 @@ async def test_tool_calls_come_back_alike(
     ] == CALLS
     assert result.incomplete_reason is None
     assert result.raw_incomplete_reason is None
+
+
+async def test_a_tool_loop_continues_with_the_results(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    # The response's turn of calls goes back with the provider's own
+    # output, and the results follow it; the second request ends the
+    # loop with text.
+    recorder.reply(Reply(json=case.called), Reply(json=case.response))
+    request = REQUEST.model_copy(update={"tools": TOOLS})
+
+    async with client:
+        called = await client.generation.create(request)
+        turn = called.to_turn()
+        results = [
+            ToolResult(call_id=call.id, output=f"result of {call.name}")
+            for call in called.tool_calls
+        ]
+        answer = await client.generation.create(
+            request.model_copy(
+                update={"input": [Turn.user("Hi"), turn, *results]}
+            )
+        )
+
+    assert isinstance(turn, ToolCallTurn)
+    assert turn.native is not MISSING
+    assert turn.native.provider is case.provider
+    assert answer.text == case.text
+    sent = json.loads(recorder.last.body)
+    assert sent[case.input_field][1:] == case.continued
+
+
+async def test_a_turn_of_calls_from_another_provider_sends_its_calls(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    # Another provider's output means nothing here: the shared calls go.
+    recorder.reply(Reply(json=case.response))
+    foreign = (
+        Provider.ANTHROPIC
+        if case.provider is Provider.OPENAI
+        else (Provider.OPENAI)
+    )
+    turn = ToolCallTurn(
+        text="Checking.",
+        tool_calls=[
+            ToolCall(id=call_id, name=name, arguments=json.dumps(arguments))
+            for call_id, name, arguments in CALLS
+        ],
+        native=NativeOutput(provider=foreign, items=[{"type": "opaque"}]),
+    )
+    results = [
+        ToolResult(call_id=call_id, output=f"result of {name}")
+        for call_id, name, _ in CALLS
+    ]
+    request = REQUEST.model_copy(
+        update={"tools": TOOLS, "input": [Turn.user("Hi"), turn, *results]}
+    )
+
+    async with client:
+        await client.generation.create(request)
+
+    sent = json.loads(recorder.last.body)
+    assert sent[case.input_field][1:] == case.continued_shared
+
+
+@pytest.mark.parametrize(
+    ("items", "match"),
+    [
+        (["call"], "have no result"),
+        (["call", "result-1"], "have no result"),
+        (["call", "user", "result-1", "result-2"], "comes before the results"),
+        (["result-1"], "did not make"),
+        (["call", "result-1", "result-1", "result-2"], "did not make"),
+        (["twins"], "share an id"),
+    ],
+    ids=[
+        "unanswered",
+        "half-answered",
+        "text-between",
+        "result-alone",
+        "result-twice",
+        "same-id",
+    ],
+)
+async def test_calls_and_results_out_of_order_are_refused(
+    case: Case,
+    client: Any,
+    items: list[str],
+    match: str,
+) -> None:
+    call = ToolCall(id="call_1", name="get_weather", arguments="{}")
+    other = ToolCall(id="call_2", name="get_time", arguments="{}")
+    pieces = {
+        "call": ToolCallTurn(tool_calls=[call, other]),
+        "twins": ToolCallTurn(tool_calls=[call, call]),
+        "user": Turn.user("And?"),
+        "result-1": ToolResult(call_id="call_1", output="15"),
+        "result-2": ToolResult(call_id="call_2", output="noon"),
+    }
+    conversation = [Turn.user("Hi"), *(pieces[name] for name in items)]
+    request = REQUEST.model_copy(update={"input": conversation})
+
+    async with client:
+        with pytest.raises(RequestValidationError, match=match) as caught:
+            await client.generation.create(request)
+
+    assert caught.value.field == "input"
+    assert caught.value.provider is case.provider
+
+
+async def test_a_response_that_stopped_mid_call_is_no_turn(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(json=case.called | case.cut_off))
+
+    async with client:
+        response = await client.generation.create(
+            REQUEST.model_copy(update={"tools": TOOLS})
+        )
+
+    assert response.incomplete_reason is IncompleteReason.MAX_TOKENS
+    assert response.tool_calls
+    with pytest.raises(ValueError, match="last tool call may be cut off"):
+        response.to_turn()
 
 
 async def test_a_response_without_calls_has_none(

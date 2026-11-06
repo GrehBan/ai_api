@@ -25,7 +25,13 @@ from aiollm.providers.openai.adapters.conversions import output_text
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
 from aiollm.providers.openai.types import Response, ResponseStreamEvent
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    ToolCall,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
@@ -192,6 +198,31 @@ def test_completed_response_is_converted() -> None:
     assert converted.raw_incomplete_reason is None
     assert converted.refusal is None
     assert converted.raw is raw
+
+
+def test_a_turn_of_calls_without_text_sends_only_the_calls() -> None:
+    call = ToolCall(id="call_1", name="f", arguments="{}")
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="call_1", output="ok"),
+            ]
+        }
+    )
+
+    sent = adapter.to_method(request).get_body_map()["input"]
+
+    assert sent[1:] == [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "f",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+    ]
 
 
 def test_usage_without_its_details_is_refused() -> None:

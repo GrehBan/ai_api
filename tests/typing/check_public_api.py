@@ -85,7 +85,12 @@ from aiollm.resources import (
 from aiollm.response import map_stream
 from aiollm.session import CallOptions, ISession, ISessionFactory
 from aiollm.session.aiohttp import AiohttpSession
-from aiollm.types.requests import GenerationRequest, NoProviderOptions, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    NoProviderOptions,
+    ToolCallTurn,
+    Turn,
+)
 from aiollm.types.responses import (
     GenerationEvent,
     GenerationResponse,
@@ -477,7 +482,7 @@ async def openai_generation_infers_its_types(session: AiohttpSession) -> None:
     assert_type(response.incomplete_reason, IncompleteReason | None)
     assert_type(response.raw_incomplete_reason, str | None)
     assert_type(response.refusal, str | None)
-    assert_type(response.to_turn(), Turn)
+    assert_type(response.to_turn(), Turn | ToolCallTurn)
     async with generation.stream(request) as events:
         assert_type(events, GenerationStream[ResponseStreamEvent])
 
@@ -486,6 +491,8 @@ def turns_are_typed() -> None:
     assert_type(Turn.user("x"), Turn)
     assert_type(Turn.assistant("x").role, Role)
     GenerationRequest(model="m", input=[Turn.user("x")])
+    history: list[Turn] = [Turn.user("x")]
+    GenerationRequest(model="m", input=history)
 
 
 async def anthropic_messages_infer_types(session: AiohttpSession) -> None:

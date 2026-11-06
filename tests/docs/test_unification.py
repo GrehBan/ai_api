@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 import aiollm
-from aiollm.enums import Provider, ToolChoice
+from aiollm.enums import IncompleteReason, Provider, ToolChoice
 from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.types import Message
@@ -25,14 +25,21 @@ from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.types import Response
-from aiollm.types.requests import ForcedTool, GenerationRequest, Tool, Turn
+from aiollm.types.requests import (
+    ForcedTool,
+    GenerationRequest,
+    Tool,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.responses import (
     CompletedEvent,
     GenerationEvent,
     GenerationResponse,
     TokenUsage,
-    ToolCall,
 )
+from aiollm.types.requests import ToolCall
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
 from tests.providers import test_openai_responses as openai
@@ -56,6 +63,7 @@ ERRORS = {
 
 REQUEST = GenerationRequest(model="m", input="Hi")
 TOOL = Tool(name="f", parameters={"type": "object"})
+CALL = ToolCall(id="call_1", name="f", arguments="{}")
 
 TURNS = [Turn.user("Hi"), Turn.assistant("Hello")]
 
@@ -120,6 +128,7 @@ TAKEN_AS_IS = {
     "GenerationResponse.text",
     "GenerationResponse.reasoning",
     "GenerationResponse.tool_calls",
+    "GenerationResponse.native",
     "GenerationResponse.raw",
     "ToolCall.id",
     "ToolCall.name",
@@ -261,7 +270,27 @@ SYNC_CASES: dict[str, Callable[[], object]] = {
         tool_choice=ToolChoice.NONE,
         parallel_tool_calls=False,
     ),
+    "tool-call-without-result": openai_method(
+        input=[Turn.user("Hi"), ToolCallTurn(tool_calls=[CALL])]
+    ),
+    "result-without-call": anthropic_method(
+        input=[Turn.user("Hi"), ToolResult(call_id="call_1", output="15")]
+    ),
+    "anthropic-arguments-not-an-object": anthropic_method(
+        input=[
+            Turn.user("Hi"),
+            ToolCallTurn(tool_calls=[CALL.model_copy(update={"arguments": "1"})]),
+            ToolResult(call_id="call_1", output="15"),
+        ]
+    ),
     "turn-from-response-without-text": text_less_turn,
+    "turn-from-response-cut-mid-call": lambda: GenerationResponse[Any](
+        provider=Provider.OPENAI,
+        model="m",
+        tool_calls=[CALL],
+        incomplete_reason=IncompleteReason.MAX_TOKENS,
+        raw={},
+    ).to_turn(),
 }
 """Cases raised without sending anything."""
 
@@ -317,7 +346,7 @@ def check(case: str, error: BaseException) -> None:
     provider, field, _ = ERRORS[case]
     if not isinstance(error, RequestValidationError):
         return
-    assert provider == PROVIDERS[error.provider]
+    assert provider in {"any", PROVIDERS[error.provider]}
     assert field == f"`{error.field}`"
 
 

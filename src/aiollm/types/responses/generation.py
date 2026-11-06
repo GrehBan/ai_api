@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
-
-from pydantic import ConfigDict, Field
+from pydantic import MISSING, Field
 
 from aiollm.enums import IncompleteReason, Provider
 from aiollm.types.base import BaseAPIType
-from aiollm.types.requests.generation import JSONValue, Turn
+from aiollm.types.requests.generation import (
+    NativeOutput,
+    ToolCall,
+    ToolCallTurn,
+    Turn,
+)
 from aiollm.types.responses.base import BaseResponse
 
 
@@ -34,51 +37,6 @@ class TokenUsage(BaseAPIType):
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
-
-
-class ToolCall(BaseAPIType):
-    """A call of one of the request's tools.
-
-    Immutable. The arguments are the JSON text the model wrote, as
-    OpenAI sends them and as both stream them; Anthropic's object is
-    written as JSON. Without ``strict`` the text may be invalid JSON, so
-    it is parsed only on ``parse_arguments()``.
-
-    Attributes:
-        id: The call's id, which its result refers to (OpenAI's
-            ``call_id``, Anthropic's ``tool_use.id``).
-        name: The tool called.
-        arguments: The arguments, a JSON object as text.
-
-    Example:
-        >>> for call in response.tool_calls:
-        ...     result = run(call.name, call.parse_arguments())
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    id: str
-    name: str
-    arguments: str
-
-    def parse_arguments(self) -> dict[str, JSONValue]:
-        """Parse the arguments.
-
-        Returns:
-            The arguments as a JSON object.
-
-        Raises:
-            ValueError: The arguments are not a JSON object.
-        """
-        try:
-            value = json.loads(self.arguments)
-        except json.JSONDecodeError as error:
-            message = f"arguments of tool call {self.id} are not JSON"
-            raise ValueError(message) from error
-        if not isinstance(value, dict):
-            message = f"arguments of tool call {self.id} are not an object"
-            raise ValueError(message)
-        return value
 
 
 class GenerationResponse[RawT](BaseResponse):
@@ -114,6 +72,8 @@ class GenerationResponse[RawT](BaseResponse):
             model made them; empty without calls. A response with calls
             waits for their results; when ``incomplete_reason`` is set,
             the last call may be cut off, so run none of them.
+        native: The response's output as its provider's next request
+            takes it; ``to_turn()`` puts it in a turn of calls.
         raw: The provider's response.
     """
 
@@ -128,18 +88,22 @@ class GenerationResponse[RawT](BaseResponse):
     refusal: str | None = None
     reasoning: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list[ToolCall])
+    native: NativeOutput | None = None
 
     raw: RawT
 
-    def to_turn(self) -> Turn:
-        """Turn the generated text into a turn of the conversation.
+    def to_turn(self) -> Turn | ToolCallTurn:
+        """Turn the response into the next item of the conversation.
 
         Returns:
-            An ``assistant`` turn with ``text``.
+            A ``ToolCallTurn`` with the calls, the text and ``native``
+            when the model called tools, which the tools' results follow;
+            else an ``assistant`` turn with ``text``.
 
         Raises:
-            ValueError: The response has no text, such as a refusal
-                without one.
+            ValueError: The response has neither calls nor text, such as
+                a refusal without text; or it has calls but stopped early
+                (``incomplete_reason``), so the last one may be cut off.
 
         Example:
             >>> request = GenerationRequest(
@@ -147,8 +111,57 @@ class GenerationResponse[RawT](BaseResponse):
             ...     input=[*turns, response.to_turn(), Turn.user("More")],
             ... )
         """
-        if self.text is None:
-            name = "the response" if self.id is None else f"response {self.id}"
-            message = f"{name} has no text to continue the conversation with"
+        return continuation(
+            "the response" if self.id is None else f"response {self.id}",
+            text=self.text,
+            tool_calls=self.tool_calls,
+            incomplete_reason=self.incomplete_reason,
+            native=self.native,
+        )
+
+
+def continuation(
+    name: str,
+    *,
+    text: str | None,
+    tool_calls: list[ToolCall],
+    incomplete_reason: IncompleteReason | None,
+    native: NativeOutput | None,
+) -> Turn | ToolCallTurn:
+    """Build the turn that continues a conversation after a generation.
+
+    The one rule of ``GenerationResponse.to_turn()`` and
+    ``CompletedEvent.to_turn()``.
+
+    Args:
+        name: How the errors name the generation.
+        text: Its text, if any.
+        tool_calls: Its calls.
+        incomplete_reason: Why it stopped early, if it did.
+        native: Its output as its provider's next request takes it.
+
+    Returns:
+        A ``ToolCallTurn`` when there are calls, else an ``assistant``
+        turn.
+
+    Raises:
+        ValueError: There are neither calls nor text, or there are calls
+            but the generation stopped early.
+    """
+    if tool_calls:
+        if incomplete_reason is not None:
+            message = (
+                f"{name} stopped early ({incomplete_reason.value}), so its "
+                "last tool call may be cut off; retry it with a higher "
+                "limit instead"
+            )
             raise ValueError(message)
-        return Turn.assistant(self.text)
+        return ToolCallTurn(
+            text=MISSING if text is None else text,
+            tool_calls=tool_calls,
+            native=MISSING if native is None else native,
+        )
+    if text is None:
+        message = f"{name} has no text to continue the conversation with"
+        raise ValueError(message)
+    return Turn.assistant(text)

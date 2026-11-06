@@ -128,8 +128,13 @@ from aiollm.types.files import (
 from aiollm.types.requests.generation import (
     ForcedTool,
     GenerationRequest,
+    InputItem,
+    NativeOutput,
     NoProviderOptions,
     Tool,
+    ToolCall,
+    ToolCallTurn,
+    ToolResult,
     Turn,
 )
 from aiollm.types.responses.events import (
@@ -142,7 +147,6 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import (
     GenerationResponse,
     TokenUsage,
-    ToolCall,
 )
 
 # The library configures no logging: its records reach the handlers
@@ -200,7 +204,9 @@ __all__ = [
     "IValueFormatter",
     "IncompleteReason",
     "InputFile",
+    "InputItem",
     "InternalServerError",
+    "NativeOutput",
     "NoProviderOptions",
     "NotFoundError",
     "OtherEvent",
@@ -225,7 +231,9 @@ __all__ = [
     "TokenUsage",
     "Tool",
     "ToolCall",
+    "ToolCallTurn",
     "ToolChoice",
+    "ToolResult",
     "Turn",
     "UnprocessableEntityError",
     "__version__",

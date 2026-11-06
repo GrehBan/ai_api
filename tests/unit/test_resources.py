@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Self, Unpack
 
@@ -55,8 +55,10 @@ from aiollm.session.protocols import CallOptions
 from aiollm.session.retry import RetryPolicy
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import EventTypes
+from aiollm.types.requests import ToolCall
 from aiollm.types.requests.generation import (
     GenerationRequest,
+    InputItem,
     NoProviderOptions,
     Turn,
 )
@@ -70,7 +72,6 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import (
     GenerationResponse,
     TokenUsage,
-    ToolCall,
 )
 from tests.conftest import FakeStreamResponse, FakeTransport
 
@@ -91,7 +92,7 @@ class Create(BaseAPIMethod[RawResponse]):
     __request_body_format__ = BodyFormat.JSON
 
     model: str
-    input: str | list[Turn]
+    input: str | Sequence[InputItem]
 
 
 class CreateStream(BaseStreamMethod[RawEvent]):
@@ -101,7 +102,7 @@ class CreateStream(BaseStreamMethod[RawEvent]):
     __response_format__ = ResponseFormat.SSE
 
     model: str
-    input: str | list[Turn]
+    input: str | Sequence[InputItem]
     stream: bool = True
 
 
