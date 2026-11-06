@@ -217,12 +217,28 @@ def test_finished_message_is_converted() -> None:
     assert converted.raw is raw
 
 
-def test_stop_sequence_is_a_finished_message() -> None:
+@pytest.mark.parametrize("reason", ["stop_sequence", "tool_use"])
+def test_stop_sequence_and_tool_use_finish_the_message(reason: str) -> None:
+    # tool_use is a normal end, as a completed OpenAI response with
+    # function calls: the model waits for the results.
     converted = adapter.to_response(
-        message(stop_reason="stop_sequence", stop_sequence="END"), REQUEST
+        message(stop_reason=reason, stop_sequence=None), REQUEST
     )
 
     assert converted.incomplete_reason is None
+    assert converted.raw_incomplete_reason is None
+
+
+async def test_stream_stopped_by_tool_use_finishes() -> None:
+    payloads = stream_with(
+        delta={"stop_reason": "tool_use"}, usage={"output_tokens": 2}
+    )
+
+    completed = (await convert(payloads))[-1]
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.incomplete_reason is None
+    assert completed.raw_incomplete_reason is None
 
 
 @pytest.mark.parametrize(
@@ -232,7 +248,6 @@ def test_stop_sequence_is_a_finished_message() -> None:
         ("refusal", IncompleteReason.REFUSAL),
         ("model_context_window_exceeded", IncompleteReason.OTHER),
         ("pause_turn", IncompleteReason.OTHER),
-        ("tool_use", IncompleteReason.OTHER),
         ("new_reason", IncompleteReason.OTHER),
     ],
 )

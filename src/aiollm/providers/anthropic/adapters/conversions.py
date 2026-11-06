@@ -22,12 +22,13 @@ from aiollm.providers.anthropic.types.messages import Message, Usage
 from aiollm.types.requests.generation import Turn
 from aiollm.types.responses.generation import TokenUsage
 
-FINISHED: Final = frozenset({"end_turn", "stop_sequence"})
+FINISHED: Final = frozenset({"end_turn", "stop_sequence", "tool_use"})
 """Stop reasons of a generation that reached its end.
 
-Any other reason (``max_tokens``, ``refusal``,
-``model_context_window_exceeded``, ``pause_turn``, ``tool_use``, a
-reason Anthropic adds later) stopped it early.
+``tool_use`` is one: the model waits for the tool results, as an
+OpenAI response with function calls is ``completed``. Any other reason
+(``max_tokens``, ``refusal``, ``model_context_window_exceeded``,
+``pause_turn``, a reason Anthropic adds later) stopped it early.
 """
 
 INCOMPLETE_REASONS: Final[Mapping[str, IncompleteReason]] = {
