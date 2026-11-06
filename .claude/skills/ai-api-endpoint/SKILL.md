@@ -1,6 +1,6 @@
 ---
 name: ai-api-endpoint
-description: Add or change an endpoint of an existing aiollm provider (OpenAI, Anthropic) - read the upstream schema from the unified-api-docs MCP, write method fields by the MISSING/None rule, response types with __upstream_schema__, the wire-contract snapshot and Case, adapters and shared-layer mapping, docs and tests. Use it in the aiollm repository whenever the owner asks for a new provider endpoint or resource (models, embeddings, files, tools, structured output...), a new request field on an existing method, or to follow an upstream schema change.
+description: Add or change an endpoint of an existing aiollm provider (OpenAI, Anthropic) - read the upstream schema from the unified-api-docs MCP, generate types and request parameters with scripts/generate_provider_types.py (aiollm-codegen), hand-write the method classes, the wire-contract snapshot and Case, adapters and shared-layer mapping, docs and tests. Use it in the aiollm repository whenever the owner asks for a new provider endpoint or resource (models, embeddings, files, tools, structured output...), a new request field on an existing method, or to follow an upstream schema change.
 ---
 
 # aiollm endpoint
@@ -31,31 +31,37 @@ provider's types and is reached through `raw`.
   `OPENAI_OPENAPI=<openapi.yaml> uv run python -m tests.providers.contracts.update [DOCS_LITE_DIR]`.
   Review the snapshot diff and `manifest.json` (its `rejected` examples).
 - `tests/providers/test_wire_contracts.py`: add a `Case` (methods, a request
-  that sets every field, response model, event union, examples, adapter,
-  model modules). The tests then check the request against the closed schema,
-  every method field (`test_method_fields_match_the_request_schema`), and
-  every model field against its `$def`.
+  that sets every field the adapter and the options fill, response model,
+  event union, examples, adapter, options, type and parameter modules). The
+  tests then check the request against the closed schema, every method field
+  (`test_method_fields_match_the_request_schema`), and every model field
+  against its `$def`, request parameters both ways.
 
-## 3. Types
+## 3. Types and request parameters
 
-In `providers/<name>/types/`: models derive from `BaseAPITypeExtra`; every
-model sets `__upstream_schema__` to the `$def` it mirrors (or `()`); `Literal`
-for constants that name the object (`type`, `object`, `role`), `str` for
-enumerations that grow (`status`, `stop_reason`, codes); response fields keep
-`= None` defaults; unknown items go to the provider's `BaseUnknown` types.
+They are generated, never written by hand: `scripts/generate_provider_types.py`
+runs aiollm-codegen (`../aiollm_codegen`) for each provider, OpenAI from its
+official OpenAPI file restricted to the endpoints' operations, Anthropic from
+the docs-lite snapshot, and replaces `providers/<name>/types/<family>.py` and
+`methods/params/`. A new endpoint adds its operation to the script. The
+generated models already follow the rules the tests check:
+`__upstream_schema__` on every model, `Literal` for constants and closed
+request enumerations, `str` for response enumerations that grow, `MISSING`
+for optional request fields and `None` only where upstream allows `null`,
+unknown variants as `UnknownVariant`, request models with `extra="forbid"`.
+A defect in them is fixed in aiollm-codegen (its own project), then
+regenerated. `types/options.py` stays hand-written: its `TypedDict`s mirror
+the method fields (`test_provider_options.py`), so dict literals type-check.
 
 ## 4. Methods
 
-In `providers/<name>/methods/`, following the upstream request schema
-(`CLAUDE.md` "Optional fields"):
-
-- required upstream → no default;
-- optional → `= MISSING` with `MISSING` in the type;
-- nullable upstream → `None` in the type; never `= None`;
-- nested request data → `TypedDict` (`NotRequired` for optional keys);
-- wire names via `validation_alias`/`serialization_alias`, never `alias`;
-- `__retryable__`, `__stream_terminal__`, error events as the provider's
-  other methods do; Anthropic methods send `VERSION_HEADERS`.
+In `providers/<name>/methods/<endpoint>.py`, hand-written over the generated
+parameter mixins: `__request_path__` and the other dunders,
+`__retryable__`, `__stream_terminal__`, error events and parsers as the
+provider's other methods do (Anthropic methods send `VERSION_HEADERS`), and
+the limits the schema leaves out (OpenAI's `metadata`, Anthropic's
+`MessageLimits`) as narrowed fields or validators, so the generated
+parameters are never edited.
 
 ## 5. Adapters and resources
 

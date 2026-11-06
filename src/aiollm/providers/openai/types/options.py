@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-from aiollm.providers.openai.methods.base import Metadata
+from aiollm.providers.openai.methods.params.responses import (
+    CreateResponseParamsTemperature,
+    CreateResponseParamsTopP,
+    ReasoningModeEnum,
+)
+from aiollm.providers.openai.methods.responses import Metadata
 
 
 class OpenAIReasoningOptions(TypedDict, total=False):
@@ -22,7 +27,7 @@ class OpenAIReasoningOptions(TypedDict, total=False):
 
     summary: Literal["auto", "concise", "detailed"] | None
     context: Literal["auto", "current_turn", "all_turns"] | None
-    mode: str
+    mode: ReasoningModeEnum
 
 
 class OpenAIGenerationOptions(TypedDict, total=False):
@@ -51,5 +56,5 @@ class OpenAIGenerationOptions(TypedDict, total=False):
     reasoning: OpenAIReasoningOptions
     store: bool | None
     previous_response_id: str | None
-    temperature: float | None
-    top_p: float | None
+    temperature: CreateResponseParamsTemperature | None
+    top_p: CreateResponseParamsTopP | None

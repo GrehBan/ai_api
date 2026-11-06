@@ -50,11 +50,14 @@ from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.methods import (
     CreateMessage,
-    MessageParam,
     StreamMessage,
 )
-from aiollm.providers.anthropic.types import Message, MessageStreamEvent
-from aiollm.providers.anthropic.types.messages import Usage
+from aiollm.providers.anthropic.methods.params import UserMessageParam
+from aiollm.providers.anthropic.types import (
+    Message,
+    MessageStreamEvent,
+    Usage,
+)
 from aiollm.providers.anthropic.types.options import (
     AnthropicGenerationOptions,
 )
@@ -62,9 +65,12 @@ from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
-from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.providers.openai.types import (
+    Response,
+    ResponseStreamEvent,
+    ResponseUsage,
+)
 from aiollm.providers.openai.types.options import OpenAIGenerationOptions
-from aiollm.providers.openai.types.responses import ResponseUsage
 from aiollm.resources import (
     AdapterStreamUseCase,
     AdapterUseCase,
@@ -483,7 +489,7 @@ def turns_are_typed() -> None:
 
 
 async def anthropic_messages_infer_types(session: AiohttpSession) -> None:
-    turn: MessageParam = {"role": "user", "content": "x"}
+    turn = UserMessageParam(role="user", content="x")
     create = CreateMessage(model="m", max_tokens=16, messages=[turn])
     assert_type(await session.send_request(create), Message)
     stream = StreamMessage(model="m", max_tokens=16, messages=[turn])

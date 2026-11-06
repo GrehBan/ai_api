@@ -20,22 +20,24 @@ from aiollm.providers.anthropic.adapters.conversions import (
     STOP_CONVERSION,
     USAGE_CONVERSION,
     StreamState,
+    message_text,
+    message_thinking,
 )
 from aiollm.providers.anthropic.api import PROVIDER
 from aiollm.providers.anthropic.methods.messages import (
     CreateMessage,
     StreamMessage,
 )
-from aiollm.providers.anthropic.types.events import (
-    ContentBlockDeltaEvent,
-    MessageDeltaEvent,
-    MessageStartEvent,
-    MessageStopEvent,
+from aiollm.providers.anthropic.types import (
+    Message,
     MessageStreamEvent,
+    RawContentBlockDeltaEvent,
+    RawMessageDeltaEvent,
+    RawMessageStartEvent,
+    RawMessageStopEvent,
     TextDelta,
     ThinkingDelta,
 )
-from aiollm.providers.anthropic.types.messages import Message
 from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
 from aiollm.types.requests.generation import GenerationRequest
 from aiollm.types.responses.events import (
@@ -50,9 +52,7 @@ from aiollm.types.responses.generation import GenerationResponse
 if TYPE_CHECKING:
     from aiollm.adapters.protocols import IConversion
     from aiollm.adapters.stop import Stop
-    from aiollm.providers.anthropic.methods.base import MessageParam
-    from aiollm.providers.anthropic.types.events import MessageDelta
-    from aiollm.providers.anthropic.types.messages import Usage
+    from aiollm.providers.anthropic.types import Delta, Usage
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
@@ -116,12 +116,10 @@ class AnthropicGenerationAdapter(
         *,
         default_max_tokens: int = DEFAULT_MAX_TOKENS,
         input_conversion: IConversion[
-            str | list[Turn], list[MessageParam]
+            str | list[Turn], list[dict[str, Any]]
         ] = INPUT_CONVERSION,
         usage_conversion: IConversion[Usage, TokenUsage] = USAGE_CONVERSION,
-        stop_conversion: IConversion[
-            Message | MessageDelta, Stop
-        ] = STOP_CONVERSION,
+        stop_conversion: IConversion[Message | Delta, Stop] = STOP_CONVERSION,
     ) -> None:
         """Store the default token limit and the conversions.
 
@@ -208,12 +206,12 @@ class AnthropicGenerationAdapter(
             id=raw.id,
             provider=self.provider,
             model=raw.model,
-            text=raw.text,
+            text=message_text(raw),
             usage=self.usage_conversion(raw.usage),
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
-            reasoning=raw.thinking,
+            reasoning=message_thinking(raw),
             raw=raw,
         )
 
@@ -261,13 +259,13 @@ class AnthropicGenerationAdapter(
         state = StreamState()
         async for item in items:
             match item:
-                case ContentBlockDeltaEvent(delta=TextDelta() as delta):
+                case RawContentBlockDeltaEvent(delta=TextDelta() as delta):
                     state.add_text(delta.text)
                     yield TextDeltaEvent[MessageStreamEvent](
                         text=delta.text, raw=item
                     )
                     continue
-                case ContentBlockDeltaEvent(
+                case RawContentBlockDeltaEvent(
                     delta=ThinkingDelta(thinking=str(thinking))
                 ) if thinking:
                     state.add_thinking(thinking)
@@ -275,11 +273,11 @@ class AnthropicGenerationAdapter(
                         text=thinking, raw=item
                     )
                     continue
-                case MessageStartEvent():
+                case RawMessageStartEvent():
                     state.start(item)
-                case MessageDeltaEvent():
+                case RawMessageDeltaEvent():
                     state.update(item)
-                case MessageStopEvent():
+                case RawMessageStopEvent():
                     stop = self.stop_conversion(state.delta)
                     message = state.message()
                     yield CompletedEvent[MessageStreamEvent](

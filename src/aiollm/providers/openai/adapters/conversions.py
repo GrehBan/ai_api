@@ -9,9 +9,11 @@ from aiollm.adapters.base import BaseConversion
 from aiollm.adapters.stop import Stop
 from aiollm.enums import IncompleteReason
 from aiollm.http.exceptions.response import APIResponseError
-from aiollm.providers.openai.types.responses import (
+from aiollm.providers.openai.types import (
     OutputMessage,
-    OutputRefusal,
+    OutputTextContent,
+    ReasoningItem,
+    RefusalContent,
     Response,
     ResponseUsage,
 )
@@ -74,13 +76,9 @@ class UsageConversion(BaseConversion[ResponseUsage, TokenUsage]):
             input_tokens=source.input_tokens,
             output_tokens=source.output_tokens,
             total_tokens=source.total_tokens,
-            cache_read_tokens=None if inputs is None else inputs.cached_tokens,
-            cache_write_tokens=(
-                None if inputs is None else inputs.cache_write_tokens
-            ),
-            reasoning_tokens=(
-                None if outputs is None else outputs.reasoning_tokens
-            ),
+            cache_read_tokens=inputs.cached_tokens,
+            cache_write_tokens=inputs.cache_write_tokens,
+            reasoning_tokens=outputs.reasoning_tokens,
         )
 
 
@@ -126,7 +124,7 @@ def _refusal(response: Response) -> str | None:
         for item in response.output
         if isinstance(item, OutputMessage)
         for part in item.content
-        if isinstance(part, OutputRefusal)
+        if isinstance(part, RefusalContent)
     ]
     return "".join(parts) if parts else None
 
@@ -168,6 +166,49 @@ def _incomplete_reason(response: Response) -> IncompleteReason | None:
         return None
     reason = _raw_incomplete_reason(response)
     return INCOMPLETE_REASONS.get(reason or "", IncompleteReason.OTHER)
+
+
+def output_text(response: Response) -> str | None:
+    """Join the text of all output messages.
+
+    The Responses API sends no such field: its schema names
+    ``output_text`` as a property the SDKs compute, so ``Response``
+    reads it as ``None``. It is collected here the way the SDKs do,
+    from the ``output_text`` parts of the ``message`` items.
+
+    Args:
+        response: A response.
+
+    Returns:
+        The joined text, or ``None`` if the output has no text part.
+    """
+    parts = [
+        part.text
+        for item in response.output
+        if isinstance(item, OutputMessage)
+        for part in item.content
+        if isinstance(part, OutputTextContent)
+    ]
+    return "".join(parts) if parts else None
+
+
+def reasoning_summary(response: Response) -> str | None:
+    """Join the summaries of all reasoning items.
+
+    Args:
+        response: A response.
+
+    Returns:
+        The joined summaries, or ``None`` if there are none (the
+        request did not ask for them).
+    """
+    summary = "".join(
+        part.text
+        for item in response.output
+        if isinstance(item, ReasoningItem)
+        for part in item.summary
+    )
+    return summary or None
 
 
 def check_status(response: Response) -> None:

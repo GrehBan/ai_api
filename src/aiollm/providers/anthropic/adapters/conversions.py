@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -12,13 +12,15 @@ from aiollm.adapters.base import BaseConversion
 from aiollm.adapters.stop import Stop
 from aiollm.enums import IncompleteReason, Role
 from aiollm.http.exceptions.response import APIResponseError
-from aiollm.providers.anthropic.methods.base import MessageParam
-from aiollm.providers.anthropic.types.events import (
-    MessageDelta,
-    MessageDeltaEvent,
-    MessageStartEvent,
+from aiollm.providers.anthropic.types import (
+    Delta,
+    Message,
+    RawMessageDeltaEvent,
+    RawMessageStartEvent,
+    TextBlock,
+    ThinkingBlock,
+    Usage,
 )
-from aiollm.providers.anthropic.types.messages import Message, Usage
 from aiollm.types.requests.generation import Turn
 from aiollm.types.responses.generation import TokenUsage
 
@@ -45,14 +47,14 @@ REFUSAL: Final = "refusal"
 
 
 class InputConversion(
-    BaseConversion[str | list[Turn], list[MessageParam]],
+    BaseConversion[str | list[Turn], list[dict[str, Any]]],
 ):
     """Converts the shared ``input`` into ``messages``.
 
     A text becomes one ``user`` turn; a list of turns is sent as it is.
     """
 
-    def __call__(self, source: str | list[Turn], /) -> list[MessageParam]:
+    def __call__(self, source: str | list[Turn], /) -> list[dict[str, Any]]:
         """Convert the input.
 
         Args:
@@ -104,15 +106,15 @@ class UsageConversion(BaseConversion[Usage, TokenUsage]):
         )
 
 
-class StopConversion(BaseConversion[Message | MessageDelta, Stop]):
+class StopConversion(BaseConversion[Message | Delta, Stop]):
     """Tells how a message stopped.
 
-    It takes a ``Message``, or for a stream the ``MessageDelta`` that
+    It takes a ``Message``, or for a stream the ``Delta`` that
     ``StreamState`` collects: both carry ``stop_reason`` and
     ``stop_details``.
     """
 
-    def __call__(self, source: Message | MessageDelta, /) -> Stop:
+    def __call__(self, source: Message | Delta, /) -> Stop:
         """Convert the stop of a finished message.
 
         Args:
@@ -144,6 +146,39 @@ class StopConversion(BaseConversion[Message | MessageDelta, Stop]):
         )
 
 
+def message_text(message: Message) -> str | None:
+    """Join the text of a message.
+
+    Args:
+        message: A message.
+
+    Returns:
+        The text of all ``text`` blocks, or ``None`` if there are none.
+    """
+    texts = [
+        block.text for block in message.content if isinstance(block, TextBlock)
+    ]
+    return "".join(texts) if texts else None
+
+
+def message_thinking(message: Message) -> str | None:
+    """Join the thinking of a message.
+
+    Args:
+        message: A message.
+
+    Returns:
+        The text of all ``thinking`` blocks, or ``None`` if there are
+        none or all are empty (thinking whose display is ``omitted``).
+    """
+    thinking = "".join(
+        block.thinking
+        for block in message.content
+        if isinstance(block, ThinkingBlock)
+    )
+    return thinking or None
+
+
 INPUT_CONVERSION: Final = InputConversion()
 """The default conversion of the shared ``input``."""
 
@@ -161,7 +196,7 @@ class StreamState:
     ``message_start`` carries the message's ``Usage``, and every
     ``message_delta`` the stop reason and the cumulative counts, so the
     counts are replaced, never added up. At the end the state gives a
-    real ``Usage`` and ``MessageDelta``, so a stream goes through the
+    real ``Usage`` and ``Delta``, so a stream goes through the
     same conversions as a message, and the message's id, model and
     whole text.
 
@@ -169,12 +204,12 @@ class StreamState:
         delta: The stop reason and details sent so far.
     """
 
-    delta: MessageDelta = field(default_factory=MessageDelta)
+    delta: Delta = field(default_factory=Delta)
     _message: Message | None = field(default=None, init=False, repr=False)
     _texts: list[str] = field(default_factory=list, init=False, repr=False)
     _thinking: list[str] = field(default_factory=list, init=False, repr=False)
 
-    def start(self, event: MessageStartEvent) -> None:
+    def start(self, event: RawMessageStartEvent) -> None:
         """Take the message and the counts of ``message_start``.
 
         Args:
@@ -206,28 +241,25 @@ class StreamState:
         """
         return "".join(self._thinking) or None
 
-    def update(self, event: MessageDeltaEvent) -> None:
+    def update(self, event: RawMessageDeltaEvent) -> None:
         """Take the stop reason and counts of a ``message_delta``.
 
         Args:
             event: A ``message_delta`` event.
 
         Raises:
-            APIResponseError: The event has counts, but no
-                ``message_start`` came before it to take them into.
+            APIResponseError: No ``message_start`` came before it to
+                take its counts into.
         """
         changes = _sent(event.delta)
         if changes:
             self.delta = self.delta.model_copy(update=changes)
-        usage = event.usage
-        if usage is None:
-            return
         if self._message is None:
             message = (
                 "Anthropic stream sent message_delta before message_start"
             )
             raise APIResponseError(message)
-        counts = self._message.usage.model_copy(update=_sent(usage))
+        counts = self._message.usage.model_copy(update=_sent(event.usage))
         self._message = self._message.model_copy(update={"usage": counts})
 
     def usage(self) -> Usage:
@@ -262,7 +294,7 @@ class StreamState:
 
         Returns:
             The text deltas joined, or ``None`` if none came, as
-            ``Message.text`` gives for a message without text.
+            ``message_text`` gives for a message without text.
         """
         return "".join(self._texts) if self._texts else None
 

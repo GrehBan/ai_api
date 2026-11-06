@@ -20,20 +20,23 @@ from aiollm.providers.openai.adapters.conversions import (
     STOP_CONVERSION,
     USAGE_CONVERSION,
     check_status,
+    output_text,
+    reasoning_summary,
 )
 from aiollm.providers.openai.api import PROVIDER
 from aiollm.providers.openai.methods.responses import (
     CreateResponse,
     StreamResponse,
 )
-from aiollm.providers.openai.types.events import (
-    OutputTextDeltaEvent,
-    ReasoningSummaryTextDeltaEvent,
-    ResponseStateEvent,
+from aiollm.providers.openai.types import (
+    Response,
+    ResponseCompletedEvent,
+    ResponseIncompleteEvent,
+    ResponseReasoningSummaryTextDeltaEvent,
     ResponseStreamEvent,
+    ResponseTextDeltaEvent,
 )
 from aiollm.providers.openai.types.options import OpenAIGenerationOptions
-from aiollm.providers.openai.types.responses import Response
 from aiollm.types.requests.generation import GenerationRequest
 from aiollm.types.responses.events import (
     CompletedEvent,
@@ -47,7 +50,7 @@ from aiollm.types.responses.generation import GenerationResponse
 if TYPE_CHECKING:
     from aiollm.adapters.protocols import IConversion
     from aiollm.adapters.stop import Stop
-    from aiollm.providers.openai.types.responses import ResponseUsage
+    from aiollm.providers.openai.types import ResponseUsage
     from aiollm.types.requests.generation import Turn
     from aiollm.types.responses.generation import TokenUsage
 
@@ -187,12 +190,12 @@ class OpenAIGenerationAdapter(
             id=raw.id,
             provider=self.provider,
             model=raw.model,
-            text=raw.output_text,
+            text=output_text(raw),
             usage=self._usage(raw.usage),
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
-            reasoning=raw.reasoning_summary,
+            reasoning=reasoning_summary(raw),
             raw=raw,
         )
 
@@ -247,29 +250,27 @@ class OpenAIGenerationAdapter(
             raises it as an ``APIStatusError``.
         """
         match event:
-            case OutputTextDeltaEvent():
+            case ResponseTextDeltaEvent():
                 return TextDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
                 )
-            case ReasoningSummaryTextDeltaEvent():
+            case ResponseReasoningSummaryTextDeltaEvent():
                 return ReasoningDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
                 )
-            case ResponseStateEvent(
-                type="response.completed" | "response.incomplete"
-            ):
+            case ResponseCompletedEvent() | ResponseIncompleteEvent():
                 response = event.response
                 stop = self.stop_conversion(response)
                 return CompletedEvent[ResponseStreamEvent](
                     id=response.id,
                     provider=self.provider,
                     model=response.model,
-                    text=response.output_text,
+                    text=output_text(response),
                     usage=self._usage(response.usage),
                     incomplete_reason=stop.incomplete_reason,
                     raw_incomplete_reason=stop.raw_incomplete_reason,
                     refusal=stop.refusal,
-                    reasoning=response.reasoning_summary,
+                    reasoning=reasoning_summary(response),
                     raw=event,
                 )
             case _:

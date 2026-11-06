@@ -19,6 +19,7 @@ from aiollm.http.exceptions.response import APIResponseError
 from aiollm.http.exceptions.status import ServiceUnavailableError
 from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.adapters.conversions import StreamState
 from aiollm.providers.anthropic.client import session_factory
 from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
 from aiollm.providers.anthropic.types import Message, MessageStreamEvent
@@ -139,9 +140,7 @@ def test_too_long_user_id_is_rejected() -> None:
     assert caught.value.field == "end_user_id"
     assert isinstance(caught.value, ValueError)
     assert isinstance(caught.value.__cause__, ValidationError)
-    assert "end_user_id.user_id: String should have at most 512" in str(
-        caught.value
-    )
+    assert "user_id is longer than 512 characters" in str(caught.value)
 
 
 def test_method_fields_are_reported_by_their_shared_name() -> None:
@@ -396,7 +395,7 @@ def test_thinking_options_reach_the_method() -> None:
         {"thinking": {"type": "adaptive", "display": "summarized"}}
     )
 
-    assert tuned.to_method(REQUEST).thinking == {
+    assert tuned.to_method(REQUEST).get_body_map()["thinking"] == {
         "type": "adaptive",
         "display": "summarized",
     }
@@ -421,7 +420,7 @@ async def test_usage_takes_the_last_cumulative_counts() -> None:
                 "output_tokens_details": {"thinking_tokens": 3},
             },
         },
-        {"type": "message_delta", "delta": {}},
+        {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 9}},
         STREAM[-1],
     ]
 
@@ -457,14 +456,11 @@ async def test_stream_stopped_early_completes_with_its_reason() -> None:
     assert completed.refusal == "cyber"
 
 
-async def test_stream_without_message_start_raises() -> None:
-    payloads = [
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
-        STREAM[-1],
-    ]
-
+def test_stream_state_without_message_start_raises() -> None:
+    # A message_delta always carries counts, so the stream fails there
+    # first (below); the state still refuses to make up a message.
     with pytest.raises(APIResponseError, match="without message_start"):
-        await convert(payloads)
+        StreamState().message()
 
 
 async def test_counts_before_message_start_raise() -> None:
