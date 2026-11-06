@@ -23,6 +23,7 @@ from aiollm.providers.anthropic.adapters.conversions import (
     StreamState,
     message_text,
     message_thinking,
+    message_tool_calls,
 )
 from aiollm.providers.anthropic.api import PROVIDER
 from aiollm.providers.anthropic.methods.messages import (
@@ -30,14 +31,17 @@ from aiollm.providers.anthropic.methods.messages import (
     StreamMessage,
 )
 from aiollm.providers.anthropic.types import (
+    InputJSONDelta,
     Message,
     MessageStreamEvent,
     RawContentBlockDeltaEvent,
+    RawContentBlockStartEvent,
     RawMessageDeltaEvent,
     RawMessageStartEvent,
     RawMessageStopEvent,
     TextDelta,
     ThinkingDelta,
+    ToolUseBlock,
 )
 from aiollm.providers.anthropic.types.options import AnthropicGenerationOptions
 from aiollm.types.requests.generation import (
@@ -217,6 +221,7 @@ class AnthropicGenerationAdapter(
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
             reasoning=message_thinking(raw),
+            tool_calls=message_tool_calls(raw),
             raw=raw,
         )
 
@@ -278,6 +283,14 @@ class AnthropicGenerationAdapter(
                         text=thinking, raw=item
                     )
                     continue
+                case RawContentBlockStartEvent(
+                    content_block=ToolUseBlock() as block
+                ):
+                    state.start_call(item.index, block)
+                case RawContentBlockDeltaEvent(
+                    delta=InputJSONDelta() as delta
+                ):
+                    state.add_arguments(item.index, delta.partial_json)
                 case RawMessageStartEvent():
                     state.start(item)
                 case RawMessageDeltaEvent():
@@ -295,6 +308,7 @@ class AnthropicGenerationAdapter(
                         raw_incomplete_reason=stop.raw_incomplete_reason,
                         refusal=stop.refusal,
                         reasoning=state.thinking(),
+                        tool_calls=state.tool_calls(),
                         raw=item,
                     )
                     continue

@@ -10,6 +10,7 @@ from aiollm.adapters.stop import Stop
 from aiollm.enums import IncompleteReason
 from aiollm.http.exceptions.response import APIResponseError
 from aiollm.providers.openai.types import (
+    FunctionToolCall,
     OutputMessage,
     OutputTextContent,
     ReasoningItem,
@@ -18,7 +19,7 @@ from aiollm.providers.openai.types import (
     ResponseUsage,
 )
 from aiollm.types.requests.generation import Turn
-from aiollm.types.responses.generation import TokenUsage
+from aiollm.types.responses.generation import TokenUsage, ToolCall
 
 INCOMPLETE_REASONS: Final[Mapping[str, IncompleteReason]] = {
     "max_output_tokens": IncompleteReason.MAX_TOKENS,
@@ -190,6 +191,23 @@ def output_text(response: Response) -> str | None:
         if isinstance(part, OutputTextContent)
     ]
     return "".join(parts) if parts else None
+
+
+def tool_calls(response: Response) -> list[ToolCall]:
+    """Collect the function calls of a response.
+
+    Args:
+        response: A response.
+
+    Returns:
+        A shared call per ``function_call`` item, in output order, with
+        its ``call_id``; empty without calls.
+    """
+    return [
+        ToolCall(id=item.call_id, name=item.name, arguments=item.arguments)
+        for item in response.output
+        if isinstance(item, FunctionToolCall)
+    ]
 
 
 def reasoning_summary(response: Response) -> str | None:

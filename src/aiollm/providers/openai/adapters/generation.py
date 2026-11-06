@@ -23,6 +23,7 @@ from aiollm.providers.openai.adapters.conversions import (
     check_status,
     output_text,
     reasoning_summary,
+    tool_calls,
 )
 from aiollm.providers.openai.api import PROVIDER
 from aiollm.providers.openai.methods.responses import (
@@ -201,6 +202,7 @@ class OpenAIGenerationAdapter(
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
             reasoning=reasoning_summary(raw),
+            tool_calls=tool_calls(raw),
             raw=raw,
         )
 
@@ -276,6 +278,7 @@ class OpenAIGenerationAdapter(
                     raw_incomplete_reason=stop.raw_incomplete_reason,
                     refusal=stop.refusal,
                     reasoning=reasoning_summary(response),
+                    tool_calls=tool_calls(response),
                     raw=event,
                 )
             case _:

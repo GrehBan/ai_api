@@ -5,6 +5,7 @@ from __future__ import annotations
 from aiollm.providers.openai.adapters.conversions import (
     output_text,
     reasoning_summary,
+    tool_calls,
 )
 from aiollm.providers.openai.adapters.generation import (
     OpenAIGenerationAdapter,
@@ -14,4 +15,5 @@ __all__ = [
     "OpenAIGenerationAdapter",
     "output_text",
     "reasoning_summary",
+    "tool_calls",
 ]

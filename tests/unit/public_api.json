@@ -73,6 +73,7 @@
     "TextDeltaEvent",
     "TokenUsage",
     "Tool",
+    "ToolCall",
     "ToolChoice",
     "Turn",
     "UnprocessableEntityError",
@@ -155,7 +156,8 @@
   "aiollm.providers.anthropic.adapters": [
     "AnthropicGenerationAdapter",
     "message_text",
-    "message_thinking"
+    "message_thinking",
+    "message_tool_calls"
   ],
   "aiollm.providers.anthropic.methods": [
     "CreateMessage",
@@ -451,7 +453,8 @@
   "aiollm.providers.openai.adapters": [
     "OpenAIGenerationAdapter",
     "output_text",
-    "reasoning_summary"
+    "reasoning_summary",
+    "tool_calls"
   ],
   "aiollm.providers.openai.methods": [
     "CreateResponse",
@@ -1132,6 +1135,7 @@
     "RawResponseEvent",
     "ReasoningDeltaEvent",
     "TextDeltaEvent",
-    "TokenUsage"
+    "TokenUsage",
+    "ToolCall"
   ]
 }

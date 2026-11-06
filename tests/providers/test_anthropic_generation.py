@@ -456,6 +456,17 @@ async def test_stream_stopped_early_completes_with_its_reason() -> None:
     assert completed.refusal == "cyber"
 
 
+async def test_arguments_without_their_tool_use_raise() -> None:
+    delta = {
+        "type": "content_block_delta",
+        "index": 3,
+        "delta": {"type": "input_json_delta", "partial_json": "{}"},
+    }
+
+    with pytest.raises(APIResponseError, match="block 3 without its tool"):
+        await convert([STREAM[0], delta])
+
+
 def test_stream_state_without_message_start_raises() -> None:
     # A message_delta always carries counts, so the stream fails there
     # first (below); the state still refuses to make up a message.

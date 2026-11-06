@@ -67,7 +67,11 @@ from aiollm.types.responses.events import (
     OtherEvent,
     TextDeltaEvent,
 )
-from aiollm.types.responses.generation import GenerationResponse, TokenUsage
+from aiollm.types.responses.generation import (
+    GenerationResponse,
+    TokenUsage,
+    ToolCall,
+)
 from tests.conftest import FakeStreamResponse, FakeTransport
 
 
@@ -620,6 +624,28 @@ def test_a_response_without_an_id_is_not_named_none() -> None:
 
     with pytest.raises(ValueError, match="^the response has no text"):
         response.to_turn()
+
+
+def test_tool_call_arguments_are_parsed_on_demand() -> None:
+    call = ToolCall(id="c1", name="f", arguments='{"city": "Paris"}')
+
+    assert call.parse_arguments() == {"city": "Paris"}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "match"),
+    [('{"city": "Par', "not JSON"), ("[1, 2]", "not an object")],
+    ids=["cut", "not-an-object"],
+)
+def test_tool_call_arguments_that_are_no_object_raise(
+    arguments: str, match: str
+) -> None:
+    # Without strict, OpenAI may send invalid JSON; the response is still
+    # read, and only parsing it fails, naming the call.
+    call = ToolCall(id="c1", name="f", arguments=arguments)
+
+    with pytest.raises(ValueError, match=f"tool call c1 are {match}"):
+        call.parse_arguments()
 
 
 class Opaque:

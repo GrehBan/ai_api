@@ -77,6 +77,136 @@ SCHEMA: JSONSchema = {
 }
 """Parameters of the tools of the scenarios."""
 
+CALLS = [
+    ("call_1", "get_weather", {"city": "Paris"}),
+    ("call_2", "get_time", {}),
+]
+"""Two calls the model makes in one response: id, tool, arguments."""
+
+
+def openai_called() -> dict[str, Any]:
+    """An OpenAI response with text and ``CALLS``."""
+    calls = [
+        {
+            "type": "function_call",
+            "id": f"fc_{n}",
+            "call_id": call_id,
+            "name": name,
+            "arguments": json.dumps(arguments),
+            "status": "completed",
+        }
+        for n, (call_id, name, arguments) in enumerate(CALLS)
+    ]
+    return openai.RESPONSE | {"output": [openai.MESSAGE, *calls]}
+
+
+def openai_called_stream() -> list[dict[str, Any]]:
+    """An OpenAI stream of ``CALLS``, the arguments in two pieces."""
+    events: list[dict[str, Any]] = [openai.state("response.created", 0)]
+    for n, (call_id, name, arguments) in enumerate(CALLS):
+        item = {
+            "type": "function_call",
+            "id": f"fc_{n}",
+            "call_id": call_id,
+            "name": name,
+            "arguments": "",
+            "status": "in_progress",
+        }
+        text = json.dumps(arguments)
+        events += [
+            {
+                "type": "response.output_item.added",
+                "output_index": n,
+                "item": item,
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": f"fc_{n}",
+                "output_index": n,
+                "delta": text[:3],
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": f"fc_{n}",
+                "output_index": n,
+                "delta": text[3:],
+            },
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": f"fc_{n}",
+                "output_index": n,
+                "arguments": text,
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": n,
+                "item": item | {"arguments": text, "status": "completed"},
+            },
+        ]
+    events.append(
+        openai.state("response.completed", 0, output=openai_called()["output"])
+    )
+    for number, event in enumerate(events):
+        event["sequence_number"] = number
+    return events
+
+
+def anthropic_called() -> dict[str, Any]:
+    """An Anthropic message with text and ``CALLS``."""
+    blocks = [
+        {"type": "tool_use", "id": call_id, "name": name, "input": arguments}
+        for call_id, name, arguments in CALLS
+    ]
+    return anthropic.MESSAGE | {
+        "content": [{"type": "text", "text": "Checking."}, *blocks],
+        "stop_reason": "tool_use",
+        "stop_details": None,
+    }
+
+
+def anthropic_called_stream() -> list[dict[str, Any]]:
+    """An Anthropic stream of ``CALLS``: the first call's arguments in
+    two pieces, the second's in none, as Anthropic sends ``{}``."""
+    start, *_, stop = anthropic.STREAM
+    events: list[dict[str, Any]] = [start]
+    for index, (call_id, name, arguments) in enumerate(CALLS):
+        events.append(
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": {},
+                },
+            }
+        )
+        if arguments:
+            text = json.dumps(arguments)
+            events += [
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": part,
+                    },
+                }
+                for part in (text[:3], text[3:])
+            ]
+        events.append({"type": "content_block_stop", "index": index})
+    events += [
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 15},
+        },
+        stop,
+    ]
+    return events
+
+
 TOOLS = [
     Tool(
         name="get_weather",
@@ -135,6 +265,8 @@ class Case:
             parallel calls become.
         forced: What a ``ForcedTool`` becomes.
         only_parallel: What ``parallel_tool_calls=True`` alone becomes.
+        called: A finished response with ``CALLS``, text first.
+        called_stream: A finished stream with ``CALLS``, text first.
     """
 
     provider: Provider
@@ -162,6 +294,8 @@ class Case:
     tools: dict[str, Any]
     forced: dict[str, Any]
     only_parallel: dict[str, Any]
+    called: dict[str, Any]
+    called_stream: list[dict[str, Any]]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -268,6 +402,8 @@ OPENAI = Case(
     },
     forced={"tool_choice": {"type": "function", "name": "get_time"}},
     only_parallel={"parallel_tool_calls": True},
+    called=openai_called(),
+    called_stream=openai_called_stream(),
 )
 
 ANTHROPIC = Case(
@@ -342,6 +478,8 @@ ANTHROPIC = Case(
     only_parallel={
         "tool_choice": {"type": "auto", "disable_parallel_tool_use": False}
     },
+    called=anthropic_called(),
+    called_stream=anthropic_called_stream(),
 )
 
 
@@ -527,6 +665,49 @@ async def test_tools_reach_the_wire(
 
     body = json.loads(recorder.last.body)
     assert {key: body[key] for key in case.tools} == case.tools
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_tool_calls_come_back_alike(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    # The arguments' text is the provider's (OpenAI sends it, Anthropic's
+    # object is written as JSON), so the parsed arguments are compared.
+    if mode == "create":
+        recorder.reply(Reply(json=case.called))
+    else:
+        recorder.reply(events(case.called_stream))
+    request = REQUEST.model_copy(update={"tools": TOOLS})
+
+    async with client:
+        if mode == "create":
+            result: Any = await client.generation.create(request)
+        else:
+            async with client.generation.stream(request) as stream:
+                result = await stream.final()
+
+    assert [
+        (call.id, call.name, call.parse_arguments())
+        for call in result.tool_calls
+    ] == CALLS
+    assert result.incomplete_reason is None
+    assert result.raw_incomplete_reason is None
+
+
+async def test_a_response_without_calls_has_none(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(Reply(json=case.response))
+
+    async with client:
+        response = await client.generation.create(REQUEST)
+
+    assert response.tool_calls == []
 
 
 @pytest.mark.parametrize(

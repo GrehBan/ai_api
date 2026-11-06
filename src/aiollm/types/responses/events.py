@@ -9,7 +9,7 @@ from pydantic import ConfigDict, Field
 from aiollm.enums import GenerationEventType, IncompleteReason, Provider
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import EventTypes
-from aiollm.types.responses.generation import TokenUsage
+from aiollm.types.responses.generation import TokenUsage, ToolCall
 
 
 class BaseResponseEvent(BaseAPIType):
@@ -93,6 +93,8 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
             provider sent one (OpenAI's ``reasoning.summary``,
             Anthropic's ``thinking.display`` of ``summarized``, both
             set through ``provider_options``); ``None`` otherwise.
+        tool_calls: The calls of the request's tools, as on
+            ``GenerationResponse``.
     """
 
     type: Literal[GenerationEventType.COMPLETED] = (
@@ -107,6 +109,7 @@ class CompletedEvent[RawT](RawResponseEvent[RawT]):
     raw_incomplete_reason: str | None = None
     refusal: str | None = None
     reasoning: str | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list[ToolCall])
 
 
 class OtherEvent[RawT](RawResponseEvent[RawT]):

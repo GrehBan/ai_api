@@ -40,9 +40,18 @@ Two rules decide what is shared:
 | `GenerationResponse.raw_incomplete_reason` | `incomplete_details.reason` of an incomplete response | `stop_reason` of an early stop | `None` when the provider gives no reason, such as a completed OpenAI response with a refusal part. |
 | `GenerationResponse.refusal` | The `refusal` parts, joined | `stop_details.explanation`, else `stop_details.category`, of a `refusal` stop | A refusal is an answer, not an error, as in both SDKs. `None` if the provider gives no explanation. |
 | `GenerationResponse.reasoning` | The `summary_text` parts of the `reasoning` items, joined; there only when the request asks for them with `provider_options={"reasoning": {"summary": "auto"}}` | The `thinking` blocks, joined; a summary on the 5.x models, there only with `provider_options={"thinking": {"type": "adaptive", "display": "summarized"}}` | `None` without a summary, the same for both. OpenAI's raw `reasoning_text` and `encrypted_content`, and Anthropic's `signature` and `redacted_thinking`, stay in `raw`. |
+| `GenerationResponse.tool_calls` | A `ToolCall` per `function_call` item, in output order | A `ToolCall` per `tool_use` block, in content order | Empty without calls. A response with calls finished normally (OpenAI `completed`, Anthropic `stop_reason: "tool_use"`) and waits for their results; with `incomplete_reason` set, the last call may be cut off, so run none of them and retry with a higher limit. Built-in and server tool calls stay in `raw`. |
 | `GenerationResponse.raw` | `Response` | `Message` | Holds everything the shared fields leave out. |
 
 `response.to_turn()` turns a response into an `assistant` turn for the next request; a response without text raises `ValueError`.
+
+## Tool calls
+
+| Shared field | OpenAI | Anthropic | Lost, or when it raises |
+| --- | --- | --- | --- |
+| `ToolCall.id` | `call_id` of the `function_call` item (not its `id`, which stays in `raw`) | `id` of the `tool_use` block | The id a result refers to. |
+| `ToolCall.name` | `name` | `name` | Anthropic's `toolset_name` and OpenAI's `namespace` stay in `raw`. |
+| `ToolCall.arguments` | `arguments`, the JSON text as sent | `input`, written as JSON text; in a stream, the `partial_json` pieces joined | The text differs in spacing between the providers, the parsed object does not: `parse_arguments()` gives it, and raises `ValueError` for text that is not a JSON object (OpenAI without `strict`). |
 
 ## Token usage
 
@@ -84,6 +93,7 @@ Server tool use, service tier, speed and inference region (Anthropic) and tool u
 | `CompletedEvent.raw_incomplete_reason` | As `GenerationResponse.raw_incomplete_reason` | As `GenerationResponse.raw_incomplete_reason` | — |
 | `CompletedEvent.refusal` | As `GenerationResponse.refusal` | As `GenerationResponse.refusal`, from `message_delta.delta.stop_details` | — |
 | `CompletedEvent.reasoning` | As `GenerationResponse.reasoning`, from the event's `response` | The `thinking_delta`s joined | `None` without a summary. |
+| `CompletedEvent.tool_calls` | As `GenerationResponse.tool_calls`, from the event's `response` | From the `tool_use` blocks of the stream: `content_block_start` and the `input_json_delta`s after it | An `input_json_delta` without its `tool_use` block raises `APIResponseError`. |
 | `CompletedEvent.raw` | The terminal event | `message_stop` | — |
 
 ## Errors

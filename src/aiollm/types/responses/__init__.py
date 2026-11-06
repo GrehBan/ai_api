@@ -18,6 +18,7 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import (
     GenerationResponse,
     TokenUsage,
+    ToolCall,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "ReasoningDeltaEvent",
     "TextDeltaEvent",
     "TokenUsage",
+    "ToolCall",
 ]

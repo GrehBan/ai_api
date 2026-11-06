@@ -31,6 +31,7 @@ from aiollm.types.responses import (
     GenerationEvent,
     GenerationResponse,
     TokenUsage,
+    ToolCall,
 )
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
@@ -79,7 +80,7 @@ def documented(owner: str) -> set[str]:
 
 @pytest.mark.parametrize(
     "model",
-    [GenerationRequest, GenerationResponse, TokenUsage, CompletedEvent],
+    [GenerationRequest, GenerationResponse, TokenUsage, ToolCall, CompletedEvent],
     ids=lambda model: model.__name__,
 )
 def test_every_shared_field_has_a_row(model: type[BaseModel]) -> None:
@@ -118,13 +119,18 @@ TAKEN_AS_IS = {
     "GenerationResponse.model",
     "GenerationResponse.text",
     "GenerationResponse.reasoning",
+    "GenerationResponse.tool_calls",
     "GenerationResponse.raw",
+    "ToolCall.id",
+    "ToolCall.name",
+    "ToolCall.arguments",
     "CompletedEvent.type",
     "CompletedEvent.id",
     "CompletedEvent.provider",
     "CompletedEvent.model",
     "CompletedEvent.text",
     "CompletedEvent.reasoning",
+    "CompletedEvent.tool_calls",
     "CompletedEvent.raw",
 }
 """The shared fields an adapter copies or sets without a conversion."""
@@ -137,6 +143,7 @@ def test_every_documented_field_is_converted_or_taken_as_is() -> None:
             GenerationRequest,
             GenerationResponse,
             TokenUsage,
+            ToolCall,
             CompletedEvent,
         )
         for name in documented(model.__name__)

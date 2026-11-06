@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -19,10 +20,11 @@ from aiollm.providers.anthropic.types import (
     RawMessageStartEvent,
     TextBlock,
     ThinkingBlock,
+    ToolUseBlock,
     Usage,
 )
 from aiollm.types.requests.generation import Turn
-from aiollm.types.responses.generation import TokenUsage
+from aiollm.types.responses.generation import TokenUsage, ToolCall
 
 FINISHED: Final = frozenset({"end_turn", "stop_sequence", "tool_use"})
 """Stop reasons of a generation that reached its end.
@@ -161,6 +163,36 @@ def message_text(message: Message) -> str | None:
     return "".join(texts) if texts else None
 
 
+def tool_call(block: ToolUseBlock) -> ToolCall:
+    """Turn a ``tool_use`` block into a shared call.
+
+    Args:
+        block: The block.
+
+    Returns:
+        The call, its ``input`` written as JSON text.
+    """
+    arguments = json.dumps(block.input, ensure_ascii=False)
+    return ToolCall(id=block.id, name=block.name, arguments=arguments)
+
+
+def message_tool_calls(message: Message) -> list[ToolCall]:
+    """Collect the tool calls of a message.
+
+    Args:
+        message: A message.
+
+    Returns:
+        A shared call per ``tool_use`` block, in content order; empty
+        without calls.
+    """
+    return [
+        tool_call(block)
+        for block in message.content
+        if isinstance(block, ToolUseBlock)
+    ]
+
+
 def message_thinking(message: Message) -> str | None:
     """Join the thinking of a message.
 
@@ -208,6 +240,12 @@ class StreamState:
     _message: Message | None = field(default=None, init=False, repr=False)
     _texts: list[str] = field(default_factory=list, init=False, repr=False)
     _thinking: list[str] = field(default_factory=list, init=False, repr=False)
+    _calls: dict[int, ToolUseBlock] = field(
+        default_factory=dict[int, ToolUseBlock], init=False, repr=False
+    )
+    _arguments: dict[int, list[str]] = field(
+        default_factory=dict[int, list[str]], init=False, repr=False
+    )
 
     def start(self, event: RawMessageStartEvent) -> None:
         """Take the message and the counts of ``message_start``.
@@ -224,6 +262,55 @@ class StreamState:
             text: The new text of a ``text_delta``.
         """
         self._texts.append(text)
+
+    def start_call(self, index: int, block: ToolUseBlock) -> None:
+        """Keep a ``tool_use`` block that a ``content_block_start`` opened.
+
+        Args:
+            index: The block's index in the message.
+            block: The block, its ``input`` empty until the deltas.
+        """
+        self._calls[index] = block
+        self._arguments[index] = []
+
+    def add_arguments(self, index: int, partial: str) -> None:
+        """Keep a piece of a call's arguments.
+
+        Args:
+            index: The index of the call's block.
+            partial: The ``partial_json`` of an ``input_json_delta``.
+
+        Raises:
+            APIResponseError: No ``tool_use`` block opened at the index.
+        """
+        if index not in self._arguments:
+            message = (
+                f"Anthropic stream sent input_json_delta for block {index} "
+                "without its tool_use"
+            )
+            raise APIResponseError(message)
+        self._arguments[index].append(partial)
+
+    def tool_calls(self) -> list[ToolCall]:
+        """Give the tool calls streamed so far.
+
+        Returns:
+            A shared call per ``tool_use`` block, in block order, its
+            arguments the pieces joined, or the block's own ``input``
+            when no piece came.
+        """
+        calls: list[ToolCall] = []
+        for index in sorted(self._calls):
+            block = self._calls[index]
+            pieces = self._arguments[index]
+            if not pieces:
+                calls.append(tool_call(block))
+                continue
+            arguments = "".join(pieces)
+            calls.append(
+                ToolCall(id=block.id, name=block.name, arguments=arguments)
+            )
+        return calls
 
     def add_thinking(self, thinking: str) -> None:
         """Keep a thinking delta for the whole reasoning.

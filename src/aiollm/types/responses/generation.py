@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
+from pydantic import ConfigDict, Field
+
 from aiollm.enums import IncompleteReason, Provider
 from aiollm.types.base import BaseAPIType
-from aiollm.types.requests.generation import Turn
+from aiollm.types.requests.generation import JSONValue, Turn
 from aiollm.types.responses.base import BaseResponse
 
 
@@ -30,6 +34,51 @@ class TokenUsage(BaseAPIType):
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
+
+
+class ToolCall(BaseAPIType):
+    """A call of one of the request's tools.
+
+    Immutable. The arguments are the JSON text the model wrote, as
+    OpenAI sends them and as both stream them; Anthropic's object is
+    written as JSON. Without ``strict`` the text may be invalid JSON, so
+    it is parsed only on ``parse_arguments()``.
+
+    Attributes:
+        id: The call's id, which its result refers to (OpenAI's
+            ``call_id``, Anthropic's ``tool_use.id``).
+        name: The tool called.
+        arguments: The arguments, a JSON object as text.
+
+    Example:
+        >>> for call in response.tool_calls:
+        ...     result = run(call.name, call.parse_arguments())
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    arguments: str
+
+    def parse_arguments(self) -> dict[str, JSONValue]:
+        """Parse the arguments.
+
+        Returns:
+            The arguments as a JSON object.
+
+        Raises:
+            ValueError: The arguments are not a JSON object.
+        """
+        try:
+            value = json.loads(self.arguments)
+        except json.JSONDecodeError as error:
+            message = f"arguments of tool call {self.id} are not JSON"
+            raise ValueError(message) from error
+        if not isinstance(value, dict):
+            message = f"arguments of tool call {self.id} are not an object"
+            raise ValueError(message)
+        return value
 
 
 class GenerationResponse[RawT](BaseResponse):
@@ -61,6 +110,10 @@ class GenerationResponse[RawT](BaseResponse):
             provider sent one (OpenAI's ``reasoning.summary``,
             Anthropic's ``thinking.display`` of ``summarized``, both
             set through ``provider_options``); ``None`` otherwise.
+        tool_calls: The calls of the request's tools, in the order the
+            model made them; empty without calls. A response with calls
+            waits for their results; when ``incomplete_reason`` is set,
+            the last call may be cut off, so run none of them.
         raw: The provider's response.
     """
 
@@ -74,6 +127,7 @@ class GenerationResponse[RawT](BaseResponse):
     raw_incomplete_reason: str | None = None
     refusal: str | None = None
     reasoning: str | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list[ToolCall])
 
     raw: RawT
 

@@ -142,6 +142,7 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import (
     GenerationResponse,
     TokenUsage,
+    ToolCall,
 )
 
 # The library configures no logging: its records reach the handlers
@@ -223,6 +224,7 @@ __all__ = [
     "TextDeltaEvent",
     "TokenUsage",
     "Tool",
+    "ToolCall",
     "ToolChoice",
     "Turn",
     "UnprocessableEntityError",
