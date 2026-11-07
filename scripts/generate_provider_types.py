@@ -1,42 +1,100 @@
 """Regenerate the provider types and request parameters with aiollm-codegen.
 
-Run from the aiollm checkout, with aiollm_codegen next to it:
+Run from the aiollm checkout:
 
     uv run python scripts/generate_provider_types.py [--codegen DIR]
 
-OpenAI's types come from its official OpenAPI file (``OPENAI_OPENAPI``,
-by default the copy in aiollm_codegen's ``examples/``), restricted to
-``createResponse``; Anthropic's come from the docs-lite contract snapshot
-in ``tests/providers/contracts/anthropic/messages``. For each provider the
-script replaces ``types/<family>.py`` and ``methods/params/`` with the
-generated modules, keeps the hand-written ``types/options.py`` and the
-method classes in ``methods/``, and writes ``types/__init__.py`` from the
-generated one with the options added. Nothing else is touched.
+Both inputs are pinned, so the same commit always gives the same files
+(the CI job ``codegen`` regenerates them and fails on any difference).
+The generator is the ``codegen`` dependency group, a commit of
+aiollm-codegen named in ``pyproject.toml`` and ``uv.lock``; ``--codegen
+DIR`` runs a local checkout instead, to try a change of the generator.
+OpenAI's types come from its official OpenAPI file at the commit of
+``OPENAI_OPENAPI_URL``, downloaded and checked against
+``OPENAI_OPENAPI_SHA256`` (the file of the contract snapshot,
+``tests/providers/contracts/manifest.json``, a test checks), or from the
+file ``OPENAI_OPENAPI`` names, which must be the same; restricted to
+``createResponse``. Anthropic's come from the docs-lite contract snapshot
+in ``tests/providers/contracts/anthropic/messages``. To follow a new
+OpenAI file, refresh the contract snapshot from it and change the URL
+and the hash here together.
+
+For each provider the script replaces ``types/<family>.py`` and
+``methods/params/`` with the generated modules, keeps the hand-written
+``types/options.py`` and the method classes in ``methods/``, and writes
+``types/__init__.py`` from the generated one with the options added.
+Nothing else is touched.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
+from typing import Final
 
-ROOT = Path(__file__).resolve().parents[1]
-PROVIDERS = ROOT / "src" / "aiollm" / "providers"
-CONTRACTS = ROOT / "tests" / "providers" / "contracts"
-ANTHROPIC_VERSION = "2026-10-21"
+ROOT: Final = Path(__file__).resolve().parents[1]
+PROVIDERS: Final = ROOT / "src" / "aiollm" / "providers"
+CONTRACTS: Final = ROOT / "tests" / "providers" / "contracts"
+ANTHROPIC_VERSION: Final = "2026-10-21"
+
+OPENAI_OPENAPI_URL: Final = (
+    "https://raw.githubusercontent.com/openai/openai-openapi/"
+    "3e288ba501d136b81181919a12a88495a0244488/openapi.yaml"
+)
+"""OpenAI's OpenAPI file, at the commit of 2026-11-05."""
+
+OPENAI_OPENAPI_SHA256: Final = (
+    "cf91be897ab55e4aefcfc44ec1eb7611eea1227509b67178be583244c2680ab3"
+)
+"""SHA-256 of that file."""
+
 HAND_WRITTEN_TYPES = {"options.py"}
 """Modules of ``types/`` the script never replaces."""
 
 
-def codegen(codegen_dir: Path, *args: str, output: Path) -> None:
-    """Run aiollm-codegen from its own project."""
-    command = ["uv", "run", "aiollm-codegen", *args, "-o", str(output)]
-    subprocess.run(command, cwd=codegen_dir, check=True)  # noqa: S603
+def codegen(codegen_dir: Path | None, *args: str, output: Path) -> None:
+    """Run aiollm-codegen: the pinned one, or a local checkout."""
+    if codegen_dir is None:
+        command = ["uv", "run", "--group", "codegen", "aiollm-codegen"]
+        cwd = ROOT
+    else:
+        command = ["uv", "run", "aiollm-codegen"]
+        cwd = codegen_dir
+    command += [*args, "-o", str(output)]
+    subprocess.run(command, cwd=cwd, check=True)  # noqa: S603
+
+
+def openai_openapi(directory: Path) -> Path:
+    """The pinned OpenAPI file of OpenAI: ``OPENAI_OPENAPI``, or a download.
+
+    Raises:
+        SystemExit: The file is not the pinned one.
+    """
+    given = os.environ.get("OPENAI_OPENAPI")
+    if given:
+        path = Path(given).resolve()
+    else:
+        path = directory / "openai.openapi.yaml"
+        with urllib.request.urlopen(OPENAI_OPENAPI_URL) as response:  # noqa: S310
+            path.write_bytes(response.read())
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != OPENAI_OPENAPI_SHA256:
+        message = (
+            f"{path} has SHA-256 {digest}, not the pinned "
+            f"{OPENAI_OPENAPI_SHA256}; to follow a new file, refresh the "
+            "contract snapshot from it and change OPENAI_OPENAPI_URL and "
+            "OPENAI_OPENAPI_SHA256 in this script"
+        )
+        raise SystemExit(message)
+    return path
 
 
 def exported(module: Path) -> tuple[list[str], list[str]]:
@@ -114,18 +172,16 @@ def main() -> None:
     """Generate both providers and install them."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--codegen", type=Path, default=ROOT.parent / "aiollm_codegen"
+        "--codegen",
+        type=Path,
+        help="run this checkout of aiollm-codegen, not the pinned one",
     )
     args = parser.parse_args()
-    codegen_dir: Path = args.codegen.resolve()
-    openapi = Path(
-        os.environ.get(
-            "OPENAI_OPENAPI", codegen_dir / "examples" / "openai.openapi.yaml"
-        )
-    ).resolve()
+    codegen_dir: Path | None = args.codegen and args.codegen.resolve()
 
     with tempfile.TemporaryDirectory() as temporary:
         out = Path(temporary)
+        openapi = openai_openapi(out)
         codegen(
             codegen_dir,
             str(openapi),

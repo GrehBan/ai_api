@@ -31,6 +31,10 @@ jobs:
       - run: uv run mkdocs build --strict
         env:
           NO_MKDOCS_2_WARNING: "1"
+      # The provider types are what the pinned generator makes of the
+      # pinned specifications: regenerating them changes nothing.
+      - run: uv run python scripts/generate_provider_types.py
+      - run: git add --intent-to-add . && git diff --exit-code
 
   test-matrix:
     name: tests (${{ matrix.os }}, ${{ matrix.python }})
@@ -52,7 +56,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
-      - run: uv sync --all-groups --locked
+      # The generator only runs in the job above.
+      - run: uv sync --all-groups --no-group codegen --locked
       - run: >-
           uv run pytest --cov --cov-branch --cov-report=xml
           --html=report.html --self-contained-html

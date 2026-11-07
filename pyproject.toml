@@ -79,6 +79,11 @@ path = "src/aiollm/__meta__.py"
 packages = ["src/aiollm"]
 
 [dependency-groups]
+# The generator of the provider types, at the commit they were made with;
+# scripts/generate_provider_types.py runs it (CONTRIBUTING.md).
+codegen = [
+    "aiollm-codegen",
+]
 dev = [
     "mypy>=2.4.0",
     "pre-commit>=4.7.0",
@@ -106,6 +111,9 @@ test = [
     "pyyaml>=6.0.3",
     "trustme>=1.2.1",
 ]
+
+[tool.uv.sources]
+aiollm-codegen = { git = "https://github.com/GrehBan/aiollm_codegen", rev = "e1171eaef36db7cbc05d74b17b8e2cbbbbdf1a84" }
 
 [tool.ruff]
 line-length = 79

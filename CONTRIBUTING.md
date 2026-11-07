@@ -72,6 +72,7 @@ At this point you can make any changes in the code that you want: fixes, new fea
 - **Modern Python, the oldest supported version.** Every module starts with `from __future__ import annotations`; use PEP 695 generics (`class Stream[T]`) and nothing newer than Python 3.13 allows.
 - **Public names are exported on purpose.** A name users need goes into its package's `__init__.py` with a sorted `__all__`; everything else stays internal.
 - **Fail early.** A mistake in a method class raises `TypeError` when the class is defined, a bad value raises before anything is sent, and nothing is dropped silently.
+- **Generated code is regenerated, not edited.** A provider's `types/<family>.py` and `methods/params/` come from [aiollm-codegen](https://github.com/GrehBan/aiollm_codegen) through `uv run python scripts/generate_provider_types.py`. The generator (the `codegen` dependency group) and OpenAI's OpenAPI file (a URL and a SHA-256 in the script) are pinned, and CI fails when a regeneration changes any file; fix a defect in aiollm-codegen and move the pin.
 - **Breaking changes are allowed before 1.0, but marked.** Say so in the changelog fragment (see [Describe changes](#describe-changes)); see [Versioning](https://grehban.github.io/aiollm/guide/design/#versioning) for what counts as one.
 
 For a new endpoint or a new provider, read [Extending](https://grehban.github.io/aiollm/guide/extending/): provider methods follow the provider's own JSON schema field by field, and the wire-contract tests check that they do.

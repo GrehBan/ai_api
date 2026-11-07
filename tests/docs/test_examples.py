@@ -30,6 +30,8 @@ from aiollm import (
     RateLimitError,
     ResponseFormat,
     ServiceUnavailableError,
+    ToolCall,
+    Turn,
 )
 from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.client import (
@@ -41,6 +43,11 @@ from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
 from aiollm.types.requests import GenerationRequest
 from tests.conftest import LocalAPI, Recorder, Reply
+from tests.providers.test_generation_contract import (
+    OPENAI,
+    openai_called_stream,
+)
+from tests.providers.test_generation_contract import events as sse
 from tests.providers.test_openai_responses import RESPONSE as OPENAI_EXAMPLE
 
 ROOT = Path(__file__).parents[2]
@@ -133,6 +140,8 @@ ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
 SHARED_GENERATION: Final = "shared_generation.py"
 PROVIDER_OPTIONS: Final = "provider_options.py"
 TOOLS: Final = "tools.py"
+TOOLS_STREAM: Final = "tools_stream.py"
+TOOLS_MODEL: Final = "tools_model.py"
 RESOURCES: Final = "resources.py"
 
 TESTED: Final = (
@@ -158,6 +167,8 @@ TESTED: Final = (
     SHARED_GENERATION,
     PROVIDER_OPTIONS,
     TOOLS,
+    TOOLS_STREAM,
+    TOOLS_MODEL,
     RESOURCES,
 )
 """The title of every example a test below runs."""
@@ -935,6 +946,71 @@ async def test_tools(
             "output": '{"city": "Paris", "celsius": 15}',
         },
     ]
+
+
+async def test_tools_model(examples: Examples) -> None:
+    await examples.run(QUICK_START, TOOLS, TOOLS_STREAM, TOOLS_MODEL)
+
+    assert examples.CITY_WEATHER.parameters == {
+        "type": "object",
+        "title": "City",
+        "properties": {"city": {"type": "string", "title": "City"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    good = examples.answer(
+        ToolCall(id="c1", name="get_weather", arguments='{"city": "Paris"}')
+    )
+    bad = examples.answer(
+        ToolCall(id="c2", name="get_weather", arguments='{"town": "Paris"}')
+    )
+
+    assert (good.call_id, good.output) == (
+        "c1",
+        '{"city": "Paris", "celsius": 15}',
+    )
+    assert bad.call_id == "c2"
+    assert "city" in json.loads(bad.output)["error"]
+
+
+async def test_tools_stream(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, TOOLS, TOOLS_STREAM)
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(sse(openai_called_stream()))
+    conversation = [Turn.user("Weather in Paris?")]
+
+    async with OpenAIClient("sk-...") as client:
+        items = await examples.stream_round(client, conversation)
+
+    *_, weather, time = items
+    assert (weather.call_id, weather.output) == (
+        "call_1",
+        '{"city": "Paris", "celsius": 15}',
+    )
+    assert (time.call_id, time.output) == (
+        "call_2",
+        '{"error": "unknown tool get_time"}',
+    )
+
+
+async def test_tools_stream_fails_after_a_done_call(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, TOOLS, TOOLS_STREAM)
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(sse([*openai_called_stream()[:-1], OPENAI.overloaded]))
+
+    async with OpenAIClient("sk-...") as client:
+        with pytest.raises(ServiceUnavailableError):
+            await examples.stream_round(client, [Turn.user("Weather?")])
 
 
 async def test_provider_options(
