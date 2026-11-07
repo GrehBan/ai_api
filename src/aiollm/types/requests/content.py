@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Annotated, Final, Literal, Self, TypeIs, get_args
 
@@ -15,7 +14,7 @@ from pydantic import (
 )
 
 from aiollm.types.base import BaseAPIType
-from aiollm.types.files import guess_content_type
+from aiollm.types.files import PathFile, ThreadWork, guess_content_type
 
 type ImageMediaType = Literal[
     "image/jpeg", "image/png", "image/gif", "image/webp"
@@ -49,6 +48,24 @@ def _is_image_media_type(value: str | None) -> TypeIs[ImageMediaType]:
         Whether it is a format both providers take.
     """
     return value in IMAGE_MEDIA_TYPES
+
+
+def _read(path: Path) -> bytes:
+    """Read a whole file, a blocking call for a worker thread.
+
+    Args:
+        path: The file.
+
+    Returns:
+        Its bytes.
+
+    Raises:
+        IsADirectoryError: ``path`` is a directory, on every system.
+        FileNotFoundError: There is no file at ``path``.
+        OSError: The file cannot be read.
+    """
+    PathFile(path).check()
+    return path.read_bytes()
 
 
 _CONFIG: Final = ConfigDict(
@@ -180,7 +197,7 @@ class ImagePart(_SourcePart):
                 )
                 raise ValueError(message)
             media_type = guessed
-        data = await asyncio.to_thread(path.read_bytes)
+        data = await ThreadWork().run(_read, path)
         return cls(data=data, media_type=media_type)
 
 
@@ -240,7 +257,7 @@ class DocumentPart(_SourcePart):
             OSError: The file cannot be read.
         """
         path = Path(path)
-        data = await asyncio.to_thread(path.read_bytes)
+        data = await ThreadWork().run(_read, path)
         return cls(data=data, filename=path.name)
 
 

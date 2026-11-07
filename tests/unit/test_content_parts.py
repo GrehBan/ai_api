@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +129,8 @@ async def test_an_image_of_unknown_format_needs_its_type(
         await ImagePart.load(path)
     with pytest.raises(FileNotFoundError):
         await ImagePart.load(tmp_path / "none.png")
+    with pytest.raises(IsADirectoryError):
+        await DocumentPart.load(tmp_path)
 
 
 async def test_a_document_is_loaded_with_its_name(tmp_path: Path) -> None:
@@ -136,3 +140,36 @@ async def test_a_document_is_loaded_with_its_name(tmp_path: Path) -> None:
     part = await DocumentPart.load(path)
 
     assert (part.data, part.filename) == (b"%PDF-1.7", "report.pdf")
+
+
+async def test_a_cancelled_load_reports_a_failed_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started, release = threading.Event(), threading.Event()
+    reported: list[dict[str, Any]] = []
+
+    def read_bytes(_: Path) -> bytes:
+        started.set()
+        release.wait(5)
+        raise PermissionError("denied")
+
+    path = tmp_path / "r.pdf"
+    path.write_bytes(b"%PDF")
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda _, context: reported.append(context))
+    try:
+        task = asyncio.create_task(DocumentPart.load(path))
+        await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        for _ in range(100):
+            if reported:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        loop.set_exception_handler(None)
+
+    assert [type(c["exception"]) for c in reported] == [PermissionError]
