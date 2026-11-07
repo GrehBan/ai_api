@@ -20,41 +20,71 @@ from typing_extensions import TypedDict
 from aiollm.enums import Effort, Provider, Role, ToolChoice
 from aiollm.types.base import BaseAPIType
 from aiollm.types.requests.base import BaseRequest
+from aiollm.types.requests.content import ContentPart
 
 
 class Turn(BaseAPIType):
-    """One turn of a conversation: who wrote it and its text.
+    """One turn of a conversation: who wrote it and what.
 
     Immutable, and unknown fields are rejected. System prompts are not
     turns: they go in ``GenerationRequest.instructions``.
 
     Attributes:
         type: Always ``"text"``; tells the turn apart from the other
-            items of a conversation.
+            items of a conversation (a turn of parts has it too).
         role: Who wrote the turn.
-        content: Text of the turn.
+        content: Text of the turn, or its parts in order: text, images
+            and documents, at least one. Only a ``user`` turn takes
+            parts; an ``assistant`` turn is text.
 
     Example:
         >>> Turn.user("Hi")
         Turn(type='text', role=<Role.USER: 'user'>, content='Hi')
+        >>> Turn.user([TextPart(text="What is it?"), await
+        ...            ImagePart.load("cat.png")])
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+    )
 
     type: Literal["text"] = "text"
     role: Role
-    content: str
+    content: str | Annotated[list[ContentPart], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _parts_from_the_user(self) -> Self:
+        """Check that only a ``user`` turn has parts.
+
+        Returns:
+            The turn.
+
+        Raises:
+            ValueError: A turn of another role has parts.
+        """
+        if not isinstance(self.content, str) and self.role is not Role.USER:
+            message = (
+                f"only a {Role.USER.value!r} turn takes parts; "
+                f"give a {self.role.value!r} turn its text"
+            )
+            raise ValueError(message)
+        return self
 
     @classmethod
-    def user(cls, content: str) -> Self:
+    def user(cls, content: str | Sequence[ContentPart]) -> Self:
         """Create a turn of the end user.
 
         Args:
-            content: Text of the turn.
+            content: Text of the turn, or its parts.
 
         Returns:
             The turn.
         """
+        if not isinstance(content, str):
+            content = list(content)
         return cls(role=Role.USER, content=content)
 
     @classmethod

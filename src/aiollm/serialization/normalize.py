@@ -7,7 +7,8 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from pydantic import MISSING
+from pydantic import MISSING, AnyUrl
+from pydantic_core import MultiHostUrl, Url
 
 from aiollm.serialization.traversal import guard_traversal
 from aiollm.serialization.values import TEMPORAL_TYPES, format_temporal
@@ -63,7 +64,8 @@ class BodyNormalizer:
     """Prepares request body values for a transport-specific builder.
 
     Nested models are dumped by alias, enums (also dict keys) are
-    unwrapped, and dates, times and durations are written by the method's
+    unwrapped, URLs (Pydantic's URL types) become their text, and dates,
+    times and durations are written by the method's
     ``IValueFormatter``. ``None`` is kept everywhere, for the encoder to
     send as ``null``, also in a nested model; a field the request leaves
     out is not in the body at all. Files and binary streams are passed
@@ -165,6 +167,9 @@ class BodyNormalizer:
 
         if isinstance(value, Enum):
             return self._normalize(value.value, formatter, parents)
+
+        if isinstance(value, (AnyUrl, Url, MultiHostUrl)):
+            return str(value)
 
         if isinstance(value, TEMPORAL_TYPES):
             return format_temporal(value, formatter)

@@ -138,6 +138,7 @@ def openai_response(**changes: Any) -> dict[str, Any]:
 OPENAI_RESPONSES: Final = "openai_responses.py"
 ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
 SHARED_GENERATION: Final = "shared_generation.py"
+GENERATION_PARTS: Final = "generation_parts.py"
 PROVIDER_OPTIONS: Final = "provider_options.py"
 TOOLS: Final = "tools.py"
 TOOLS_STREAM: Final = "tools_stream.py"
@@ -165,6 +166,7 @@ TESTED: Final = (
     OPENAI_RESPONSES,
     ANTHROPIC_MESSAGES,
     SHARED_GENERATION,
+    GENERATION_PARTS,
     PROVIDER_OPTIONS,
     TOOLS,
     TOOLS_STREAM,
@@ -838,6 +840,52 @@ async def test_shared_generation(
         "input": "Hi",
         "stream": True,
     }
+
+
+async def test_generation_parts(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    await examples.run(QUICK_START, CLIENT, SHARED_GENERATION, GENERATION_PARTS)
+    monkeypatch.setattr(session_factory, "api", api)
+    recorder.reply(Reply(json=openai_response()))
+    (tmp_path / "chart.png").write_bytes(b"\x89PNG")
+    (tmp_path / "report.pdf").write_bytes(b"%PDF")
+
+    async with examples.OpenAIClient("sk-...") as client:
+        await examples.describe(
+            client, tmp_path / "chart.png", tmp_path / "report.pdf"
+        )
+
+    assert json.loads(recorder.last.body)["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Does the chart match the report?",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,iVBORw==",
+                    "detail": "auto",
+                },
+                {
+                    "type": "input_file",
+                    "file_data": "data:application/pdf;base64,JVBERg==",
+                    "filename": "report.pdf",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/logo.png",
+                    "detail": "auto",
+                },
+            ],
+        }
+    ]
 
 
 async def test_shared_generation_continues_a_conversation(

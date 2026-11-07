@@ -86,9 +86,12 @@ from aiollm.response import map_stream
 from aiollm.session import CallOptions, ISession, ISessionFactory
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.requests import (
+    DocumentPart,
     GenerationRequest,
+    ImagePart,
     JSONValue,
     NoProviderOptions,
+    TextPart,
     Tool,
     ToolCall,
     ToolCallTurn,
@@ -717,3 +720,11 @@ def tool_arguments_take_a_model(call: ToolCall) -> None:
     assert_type(call.parse_arguments(CityArguments), CityArguments)
     call.parse_arguments(dict)  # type: ignore[type-var]
     Tool.from_model("f", dict)  # type: ignore[arg-type]
+
+
+async def turns_take_parts() -> None:
+    image = await ImagePart.load("cat.png")
+    assert_type(image, ImagePart)
+    assert_type(await DocumentPart.load("r.pdf"), DocumentPart)
+    Turn.user([TextPart(text="What is it?"), image])
+    Turn.user([1])  # type: ignore[list-item]

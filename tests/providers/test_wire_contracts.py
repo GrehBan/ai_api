@@ -36,6 +36,7 @@ from typing import (
 import pytest
 from jsonschema import Draft202012Validator
 from pydantic import MISSING, BaseModel, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 from aiollm.adapters import ICompositeAdapter
 from aiollm.enums import Effort, ToolChoice
@@ -57,7 +58,10 @@ from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import AnyOf, EventTypes
 from aiollm.types.requests import (
+    DocumentPart,
     GenerationRequest,
+    ImagePart,
+    TextPart,
     Tool,
     ToolCallTurn,
     ToolResult,
@@ -415,13 +419,25 @@ CONVERSATION = GenerationRequest(
     input=[
         Turn.user("Hi"),
         Turn.assistant("Hello! How can I help?"),
+        Turn.user(
+            [
+                TextPart(text="What is in these?"),
+                ImagePart(data=b"\x89PNG", media_type="image/png"),
+                ImagePart(url="https://example.com/cat.jpg"),
+                DocumentPart(data=b"%PDF-1.7", filename="report.pdf"),
+                DocumentPart(data=b"%PDF-1.7"),
+                DocumentPart(url="https://example.com/report.pdf"),
+            ]
+        ),
+        Turn.assistant("A cat and a report."),
         Turn.user("Tell me a joke"),
     ],
     instructions="Be brief",
     max_output_tokens=64,
     end_user_id="u-1",
 )
-"""A shared request with every field set and several turns."""
+"""A shared request with every field set and several turns, one of
+them of every kind of part and source."""
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -432,7 +448,7 @@ def test_shared_conversation_passes_the_request_schema(case: Case) -> None:
         case.adapter.to_method(CONVERSATION),
         case.adapter.to_stream_method(CONVERSATION),
     ):
-        body = json.loads(json.dumps(method.get_body_map()))
+        body = to_jsonable_python(method.get_body_map())
         assert errors(schema, body) == []
 
 

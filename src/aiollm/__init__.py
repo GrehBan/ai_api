@@ -125,6 +125,12 @@ from aiollm.types.files import (
     PathFile,
     StreamFile,
 )
+from aiollm.types.requests.content import (
+    ContentPart,
+    DocumentPart,
+    ImagePart,
+    TextPart,
+)
 from aiollm.types.requests.generation import (
     ForcedTool,
     GenerationRequest,
@@ -189,7 +195,9 @@ __all__ = [
     "ChunkedFile",
     "CompletedEvent",
     "ConflictError",
+    "ContentPart",
     "ContentTooLargeError",
+    "DocumentPart",
     "Effort",
     "ForcedTool",
     "FullJitterBackoff",
@@ -205,6 +213,7 @@ __all__ = [
     "IGenerationResource",
     "IOFile",
     "IValueFormatter",
+    "ImagePart",
     "IncompleteReason",
     "InputFile",
     "InputItem",
@@ -231,6 +240,7 @@ __all__ = [
     "Stream",
     "StreamFile",
     "TextDeltaEvent",
+    "TextPart",
     "TokenUsage",
     "Tool",
     "ToolCall",
