@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,6 +24,11 @@ from aiollm.providers.anthropic.types import (
     ThinkingBlock,
     ToolUseBlock,
     Usage,
+)
+from aiollm.types.requests.content import (
+    ContentPart,
+    DocumentPart,
+    ImagePart,
 )
 from aiollm.types.requests.generation import (
     InputItem,
@@ -102,10 +108,17 @@ class InputConversion(
                         results.append(block)
                     continue
                 case Turn(role=Role.USER) if results is not None:
-                    results.append({"type": "text", "text": item.content})
-                case Turn():
+                    results += _blocks(item.content)
+                case Turn(content=str()):
                     messages.append(
                         {"role": item.role.value, "content": item.content}
+                    )
+                case Turn():
+                    messages.append(
+                        {
+                            "role": item.role.value,
+                            "content": _blocks(item.content),
+                        }
                     )
                 case _:
                     messages.append(
@@ -116,6 +129,48 @@ class InputConversion(
                     )
             results = None
         return messages
+
+
+def _blocks(content: str | Sequence[ContentPart]) -> list[dict[str, Any]]:
+    """Convert a turn's content into content blocks.
+
+    Args:
+        content: The text, or the parts.
+
+    Returns:
+        The blocks: one ``text`` block for a text, else one per part.
+    """
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return [_block(part) for part in content]
+
+
+def _block(part: ContentPart) -> dict[str, Any]:
+    """Convert a part of a turn into a content block.
+
+    Text becomes a ``text`` block, an image an ``image`` block and a
+    document a ``document`` block, with a ``base64`` source for bytes
+    and a ``url`` source for a URL.
+
+    Args:
+        part: The part.
+
+    Returns:
+        The block.
+    """
+    match part:
+        case ImagePart() | DocumentPart():
+            if isinstance(part.data, bytes):
+                source = {
+                    "type": "base64",
+                    "media_type": part.media_type,
+                    "data": base64.b64encode(part.data).decode(),
+                }
+            else:
+                source = {"type": "url", "url": part.url}
+            return {"type": part.type, "source": source}
+        case _:
+            return {"type": "text", "text": part.text}
 
 
 def _assistant_blocks(turn: ToolCallTurn) -> list[dict[str, Any]]:

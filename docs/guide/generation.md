@@ -48,6 +48,34 @@ async def chat(client: IGenerationClient) -> GenerationResponse[Any]:
 
 What each shared field becomes for each provider, what is lost and when a request raises is listed in [docs/unification.md](../unification.md).
 
+A `user` turn can hold images and PDF documents next to its text: its `content` is then a list of parts, `TextPart`, `ImagePart` and `DocumentPart`, all from `aiollm`.
+
+```python title="generation_parts.py"
+from pathlib import Path
+
+from aiollm import DocumentPart, ImagePart, TextPart
+
+
+async def describe(
+    client: IGenerationClient, image: Path, report: Path
+) -> GenerationResponse[Any]:
+    question = Turn.user(
+        [
+            TextPart(text="Does the chart match the report?"),
+            await ImagePart.load(image),
+            await DocumentPart.load(report),
+            ImagePart(url="https://example.com/logo.png"),
+        ]
+    )
+    return await client.generation.create(
+        model="gpt-6-astra", input=[question]
+    )
+```
+
+- **Bytes or a URL.** An `ImagePart` or a `DocumentPart` holds the file's bytes, sent inline in base64, or a URL the provider downloads it from, exactly one of them. `ImagePart(data=..., media_type="image/png")` takes bytes already in memory; JPEG, PNG, GIF and WebP are the formats both providers take. A document is a PDF; `DocumentPart(data=..., filename=...)` names it for OpenAI, which is told `document.pdf` otherwise.
+- **Reading a file.** `await ImagePart.load(path)` and `await DocumentPart.load(path)` read the file in a worker thread, so the event loop goes on; an image's format comes from the file's extension (`media_type=` gives it otherwise, and an unknown extension raises `ValueError`), a document's name from the file. The bytes stay in the part, so a request sent again, by a retry or in the next turn of a conversation, does not read the file again.
+- **Only the user's turns.** Parts go in `user` turns; an `assistant` turn is text, and parts in it raise `ValidationError`. The providers limit the size of an image, a document and a request, and answer 400 past them; the parts are not checked against them. What each part becomes is listed under [Content parts](../unification.md#content-parts).
+
 Provider options are typed by the concrete client:
 
 ```python title="provider_options.py"
@@ -76,7 +104,7 @@ async def generate_unstored(
 - **Call options.** `create(...)` and `stream(...)` also take `headers=`, `timeout=` and `retry_policy=`, as `send_request` does (see [Per-request headers and timeout](sessions.md#per-request-headers-and-timeout)), and pass them to the session unchanged, so they work the same for every provider. They are options of the call, not fields of the request: no field of `GenerationRequest` is named like one of them.
 - **Stream helpers.** `stream(...)` yields a `GenerationStream`: iterate it for every shared event, or use `events.text()` for the text deltas only and `await events.final()` for the `CompletedEvent`, which carries the response's `id`, `model`, whole `text`, `usage`, `tool_calls` and why it stopped. Tool calls stream as `ToolCallStartEvent`, `ToolCallDeltaEvent` and `ToolCallDoneEvent` ([Tools](tools.md)). `final()` reads the rest of the stream, and after `text()` or a loop it returns the `CompletedEvent` already read. When a read failed (a provider's error event, a cut connection), every later read, `text()` and `final()` raise that same error again, never a misleading "ended without a CompletedEvent".
 - **Any provider.** `IGenerationClient[RawT = Any, RawItemT = Any]` (from `aiollm`) is a client with `generation`; every provider client matches it, so code typed with it takes any of them.
-- **A conversation is a list of items.** `input` is a text, taken as one `user` turn, or a list of `Turn`s (`Turn.user(...)`, `Turn.assistant(...)`, or `response.to_turn()` for an earlier answer), with `ToolCallTurn`s and `ToolResult`s in a tool loop (see [Tools](tools.md)); the list must not be empty, and it ends with a `user` turn or a tool result. System prompts go in `instructions`, not in turns.
+- **A conversation is a list of items.** `input` is a text, taken as one `user` turn, or a list of `Turn`s (`Turn.user(...)`, with a text or parts, `Turn.assistant(...)`, or `response.to_turn()` for an earlier answer), with `ToolCallTurn`s and `ToolResult`s in a tool loop (see [Tools](tools.md)); the list must not be empty, and it ends with a `user` turn or a tool result. System prompts go in `instructions`, not in turns.
 - **Optional fields are left out until given.** `instructions`, `max_output_tokens`, `effort`, `output_schema`, `end_user_id`, `tools`, `tool_choice` and `parallel_tool_calls` default to `MISSING`, and the adapters pass them on as they are, so a provider gets only what was given. They take no `None`, which would mean `null`: Anthropic's schema has no `null` for them, so `create(..., instructions=None)` is a type error and a `ValidationError`. A field not given reads as `MISSING`, which is truthy: test it with `request.instructions is MISSING`, not `if request.instructions`. Setting a field later (`request.instructions = None`) is validated too; `request.model_copy(update=...)` is not, as everywhere in Pydantic, so a value it lets in reaches the adapter: a `None` is sent as `null` to OpenAI, whose schema takes it, and raises `RequestValidationError` for Anthropic, whose schema does not.
 - **A request a provider cannot take raises `RequestValidationError`** (from `aiollm`, a `ValueError`) before anything is sent, with the `provider` and the shared `field` at fault; a pydantic error behind it is its `__cause__`. Errors of `GenerationRequest` itself stay pydantic `ValidationError`s.
 - **Why it stopped.** `incomplete_reason` is an `IncompleteReason` (`MAX_TOKENS`, `REFUSAL` or `OTHER`; `None` if the generation finished), and `raw_incomplete_reason` keeps the provider's own reason. A refusal is an answer, not an error, as in both SDKs: it sets `incomplete_reason` to `REFUSAL` and `refusal` to the provider's explanation.

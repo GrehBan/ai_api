@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 import aiollm
-from aiollm.enums import IncompleteReason, Provider, ToolChoice
+from aiollm.enums import IncompleteReason, Provider, Role, ToolChoice
 from aiollm.exceptions import RequestValidationError
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.types import Message
@@ -26,8 +26,11 @@ from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.types import Response
 from aiollm.types.requests import (
+    DocumentPart,
     ForcedTool,
     GenerationRequest,
+    ImagePart,
+    TextPart,
     Tool,
     ToolCallTurn,
     ToolResult,
@@ -67,6 +70,9 @@ CALL = ToolCall(id="call_1", name="f", arguments="{}")
 
 TURNS = [Turn.user("Hi"), Turn.assistant("Hello")]
 
+PARTS = (TextPart, ImagePart, DocumentPart)
+"""The parts of a turn, which the input conversion converts."""
+
 PROVIDERS = {Provider.OPENAI: "OpenAI", Provider.ANTHROPIC: "Anthropic"}
 """How the error table names each provider."""
 
@@ -88,7 +94,14 @@ def documented(owner: str) -> set[str]:
 
 @pytest.mark.parametrize(
     "model",
-    [GenerationRequest, GenerationResponse, TokenUsage, ToolCall, CompletedEvent],
+    [
+        GenerationRequest,
+        GenerationResponse,
+        TokenUsage,
+        ToolCall,
+        CompletedEvent,
+        *PARTS,
+    ],
     ids=lambda model: model.__name__,
 )
 def test_every_shared_field_has_a_row(model: type[BaseModel]) -> None:
@@ -98,7 +111,14 @@ def test_every_shared_field_has_a_row(model: type[BaseModel]) -> None:
 STOP_FIELDS = ("incomplete_reason", "raw_incomplete_reason", "refusal")
 
 CONVERSIONS = {
-    "input_conversion": {"GenerationRequest.input"},
+    "input_conversion": {
+        "GenerationRequest.input",
+        *(
+            f"{part.__name__}.{name}"
+            for part in PARTS
+            for name in part.model_fields
+        ),
+    },
     "usage_conversion": {
         "GenerationResponse.usage",
         "CompletedEvent.usage",
@@ -155,6 +175,7 @@ def test_every_documented_field_is_converted_or_taken_as_is() -> None:
             TokenUsage,
             ToolCall,
             CompletedEvent,
+            *PARTS,
         )
         for name in documented(model.__name__)
     }
@@ -292,6 +313,10 @@ SYNC_CASES: dict[str, Callable[[], object]] = {
         incomplete_reason=IncompleteReason.MAX_TOKENS,
         raw={},
     ).to_turn(),
+    "parts-in-assistant-turn": lambda: Turn(
+        role=Role.ASSISTANT, content=[TextPart(text="Hi")]
+    ),
+    "image-without-media-type": lambda: ImagePart(data=b"\x89PNG"),
 }
 """Cases raised without sending anything."""
 
@@ -326,11 +351,17 @@ async def stream_without_completion(recorder: Recorder) -> None:
             pass
 
 
+async def image_of_unknown_format(_: Recorder) -> None:
+    """Load an image whose extension names no format both take."""
+    await ImagePart.load(DOCUMENT)
+
+
 ASYNC_CASES: dict[str, Callable[[Recorder], Awaitable[None]]] = {
+    "image-of-unknown-format": image_of_unknown_format,
     "openai-failed-response": failed_response,
     "stream-without-completion": stream_without_completion,
 }
-"""Cases raised by a request sent to the local server."""
+"""Cases raised by a request sent to the local server, or by a file."""
 
 
 def test_every_case_is_checked() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypeIs
 
@@ -20,6 +21,11 @@ from aiollm.providers.openai.types import (
     RefusalContent,
     Response,
     ResponseUsage,
+)
+from aiollm.types.requests.content import (
+    ContentPart,
+    DocumentPart,
+    ImagePart,
 )
 from aiollm.types.requests.generation import (
     InputItem,
@@ -70,7 +76,12 @@ class InputConversion(
             match item:
                 case Turn():
                     items.append(
-                        {"role": item.role.value, "content": item.content}
+                        {
+                            "role": item.role.value,
+                            "content": item.content
+                            if isinstance(item.content, str)
+                            else [_part(part) for part in item.content],
+                        }
                     )
                 case ToolCallTurn() if _own(item.native):
                     items += [dict(native) for native in item.native.items]
@@ -100,6 +111,65 @@ class InputConversion(
                         }
                     )
         return items
+
+
+DEFAULT_FILENAME: Final = "document.pdf"
+"""The name OpenAI is told for a document given without one."""
+
+
+def _data_url(data: bytes, media_type: str) -> str:
+    """Write bytes as a ``data:`` URL.
+
+    Args:
+        data: The content.
+        media_type: Its MIME type.
+
+    Returns:
+        The URL, the content in base64.
+    """
+    return f"data:{media_type};base64,{base64.b64encode(data).decode()}"
+
+
+def _part(part: ContentPart) -> dict[str, Any]:
+    """Convert a part of a turn into an item of a message's content.
+
+    Text becomes ``input_text``; an image ``input_image`` with its
+    ``data:`` URL or URL and ``detail: "auto"``, OpenAI's default, which
+    the schema requires; a document ``input_file`` with ``file_data``
+    (a ``data:`` URL) and ``filename``, or ``file_url``.
+
+    Args:
+        part: The part.
+
+    Returns:
+        The content item.
+    """
+    match part:
+        case ImagePart(data=bytes() as data, media_type=str() as kind):
+            return {
+                "type": "input_image",
+                "image_url": _data_url(data, kind),
+                "detail": "auto",
+            }
+        case ImagePart():
+            return {
+                "type": "input_image",
+                "image_url": part.url,
+                "detail": "auto",
+            }
+        case DocumentPart(data=bytes() as data):
+            filename = part.filename
+            return {
+                "type": "input_file",
+                "file_data": _data_url(data, part.media_type),
+                "filename": DEFAULT_FILENAME
+                if filename is MISSING
+                else filename,
+            }
+        case DocumentPart():
+            return {"type": "input_file", "file_url": part.url}
+        case _:
+            return {"type": "input_text", "text": part.text}
 
 
 class UsageConversion(BaseConversion[ResponseUsage, TokenUsage]):

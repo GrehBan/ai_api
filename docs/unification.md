@@ -17,7 +17,7 @@ Two rules decide what is shared:
 | Shared field | OpenAI | Anthropic | Lost, or when it raises |
 | --- | --- | --- | --- |
 | `GenerationRequest.model` | `model` | `model` | Sent as given; the provider rejects an unknown model with an `APIStatusError`. |
-| `GenerationRequest.input` | `input`: a text as is; a list of turns as `EasyInputMessage` items (`role`, `content`) | `messages`: a text as one `user` turn; a list of turns as they are | A list must not be empty and must end with a `user` turn: Anthropic rejects an assistant prefill on current models, and OpenAI gives a last assistant turn another meaning. Images and files are not shared. |
+| `GenerationRequest.input` | `input`: a text as is; a list of turns as `EasyInputMessage` items (`role`, `content`) | `messages`: a text as one `user` turn; a list of turns as they are | A list must not be empty and must end with a `user` turn: Anthropic rejects an assistant prefill on current models, and OpenAI gives a last assistant turn another meaning. A `user` turn may hold images and PDF documents, see [Content parts](#content-parts). |
 | `GenerationRequest.instructions` | `instructions` | `system` | System and developer turns are not shared: instructions go here. Not sent when not given. |
 | `GenerationRequest.max_output_tokens` | `max_output_tokens`, at least 16, reasoning included; without it, the model's limit | `max_tokens`, thinking included; required, so without it the adapter's `default_max_tokens` (16000, room for thinking) | Must be positive. Below 16 raises for OpenAI. Not sent to OpenAI when not given. |
 | `GenerationRequest.end_user_id` | `safety_identifier`, up to 128 characters | `metadata.user_id`, up to 512 characters | An opaque id (a hash), never personal data; both providers use it to detect abuse. A longer value raises before sending. Not sent when not given. OpenAI's `metadata`, which has no Anthropic counterpart, is a provider option. |
@@ -52,9 +52,27 @@ Two rules decide what is shared:
 
 | Item | OpenAI | Anthropic | Lost, or when it raises |
 | --- | --- | --- | --- |
-| `Turn` | An `EasyInputMessage` (`role`, `content`) | A message (`role`, `content`); a `user` turn right after results joins their message, after them | A dict without `type` is a `Turn`, as before the other items. |
+| `Turn` | An `EasyInputMessage` (`role`, `content`): a text as is, parts as a list of content items | A message (`role`, `content`): a text as is, parts as a list of content blocks; a `user` turn right after results joins their message, after them | A dict without `type` is a `Turn`, as before the other items. Only a `user` turn takes parts. |
 | `ToolCallTurn` | Its `native` items, when they are OpenAI's (reasoning items with them); else an `assistant` message with its `text` and a `function_call` per call | An `assistant` message: its `native` blocks, when they are Anthropic's (thinking with its `signature`); else a `text` block and a `tool_use` block per call | Another provider's `native` is not sent: it cannot read it, so the shared calls go, and the reasoning behind them is lost. For Anthropic, arguments that are not a JSON object raise `RequestValidationError`. With `store: false`, OpenAI's reasoning items carry their content only if the call asked for `include: ["reasoning.encrypted_content"]`. |
 | `ToolResult` | A `function_call_output` (`call_id`, `output`) | A `tool_result` block (`tool_use_id`, `content`) in one `user` message with the other results | Text only; images and files in results are not shared. Anthropic's `is_error` is not shared: OpenAI has no such flag, so describe a failure in `output`. |
+
+## Content parts
+
+`Turn.content` is a text or a list of parts, at least one, and only a `user` turn takes parts. An image or a document is its bytes (sent inline, in base64) or a URL the provider downloads it from, exactly one of them; `ImagePart.load(path)` and `DocumentPart.load(path)` read a file in a worker thread. Each provider limits the size of a request, of an image and of a document, and answers 400, an `APIStatusError`, past them; the parts are not checked against those limits.
+
+| Shared field | OpenAI | Anthropic | Lost, or when it raises |
+| --- | --- | --- | --- |
+| `TextPart.type` | `input_text` | `text` | — |
+| `TextPart.text` | `text` | `text` | — |
+| `ImagePart.type` | `input_image`, with `detail: "auto"`, OpenAI's default, which its schema requires | `image` | OpenAI's `detail` and both providers' file ids are not shared. |
+| `ImagePart.data` | `image_url`: a `data:` URL, the bytes in base64 | `source`: `base64` with `media_type` and `data` | Not empty. |
+| `ImagePart.url` | `image_url` | `source`: `url` | An `http` or `https` URL. |
+| `ImagePart.media_type` | In the `data:` URL | `source.media_type` | JPEG, PNG, GIF or WebP, the formats both take; required with `data`, refused with `url`. |
+| `DocumentPart.type` | `input_file` | `document` | PDF only: Anthropic's text documents and OpenAI's other file types are not shared. |
+| `DocumentPart.data` | `file_data`: a `data:` URL, the bytes in base64 | `source`: `base64` with `media_type` and `data` | Not empty. |
+| `DocumentPart.url` | `file_url` | `source`: `url` | An `http` or `https` URL. |
+| `DocumentPart.media_type` | In the `data:` URL | `source.media_type` | Always `application/pdf`. |
+| `DocumentPart.filename` | `filename`; `document.pdf` when not given, since OpenAI wants one with `file_data` | Not sent | Only with `data`. |
 
 ## Tool calls
 
@@ -138,6 +156,9 @@ Every case below is raised before the request is sent (requests) or before the s
 | `anthropic-arguments-not-an-object` | Anthropic | `input` | `RequestValidationError` |
 | `turn-from-response-without-text` | any | — | `ValueError` |
 | `turn-from-response-cut-mid-call` | any | — | `ValueError` |
+| `parts-in-assistant-turn` | any | `input` | `ValidationError` |
+| `image-without-media-type` | any | `input` | `ValidationError` |
+| `image-of-unknown-format` | any | `input` | `ValueError` |
 
 ## Provider options
 
@@ -153,7 +174,7 @@ Not shared, but reachable through `client.generation`: `create(..., provider_opt
 These are reached only through the provider's own methods and types, or, where listed under [Provider options](#provider-options), through `provider_options`:
 
 - sampling parameters (`temperature`, `top_p`, `top_k`): Anthropic API version `2026-10-21` removed them; OpenAI's are provider options;
-- system or developer turns inside `input` (use `instructions`), images, audio and files;
+- system or developer turns inside `input` (use `instructions`), audio, files other than PDF documents, images and files in `assistant` turns, files uploaded to a provider (OpenAI's `file_id`, Anthropic's Files API) and OpenAI's `detail`;
 - OpenAI's built-in tools (web search, file search, code interpreter, MCP, ...), Anthropic's server tools, OpenAI's `allowed_tools`, and tool results with images or files;
 - reasoning and thinking settings and their content, beyond `effort` and the summaries;
 - continuing a stored response (`previous_response_id`, `store`) and stop sequences, which are provider options;

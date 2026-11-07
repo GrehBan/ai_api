@@ -47,10 +47,13 @@ from aiollm.session.factory import SessionFactory
 from aiollm.session.protocols import ISession
 from aiollm.session.retry import RetryPolicy
 from aiollm.types.requests import (
+    DocumentPart,
     ForcedTool,
     GenerationRequest,
+    ImagePart,
     JSONSchema,
     NativeOutput,
+    TextPart,
     Tool,
     ToolCall,
     ToolCallTurn,
@@ -226,6 +229,19 @@ TOOLS = [
 """A strict tool with a description, and a bare one."""
 
 
+PNG = b"\x89PNG\r\n"
+PDF = b"%PDF-1.7"
+PARTS = [
+    TextPart(text="What is in these?"),
+    ImagePart(data=PNG, media_type="image/png"),
+    ImagePart(url="https://example.com/cat.jpg"),
+    DocumentPart(data=PDF, filename="report.pdf"),
+    DocumentPart(data=PDF),
+    DocumentPart(url="https://example.com/report.pdf"),
+]
+"""A user turn of every kind of part and source."""
+
+
 class Client:
     """What the scenarios need of a provider client."""
 
@@ -280,6 +296,7 @@ class Case:
             ``called`` comes back with its results.
         continued_shared: The same from the shared calls only.
         continued_streamed: The same when ``called_stream`` comes back.
+        parts: What a user turn of ``PARTS`` becomes.
     """
 
     provider: Provider
@@ -314,6 +331,7 @@ class Case:
     continued: list[Any]
     continued_shared: list[Any]
     continued_streamed: list[Any]
+    parts: dict[str, Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -469,6 +487,36 @@ OPENAI = Case(
             for call_id, name, _ in CALLS
         ),
     ],
+    parts={
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "What is in these?"},
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,iVBORw0K",
+                "detail": "auto",
+            },
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/cat.jpg",
+                "detail": "auto",
+            },
+            {
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjc=",
+                "filename": "report.pdf",
+            },
+            {
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjc=",
+                "filename": "document.pdf",
+            },
+            {
+                "type": "input_file",
+                "file_url": "https://example.com/report.pdf",
+            },
+        ],
+    },
 )
 
 ANTHROPIC = Case(
@@ -614,6 +662,45 @@ ANTHROPIC = Case(
             ],
         },
     ],
+    parts={
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in these?"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "iVBORw0K",
+                },
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/cat.jpg",
+                },
+            },
+            *[
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjc=",
+                    },
+                }
+            ]
+            * 2,
+            {
+                "type": "document",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/report.pdf",
+                },
+            },
+        ],
+    },
 )
 
 
@@ -893,6 +980,57 @@ async def test_a_stream_can_fail_after_its_calls_are_done(
     done = [e.call for e in received if isinstance(e, ToolCallDoneEvent)]
     assert [call.id for call in done] == [call_id for call_id, _, _ in CALLS]
     assert not any(isinstance(e, CompletedEvent) for e in received)
+
+
+@pytest.mark.parametrize("mode", ["create", "stream"])
+async def test_a_turn_of_parts_sends_text_images_and_documents(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+    mode: str,
+) -> None:
+    if mode == "create":
+        recorder.reply(Reply(json=case.response))
+    else:
+        recorder.reply(events(case.stream))
+    request = REQUEST.model_copy(update={"input": [Turn.user(PARTS)]})
+
+    async with client:
+        if mode == "create":
+            await client.generation.create(request)
+        else:
+            async with client.generation.stream(request) as stream:
+                await stream.final()
+
+    assert json.loads(recorder.last.body)[case.input_field] == [case.parts]
+
+
+async def test_parts_after_tool_results_go_with_them(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    # Anthropic puts a user turn after results into their message; OpenAI
+    # keeps it a message of its own.
+    recorder.reply(Reply(json=case.response))
+    call = ToolCall(id="call_1", name="get_time", arguments="{}")
+    request = REQUEST.model_copy(
+        update={
+            "tools": TOOLS,
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="call_1", output="noon"),
+                Turn.user(PARTS[:2]),
+            ],
+        }
+    )
+
+    async with client:
+        await client.generation.create(request)
+
+    last = json.loads(recorder.last.body)[case.input_field][-1]
+    assert last["content"][-2:] == case.parts["content"][:2]
 
 
 async def test_a_streamed_tool_loop_continues_with_the_results(

@@ -8,7 +8,7 @@
 An async-first toolkit for building typed HTTP API clients, aimed at AI providers.
 
 <!-- --8<-- [start:intro] -->
-You describe each API call as a small declarative class: a Pydantic model whose generic argument is its result type. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming, and ships clients for OpenAI and Anthropic with one shared generation API, tool calls included.
+You describe each API call as a small declarative class: a Pydantic model whose generic argument is its result type. The library sends it over `aiohttp` and returns a validated, statically typed result. It also handles retries, errors, file uploads and streaming, and ships clients for OpenAI and Anthropic with one shared generation API, images, documents and tool calls included.
 
 > **Status: pre-alpha (0.10.0).** The core abstractions are in place, but the public API may still change: before 1.0 a breaking change bumps the minor version (0.9 is followed by 0.10, not 1.0; 1.0 comes when the API is declared stable), see [Versioning](https://grehban.github.io/aiollm/guide/design/#versioning).
 
@@ -20,7 +20,7 @@ You describe each API call as a small declarative class: a Pydantic model whose 
 - **File uploads.** From bytes, a path, an open binary stream or an async iterator; a retry resends the whole file.
 - **Opt-in retries.** Transient failures are retried with exponential backoff and jitter, honouring `Retry-After` up to a cap; a `RetryPolicy` tunes them per session or per call.
 - **Structured errors.** One exception class per common HTTP status, plus transport and response errors, each with the provider's code, the request id and a `transient` flag.
-- **Provider clients.** `OpenAIClient` (Responses API) and `AnthropicClient` (Messages API), with types generated from the providers' schemas and the provider-neutral `client.generation`: text, structured output, reasoning summaries and function tools, buffered or streamed.
+- **Provider clients.** `OpenAIClient` (Responses API) and `AnthropicClient` (Messages API), with types generated from the providers' schemas and the provider-neutral `client.generation`: text with images and PDF documents, structured output, reasoning summaries and function tools, buffered or streamed.
 - **Replaceable parts.** Sessions depend on protocols, so the API, authentication, error mapping, headers and JSON codec can each be swapped.
 - **Safe defaults.** Path parameters are escaped, redirects are off, proxies from the environment are ignored, and tokens stay out of `repr`.
 
