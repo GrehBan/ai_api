@@ -681,17 +681,23 @@ ANTHROPIC = Case(
                     "url": "https://example.com/cat.jpg",
                 },
             },
-            *[
-                {
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": "JVBERi0xLjc=",
-                    },
-                }
-            ]
-            * 2,
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "JVBERi0xLjc=",
+                },
+                "title": "report.pdf",
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "JVBERi0xLjc=",
+                },
+            },
             {
                 "type": "document",
                 "source": {
@@ -1029,8 +1035,23 @@ async def test_parts_after_tool_results_go_with_them(
     async with client:
         await client.generation.create(request)
 
-    last = json.loads(recorder.last.body)[case.input_field][-1]
+    *_, results, last = json.loads(recorder.last.body)[case.input_field]
     assert last["content"][-2:] == case.parts["content"][:2]
+    if case.provider is Provider.ANTHROPIC:
+        # One user message: the result first, then the parts.
+        assert last["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "call_1",
+            "content": "noon",
+        }
+        assert len(last["content"]) == 3
+    else:
+        assert results == {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "noon",
+        }
+        assert last["role"] == "user"
 
 
 async def test_a_streamed_tool_loop_continues_with_the_results(

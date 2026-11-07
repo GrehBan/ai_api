@@ -28,9 +28,19 @@ PNG = b"\x89PNG\r\n"
             "media_type goes with data",
         ),
         ({"url": "file:///etc/passwd"}, "should match pattern"),
+        ({"url": "https:///cat.png"}, "should match pattern"),
         ({"data": PNG, "media_type": "image/bmp"}, "image/jpeg"),
     ],
-    ids=["none", "both", "empty", "no-type", "url-type", "scheme", "bmp"],
+    ids=[
+        "none",
+        "both",
+        "empty",
+        "no-type",
+        "url-type",
+        "scheme",
+        "no-host",
+        "bmp",
+    ],
 )
 def test_an_image_has_one_source(fields: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):

@@ -150,7 +150,8 @@ def _block(part: ContentPart) -> dict[str, Any]:
 
     Text becomes a ``text`` block, an image an ``image`` block and a
     document a ``document`` block, with a ``base64`` source for bytes
-    and a ``url`` source for a URL.
+    and a ``url`` source for a URL, and a document's ``filename`` as its
+    ``title``.
 
     Args:
         part: The part.
@@ -168,7 +169,10 @@ def _block(part: ContentPart) -> dict[str, Any]:
                 }
             else:
                 source = {"type": "url", "url": part.url}
-            return {"type": part.type, "source": source}
+            block: dict[str, Any] = {"type": part.type, "source": source}
+            if isinstance(part, DocumentPart) and part.filename is not MISSING:
+                block["title"] = part.filename
+            return block
         case _:
             return {"type": "text", "text": part.text}
 

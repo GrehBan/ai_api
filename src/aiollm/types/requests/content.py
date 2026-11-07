@@ -30,8 +30,8 @@ IMAGE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
 )
 """The values of ``ImageMediaType``."""
 
-URL_PATTERN: Final = r"^https?://\S+$"
-"""An ``http`` or ``https`` URL."""
+URL_PATTERN: Final = r"^https?://[^/?#\s]+\S*$"
+"""An ``http`` or ``https`` URL with a host."""
 
 _CONFIG: Final = ConfigDict(
     extra="forbid",
@@ -175,7 +175,8 @@ class DocumentPart(_SourcePart):
         data: The document, sent inline (base64).
         url: Where the provider downloads it from.
         media_type: Always ``"application/pdf"``.
-        filename: The file name OpenAI is told; only with ``data``.
+        filename: The document's name, OpenAI's ``filename`` and
+            Anthropic's ``title``; only with ``data``.
 
     Example:
         >>> DocumentPart(data=pdf, filename="report.pdf")

@@ -72,7 +72,7 @@ Two rules decide what is shared:
 | `DocumentPart.data` | `file_data`: a `data:` URL, the bytes in base64 | `source`: `base64` with `media_type` and `data` | Not empty. |
 | `DocumentPart.url` | `file_url` | `source`: `url` | An `http` or `https` URL. |
 | `DocumentPart.media_type` | In the `data:` URL | `source.media_type` | Always `application/pdf`. |
-| `DocumentPart.filename` | `filename`; `document.pdf` when not given, since OpenAI wants one with `file_data` | Not sent | Only with `data`. |
+| `DocumentPart.filename` | `filename`; `document.pdf` when not given, since OpenAI wants one with `file_data` | `title` | The document's name, which both show the model. Only with `data`. |
 
 ## Tool calls
 
