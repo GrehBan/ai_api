@@ -3,52 +3,71 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import MISSING
 
 from aiollm.adapters.base import BaseCompositeAdapter
 from aiollm.adapters.validation import (
-    check_last_turn,
+    check_conversation,
     checked_options,
     merge_options,
     request_errors,
 )
+from aiollm.enums import ToolChoice
+from aiollm.http.exceptions.response import APIResponseError
 from aiollm.providers.openai.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
     USAGE_CONVERSION,
     check_status,
+    native_output,
+    output_text,
+    reasoning_summary,
+    tool_calls,
 )
 from aiollm.providers.openai.api import PROVIDER
 from aiollm.providers.openai.methods.responses import (
     CreateResponse,
     StreamResponse,
 )
-from aiollm.providers.openai.types.events import (
-    OutputTextDeltaEvent,
-    ReasoningSummaryTextDeltaEvent,
-    ResponseStateEvent,
+from aiollm.providers.openai.types import (
+    FunctionToolCall,
+    Response,
+    ResponseCompletedEvent,
+    ResponseFunctionCallArgumentsDeltaEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseReasoningSummaryTextDeltaEvent,
     ResponseStreamEvent,
+    ResponseTextDeltaEvent,
 )
 from aiollm.providers.openai.types.options import OpenAIGenerationOptions
-from aiollm.providers.openai.types.responses import Response
-from aiollm.types.requests.generation import GenerationRequest
+from aiollm.types.requests.generation import (
+    ForcedTool,
+    GenerationRequest,
+    InputItem,
+    Tool,
+    ToolCall,
+)
 from aiollm.types.responses.events import (
     CompletedEvent,
     GenerationEvent,
     OtherEvent,
     ReasoningDeltaEvent,
     TextDeltaEvent,
+    ToolCallDeltaEvent,
+    ToolCallDoneEvent,
+    ToolCallStartEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
     from aiollm.adapters.protocols import IConversion
     from aiollm.adapters.stop import Stop
-    from aiollm.providers.openai.types.responses import ResponseUsage
-    from aiollm.types.requests.generation import Turn
+    from aiollm.providers.openai.types import ResponseUsage
     from aiollm.types.responses.generation import TokenUsage
 
 
@@ -102,7 +121,7 @@ class OpenAIGenerationAdapter(
         self,
         *,
         input_conversion: IConversion[
-            str | list[Turn], str | list[dict[str, Any]]
+            str | Sequence[InputItem], str | list[dict[str, Any]]
         ] = INPUT_CONVERSION,
         usage_conversion: IConversion[
             ResponseUsage, TokenUsage
@@ -187,12 +206,14 @@ class OpenAIGenerationAdapter(
             id=raw.id,
             provider=self.provider,
             model=raw.model,
-            text=raw.output_text,
+            text=output_text(raw),
             usage=self._usage(raw.usage),
             incomplete_reason=stop.incomplete_reason,
             raw_incomplete_reason=stop.raw_incomplete_reason,
             refusal=stop.refusal,
-            reasoning=raw.reasoning_summary,
+            reasoning=reasoning_summary(raw),
+            tool_calls=tool_calls(raw),
+            native=native_output(raw),
             raw=raw,
         )
 
@@ -226,50 +247,87 @@ class OpenAIGenerationAdapter(
         Yields:
             One shared event per OpenAI event. The stream's end is
             checked by ``StreamResponse`` and by the use case.
+
+        Raises:
+            APIResponseError: Arguments came for an item that no
+                ``response.output_item.added`` opened as a function call.
         """
+        calls: dict[str, str] = {}
         async for item in items:
-            yield self._to_event(item)
+            yield self._to_event(item, calls)
 
     def _to_event(
         self,
         event: ResponseStreamEvent,
+        calls: dict[str, str],
     ) -> GenerationEvent[ResponseStreamEvent]:
         """Convert one event of a Responses stream.
 
         Args:
             event: The event OpenAI sent.
+            calls: The ``call_id`` of each function call item opened so
+                far, by the item's ``id``; the deltas name the item.
 
         Returns:
-            A text or reasoning summary delta, the completion (also of
-            an incomplete response), or ``OtherEvent`` for every other
+            A text or reasoning summary delta, the start, a piece or the
+            end of a function call, the completion (also of an
+            incomplete response), or ``OtherEvent`` for every other
             event.
             ``response.failed`` never gets here: ``StreamResponse``
             raises it as an ``APIStatusError``.
+
+        Raises:
+            APIResponseError: A delta names an item that is no open
+                function call.
         """
         match event:
-            case OutputTextDeltaEvent():
+            case ResponseOutputItemAddedEvent(item=FunctionToolCall() as call):
+                calls[call.id or call.call_id] = call.call_id
+                return ToolCallStartEvent[ResponseStreamEvent](
+                    call_id=call.call_id, name=call.name, raw=event
+                )
+            case ResponseFunctionCallArgumentsDeltaEvent():
+                if event.item_id not in calls:
+                    message = (
+                        "OpenAI stream sent arguments for item "
+                        f"{event.item_id} without its function_call"
+                    )
+                    raise APIResponseError(message)
+                return ToolCallDeltaEvent[ResponseStreamEvent](
+                    call_id=calls[event.item_id],
+                    arguments=event.delta,
+                    raw=event,
+                )
+            case ResponseOutputItemDoneEvent(item=FunctionToolCall() as call):
+                done = ToolCall(
+                    id=call.call_id, name=call.name, arguments=call.arguments
+                )
+                return ToolCallDoneEvent[ResponseStreamEvent](
+                    call=done, raw=event
+                )
+            case ResponseTextDeltaEvent():
                 return TextDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
                 )
-            case ReasoningSummaryTextDeltaEvent():
+            case ResponseReasoningSummaryTextDeltaEvent():
                 return ReasoningDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
                 )
-            case ResponseStateEvent(
-                type="response.completed" | "response.incomplete"
-            ):
+            case ResponseCompletedEvent() | ResponseIncompleteEvent():
                 response = event.response
                 stop = self.stop_conversion(response)
                 return CompletedEvent[ResponseStreamEvent](
                     id=response.id,
                     provider=self.provider,
                     model=response.model,
-                    text=response.output_text,
+                    text=output_text(response),
                     usage=self._usage(response.usage),
                     incomplete_reason=stop.incomplete_reason,
                     raw_incomplete_reason=stop.raw_incomplete_reason,
                     refusal=stop.refusal,
-                    reasoning=response.reasoning_summary,
+                    reasoning=reasoning_summary(response),
+                    tool_calls=tool_calls(response),
+                    native=native_output(response),
                     raw=event,
                 )
             case _:
@@ -300,7 +358,7 @@ class OpenAIGenerationAdapter(
             RequestValidationError: The conversation does not end with a
                 ``user`` turn.
         """
-        check_last_turn(request, self.provider)
+        check_conversation(request, self.provider)
         fields = {
             "model": request.model,
             "input": self.input_conversion(request.input),
@@ -324,5 +382,61 @@ class OpenAIGenerationAdapter(
                     }
                 }
             ),
+            "tools": (
+                MISSING
+                if request.tools is MISSING
+                else [_tool(tool) for tool in request.tools]
+            ),
+            "tool_choice": _tool_choice(request.tool_choice),
+            "parallel_tool_calls": request.parallel_tool_calls,
         }
         return merge_options(fields, self.provider_options, self.provider)
+
+
+TOOL_CHOICES: Final[Mapping[ToolChoice, str]] = {
+    ToolChoice.AUTO: "auto",
+    ToolChoice.NONE: "none",
+    ToolChoice.REQUIRED: "required",
+}
+"""OpenAI's ``tool_choice`` of each shared mode."""
+
+
+def _tool(tool: Tool) -> dict[str, Any]:
+    """Build OpenAI's function tool from a shared tool.
+
+    Args:
+        tool: The shared tool.
+
+    Returns:
+        A ``function`` tool. Its ``strict`` is required, so a tool that
+        leaves it out sends ``null``, which OpenAI takes as not strict
+        (seen in a live check, 2026-11-06), as Anthropic's default.
+    """
+    function: dict[str, Any] = {
+        "type": "function",
+        "name": tool.name,
+        "parameters": tool.parameters,
+        "strict": None if tool.strict is MISSING else tool.strict,
+    }
+    if tool.description is not MISSING:
+        function["description"] = tool.description
+    return function
+
+
+def _tool_choice(
+    choice: ToolChoice | ForcedTool | MISSING,
+) -> str | dict[str, Any] | MISSING:
+    """Build OpenAI's ``tool_choice``.
+
+    Args:
+        choice: The shared choice, if given.
+
+    Returns:
+        The mode, ``{"type": "function", "name": ...}`` for a forced
+        tool, or ``MISSING`` when no choice is given.
+    """
+    if choice is MISSING:
+        return MISSING
+    if isinstance(choice, ForcedTool):
+        return {"type": "function", "name": choice.name}
+    return TOOL_CHOICES[choice]

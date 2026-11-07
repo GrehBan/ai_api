@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Local secrets (API keys for live runs)
+.env
+
 # Test and type-check outputs
 .coverage
 coverage.xml

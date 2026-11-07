@@ -2,32 +2,44 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Any, Final
 
-from pydantic import BaseModel
+from pydantic import MISSING, BaseModel
 
 from aiollm.adapters.base import BaseConversion
 from aiollm.adapters.stop import Stop
 from aiollm.enums import IncompleteReason, Role
 from aiollm.http.exceptions.response import APIResponseError
-from aiollm.providers.anthropic.methods.base import MessageParam
-from aiollm.providers.anthropic.types.events import (
-    MessageDelta,
-    MessageDeltaEvent,
-    MessageStartEvent,
+from aiollm.providers.anthropic.api import PROVIDER
+from aiollm.providers.anthropic.types import (
+    Delta,
+    Message,
+    RawMessageDeltaEvent,
+    RawMessageStartEvent,
+    TextBlock,
+    ThinkingBlock,
+    ToolUseBlock,
+    Usage,
 )
-from aiollm.providers.anthropic.types.messages import Message, Usage
-from aiollm.types.requests.generation import Turn
-from aiollm.types.responses.generation import TokenUsage
+from aiollm.types.requests.generation import (
+    InputItem,
+    NativeOutput,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
+from aiollm.types.responses.generation import TokenUsage, ToolCall
 
-FINISHED: Final = frozenset({"end_turn", "stop_sequence"})
+FINISHED: Final = frozenset({"end_turn", "stop_sequence", "tool_use"})
 """Stop reasons of a generation that reached its end.
 
-Any other reason (``max_tokens``, ``refusal``,
-``model_context_window_exceeded``, ``pause_turn``, ``tool_use``, a
-reason Anthropic adds later) stopped it early.
+``tool_use`` is one: the model waits for the tool results, as an
+OpenAI response with function calls is ``completed``. Any other reason
+(``max_tokens``, ``refusal``, ``model_context_window_exceeded``,
+``pause_turn``, a reason Anthropic adds later) stopped it early.
 """
 
 INCOMPLETE_REASONS: Final[Mapping[str, IncompleteReason]] = {
@@ -44,28 +56,94 @@ REFUSAL: Final = "refusal"
 
 
 class InputConversion(
-    BaseConversion[str | list[Turn], list[MessageParam]],
+    BaseConversion[str | Sequence[InputItem], list[dict[str, Any]]],
 ):
     """Converts the shared ``input`` into ``messages``.
 
-    A text becomes one ``user`` turn; a list of turns is sent as it is.
+    A text becomes one ``user`` turn, and so does a text turn of a list.
+    A turn of calls becomes an ``assistant`` message: its Anthropic
+    content blocks when it has them (``native``, thinking with it), else
+    a ``text`` block and a ``tool_use`` block per call. The tool results
+    after it become one ``user`` message of ``tool_result`` blocks, and a
+    ``user`` turn right after them joins that message, after the results,
+    as Anthropic requires. The adapter checks first that the arguments
+    of the calls are JSON objects.
     """
 
-    def __call__(self, source: str | list[Turn], /) -> list[MessageParam]:
+    def __call__(
+        self, source: str | Sequence[InputItem], /
+    ) -> list[dict[str, Any]]:
         """Convert the input.
 
         Args:
-            source: The text or the turns of the shared request.
+            source: The text or the conversation of the shared request.
 
         Returns:
-            One message per turn.
+            The messages.
         """
         if isinstance(source, str):
             return [{"role": Role.USER.value, "content": source}]
-        return [
-            {"role": turn.role.value, "content": turn.content}
-            for turn in source
-        ]
+        messages: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] | None = None
+        for item in source:
+            match item:
+                case ToolResult():
+                    block = {
+                        "type": "tool_result",
+                        "tool_use_id": item.call_id,
+                        "content": item.output,
+                    }
+                    if results is None:
+                        results = [block]
+                        messages.append(
+                            {"role": Role.USER.value, "content": results}
+                        )
+                    else:
+                        results.append(block)
+                    continue
+                case Turn(role=Role.USER) if results is not None:
+                    results.append({"type": "text", "text": item.content})
+                case Turn():
+                    messages.append(
+                        {"role": item.role.value, "content": item.content}
+                    )
+                case _:
+                    messages.append(
+                        {
+                            "role": Role.ASSISTANT.value,
+                            "content": _assistant_blocks(item),
+                        }
+                    )
+            results = None
+        return messages
+
+
+def _assistant_blocks(turn: ToolCallTurn) -> list[dict[str, Any]]:
+    """Build the content of a turn of calls.
+
+    Args:
+        turn: The turn.
+
+    Returns:
+        Its Anthropic content blocks when it has them, else a ``text``
+        block and a ``tool_use`` block per call, the arguments parsed.
+    """
+    native = turn.native
+    if native is not MISSING and native.provider is PROVIDER:
+        return [dict(block) for block in native.items]
+    blocks: list[dict[str, Any]] = []
+    if turn.text is not MISSING:
+        blocks.append({"type": "text", "text": turn.text})
+    blocks += [
+        {
+            "type": "tool_use",
+            "id": call.id,
+            "name": call.name,
+            "input": call.parse_arguments(),
+        }
+        for call in turn.tool_calls
+    ]
+    return blocks
 
 
 class UsageConversion(BaseConversion[Usage, TokenUsage]):
@@ -103,15 +181,15 @@ class UsageConversion(BaseConversion[Usage, TokenUsage]):
         )
 
 
-class StopConversion(BaseConversion[Message | MessageDelta, Stop]):
+class StopConversion(BaseConversion[Message | Delta, Stop]):
     """Tells how a message stopped.
 
-    It takes a ``Message``, or for a stream the ``MessageDelta`` that
+    It takes a ``Message``, or for a stream the ``Delta`` that
     ``StreamState`` collects: both carry ``stop_reason`` and
     ``stop_details``.
     """
 
-    def __call__(self, source: Message | MessageDelta, /) -> Stop:
+    def __call__(self, source: Message | Delta, /) -> Stop:
         """Convert the stop of a finished message.
 
         Args:
@@ -143,6 +221,87 @@ class StopConversion(BaseConversion[Message | MessageDelta, Stop]):
         )
 
 
+def message_text(message: Message) -> str | None:
+    """Join the text of a message.
+
+    Args:
+        message: A message.
+
+    Returns:
+        The text of all ``text`` blocks, or ``None`` if there are none.
+    """
+    texts = [
+        block.text for block in message.content if isinstance(block, TextBlock)
+    ]
+    return "".join(texts) if texts else None
+
+
+def tool_call(block: ToolUseBlock) -> ToolCall:
+    """Turn a ``tool_use`` block into a shared call.
+
+    Args:
+        block: The block.
+
+    Returns:
+        The call, its ``input`` written as JSON text.
+    """
+    arguments = json.dumps(block.input, ensure_ascii=False)
+    return ToolCall(id=block.id, name=block.name, arguments=arguments)
+
+
+def message_tool_calls(message: Message) -> list[ToolCall]:
+    """Collect the tool calls of a message.
+
+    Args:
+        message: A message.
+
+    Returns:
+        A shared call per ``tool_use`` block, in content order; empty
+        without calls.
+    """
+    return [
+        tool_call(block)
+        for block in message.content
+        if isinstance(block, ToolUseBlock)
+    ]
+
+
+def message_native(message: Message) -> NativeOutput | None:
+    """Keep a message's content as Anthropic's next request takes it.
+
+    Args:
+        message: A message.
+
+    Returns:
+        Its content blocks with only the fields Anthropic sent (thinking
+        with its ``signature``, text, ``tool_use``), which an
+        ``assistant`` message takes back; ``None`` without content.
+    """
+    blocks = [
+        block.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        for block in message.content
+    ]
+    return NativeOutput(provider=PROVIDER, items=blocks) if blocks else None
+
+
+def message_thinking(message: Message) -> str | None:
+    """Join the thinking of a message.
+
+    Args:
+        message: A message.
+
+    Returns:
+        The text of all ``thinking`` blocks, or ``None`` if there are
+        none or all are empty (thinking whose display is ``omitted``).
+    """
+    thinking = "".join(
+        block.thinking
+        for block in message.content
+        if isinstance(block, ThinkingBlock)
+    )
+    return thinking or None
+
+
 INPUT_CONVERSION: Final = InputConversion()
 """The default conversion of the shared ``input``."""
 
@@ -160,20 +319,37 @@ class StreamState:
     ``message_start`` carries the message's ``Usage``, and every
     ``message_delta`` the stop reason and the cumulative counts, so the
     counts are replaced, never added up. At the end the state gives a
-    real ``Usage`` and ``MessageDelta``, so a stream goes through the
+    real ``Usage`` and ``Delta``, so a stream goes through the
     same conversions as a message, and the message's id, model and
-    whole text.
+    whole text. It also keeps every content block, from its
+    ``content_block_start`` and its deltas, to give the message's
+    content back as ``native`` (thinking with its ``signature`` among
+    it) and each tool call once its block stops.
 
     Attributes:
         delta: The stop reason and details sent so far.
     """
 
-    delta: MessageDelta = field(default_factory=MessageDelta)
+    delta: Delta = field(default_factory=Delta)
     _message: Message | None = field(default=None, init=False, repr=False)
     _texts: list[str] = field(default_factory=list, init=False, repr=False)
     _thinking: list[str] = field(default_factory=list, init=False, repr=False)
+    _calls: dict[int, ToolUseBlock] = field(
+        default_factory=dict[int, ToolUseBlock], init=False, repr=False
+    )
+    _arguments: dict[int, list[str]] = field(
+        default_factory=dict[int, list[str]], init=False, repr=False
+    )
+    _blocks: dict[int, dict[str, Any]] = field(
+        default_factory=dict[int, dict[str, Any]], init=False, repr=False
+    )
+    _pieces: dict[int, dict[str, list[str]]] = field(
+        default_factory=dict[int, dict[str, list[str]]],
+        init=False,
+        repr=False,
+    )
 
-    def start(self, event: MessageStartEvent) -> None:
+    def start(self, event: RawMessageStartEvent) -> None:
         """Take the message and the counts of ``message_start``.
 
         Args:
@@ -188,6 +364,129 @@ class StreamState:
             text: The new text of a ``text_delta``.
         """
         self._texts.append(text)
+
+    def start_block(self, index: int, block: BaseModel) -> None:
+        """Keep a block that a ``content_block_start`` opened.
+
+        Args:
+            index: The block's index in the message.
+            block: The block as it starts: a ``tool_use`` with an empty
+                ``input``, text and thinking without their deltas yet.
+        """
+        self._blocks[index] = block.model_dump(
+            mode="json", by_alias=True, exclude_unset=True
+        )
+        self._pieces[index] = {}
+        if isinstance(block, ToolUseBlock):
+            self._calls[index] = block
+            self._arguments[index] = []
+
+    def add_piece(self, index: int, key: str, piece: str) -> None:
+        """Keep a piece of a block's text, thinking or signature.
+
+        A block whose ``content_block_start`` did not come (some of the
+        documented streams leave it out) is opened from the piece: a
+        ``text`` block for text, a ``thinking`` block for thinking or a
+        signature, so its content still comes back whole.
+
+        Args:
+            index: The block's index.
+            key: The field the piece belongs to: ``text``, ``thinking``
+                or ``signature``.
+            piece: The piece.
+        """
+        if index not in self._pieces:
+            kind = "text" if key == "text" else "thinking"
+            self._blocks[index] = {"type": kind}
+            self._pieces[index] = {}
+        self._pieces[index].setdefault(key, []).append(piece)
+
+    def call(self, index: int) -> ToolCall | None:
+        """Give the tool call of a block, once its block stops.
+
+        Args:
+            index: The block's index.
+
+        Returns:
+            The call, or ``None`` if the block is no ``tool_use``.
+        """
+        if index not in self._calls:
+            return None
+        return self._call(index)
+
+    def _call(self, index: int) -> ToolCall:
+        """Build the call of a ``tool_use`` block.
+
+        Args:
+            index: The block's index.
+
+        Returns:
+            The call, its arguments the pieces joined, or the block's own
+            ``input`` when no piece came.
+        """
+        block = self._calls[index]
+        pieces = self._arguments[index]
+        if not pieces:
+            return tool_call(block)
+        return ToolCall(
+            id=block.id, name=block.name, arguments="".join(pieces)
+        )
+
+    def native(self) -> NativeOutput | None:
+        """Give the streamed content as Anthropic's next request takes it.
+
+        Returns:
+            Each block as it started, with its text, thinking and
+            signature pieces joined into it and a ``tool_use`` block's
+            ``input`` parsed from its pieces; ``None`` without blocks.
+
+        Raises:
+            APIResponseError: A ``tool_use`` block's pieces do not join
+                into a JSON object.
+        """
+        if not self._blocks:
+            return None
+        blocks: list[dict[str, Any]] = []
+        for index in sorted(self._blocks):
+            block = dict(self._blocks[index])
+            for key, pieces in self._pieces[index].items():
+                block[key] = block.get(key, "") + "".join(pieces)
+            if index in self._calls:
+                block["input"] = _input(self._call(index))
+            blocks.append(block)
+        return NativeOutput(provider=PROVIDER, items=blocks)
+
+    def add_arguments(self, index: int, partial: str) -> str:
+        """Keep a piece of a call's arguments.
+
+        Args:
+            index: The index of the call's block.
+            partial: The ``partial_json`` of an ``input_json_delta``.
+
+        Returns:
+            The id of the call the piece belongs to.
+
+        Raises:
+            APIResponseError: No ``tool_use`` block opened at the index.
+        """
+        if index not in self._arguments:
+            message = (
+                f"Anthropic stream sent input_json_delta for block {index} "
+                "without its tool_use"
+            )
+            raise APIResponseError(message)
+        self._arguments[index].append(partial)
+        return self._calls[index].id
+
+    def tool_calls(self) -> list[ToolCall]:
+        """Give the tool calls streamed so far.
+
+        Returns:
+            A shared call per ``tool_use`` block, in block order, its
+            arguments the pieces joined, or the block's own ``input``
+            when no piece came.
+        """
+        return [self._call(index) for index in sorted(self._calls)]
 
     def add_thinking(self, thinking: str) -> None:
         """Keep a thinking delta for the whole reasoning.
@@ -205,28 +504,25 @@ class StreamState:
         """
         return "".join(self._thinking) or None
 
-    def update(self, event: MessageDeltaEvent) -> None:
+    def update(self, event: RawMessageDeltaEvent) -> None:
         """Take the stop reason and counts of a ``message_delta``.
 
         Args:
             event: A ``message_delta`` event.
 
         Raises:
-            APIResponseError: The event has counts, but no
-                ``message_start`` came before it to take them into.
+            APIResponseError: No ``message_start`` came before it to
+                take its counts into.
         """
         changes = _sent(event.delta)
         if changes:
             self.delta = self.delta.model_copy(update=changes)
-        usage = event.usage
-        if usage is None:
-            return
         if self._message is None:
             message = (
                 "Anthropic stream sent message_delta before message_start"
             )
             raise APIResponseError(message)
-        counts = self._message.usage.model_copy(update=_sent(usage))
+        counts = self._message.usage.model_copy(update=_sent(event.usage))
         self._message = self._message.model_copy(update={"usage": counts})
 
     def usage(self) -> Usage:
@@ -261,9 +557,27 @@ class StreamState:
 
         Returns:
             The text deltas joined, or ``None`` if none came, as
-            ``Message.text`` gives for a message without text.
+            ``message_text`` gives for a message without text.
         """
         return "".join(self._texts) if self._texts else None
+
+
+def _input(call: ToolCall) -> dict[str, Any]:
+    """Parse a streamed call's arguments into ``tool_use.input``.
+
+    Args:
+        call: The call.
+
+    Returns:
+        Its arguments as an object.
+
+    Raises:
+        APIResponseError: The arguments are not a JSON object.
+    """
+    try:
+        return call.parse_arguments()
+    except ValueError as error:
+        raise APIResponseError(str(error)) from error
 
 
 def _sent(model: BaseModel) -> dict[str, object]:

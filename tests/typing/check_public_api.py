@@ -50,11 +50,14 @@ from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
 from aiollm.providers.anthropic.methods import (
     CreateMessage,
-    MessageParam,
     StreamMessage,
 )
-from aiollm.providers.anthropic.types import Message, MessageStreamEvent
-from aiollm.providers.anthropic.types.messages import Usage
+from aiollm.providers.anthropic.methods.params import UserMessageParam
+from aiollm.providers.anthropic.types import (
+    Message,
+    MessageStreamEvent,
+    Usage,
+)
 from aiollm.providers.anthropic.types.options import (
     AnthropicGenerationOptions,
 )
@@ -62,9 +65,12 @@ from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
-from aiollm.providers.openai.types import Response, ResponseStreamEvent
+from aiollm.providers.openai.types import (
+    Response,
+    ResponseStreamEvent,
+    ResponseUsage,
+)
 from aiollm.providers.openai.types.options import OpenAIGenerationOptions
-from aiollm.providers.openai.types.responses import ResponseUsage
 from aiollm.resources import (
     AdapterStreamUseCase,
     AdapterUseCase,
@@ -79,7 +85,12 @@ from aiollm.resources import (
 from aiollm.response import map_stream
 from aiollm.session import CallOptions, ISession, ISessionFactory
 from aiollm.session.aiohttp import AiohttpSession
-from aiollm.types.requests import GenerationRequest, NoProviderOptions, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    NoProviderOptions,
+    ToolCallTurn,
+    Turn,
+)
 from aiollm.types.responses import (
     GenerationEvent,
     GenerationResponse,
@@ -471,7 +482,7 @@ async def openai_generation_infers_its_types(session: AiohttpSession) -> None:
     assert_type(response.incomplete_reason, IncompleteReason | None)
     assert_type(response.raw_incomplete_reason, str | None)
     assert_type(response.refusal, str | None)
-    assert_type(response.to_turn(), Turn)
+    assert_type(response.to_turn(), Turn | ToolCallTurn)
     async with generation.stream(request) as events:
         assert_type(events, GenerationStream[ResponseStreamEvent])
 
@@ -480,10 +491,12 @@ def turns_are_typed() -> None:
     assert_type(Turn.user("x"), Turn)
     assert_type(Turn.assistant("x").role, Role)
     GenerationRequest(model="m", input=[Turn.user("x")])
+    history: list[Turn] = [Turn.user("x")]
+    GenerationRequest(model="m", input=history)
 
 
 async def anthropic_messages_infer_types(session: AiohttpSession) -> None:
-    turn: MessageParam = {"role": "user", "content": "x"}
+    turn = UserMessageParam(role="user", content="x")
     create = CreateMessage(model="m", max_tokens=16, messages=[turn])
     assert_type(await session.send_request(create), Message)
     stream = StreamMessage(model="m", max_tokens=16, messages=[turn])

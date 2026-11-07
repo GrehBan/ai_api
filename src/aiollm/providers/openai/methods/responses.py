@@ -2,17 +2,38 @@
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Annotated, Final
+
+from annotated_types import MaxLen
+from pydantic import MISSING, StringConstraints
 
 from aiollm.enums import BodyFormat, ResponseFormat
 from aiollm.methods.base import BaseAPIMethod, BaseStreamMethod
-from aiollm.providers.openai.methods.base import ResponseParams
+from aiollm.providers.openai.methods.params.responses import (
+    CreateResponseParams,
+    StreamResponseParams,
+)
 from aiollm.providers.openai.resolver import FAILED_RESPONSE
 from aiollm.providers.openai.types.events import ResponseStreamEvent
 from aiollm.providers.openai.types.responses import Response
 from aiollm.response.parse.buffered import BufferedResponseParser
 from aiollm.response.parse.stream import StreamResponseParser
 from aiollm.types.matchers import EventTypes, TopLevelError
+
+type Metadata = Annotated[
+    dict[
+        Annotated[str, StringConstraints(max_length=64)],
+        Annotated[str, StringConstraints(max_length=512)],
+    ],
+    MaxLen(16),
+]
+"""OpenAI metadata: up to 16 pairs, keys up to 64 and values up to 512
+characters, checked before the request is sent.
+
+The limits are only written in the schema's description, so the
+generated ``methods.params`` type does not check them; both methods
+narrow their ``metadata`` field to this type.
+"""
 
 TERMINAL_EVENTS: Final = EventTypes(
     "response.completed", "response.incomplete", "response.failed"
@@ -29,7 +50,7 @@ apart so the two are not mistaken for each other.
 """
 
 
-class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
+class CreateResponse(CreateResponseParams, BaseAPIMethod[Response]):
     """Create a response and wait for the whole of it.
 
     A response with status ``failed`` is raised as the ``APIStatusError``
@@ -47,7 +68,7 @@ class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
         >>> response = await client.send_request(
         ...     CreateResponse(model="gpt-5", input="Hi")
         ... )
-        >>> response.output_text
+        >>> response.output
     """
 
     __request_path__ = "/responses"
@@ -58,8 +79,12 @@ class CreateResponse(ResponseParams, BaseAPIMethod[Response]):
         error_responses=FAILED_RESPONSE
     )
 
+    metadata: Metadata | None | MISSING = MISSING
 
-class StreamResponse(ResponseParams, BaseStreamMethod[ResponseStreamEvent]):
+
+class StreamResponse(
+    StreamResponseParams, BaseStreamMethod[ResponseStreamEvent]
+):
     """Create a response and stream its events.
 
     Only opening the stream is retried, on a transient failure; once
@@ -70,8 +95,8 @@ class StreamResponse(ResponseParams, BaseStreamMethod[ResponseStreamEvent]):
     ``APIStatusError`` that ``OpenAIErrorResolver`` picks from their
     code; for ``response.failed`` the event is the error's ``raw``.
 
-    Attributes:
-        stream: Always ``True``; asks OpenAI for server-sent events.
+    Its ``stream`` field is always ``True``: it asks for server-sent
+    events.
 
     Example:
         >>> method = StreamResponse(model="gpt-5", input="Hi")
@@ -91,4 +116,4 @@ class StreamResponse(ResponseParams, BaseStreamMethod[ResponseStreamEvent]):
         error_events=RESPONSE_ERROR_EVENTS
     )
 
-    stream: Literal[True] = True
+    metadata: Metadata | None | MISSING = MISSING

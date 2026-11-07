@@ -21,25 +21,31 @@ from aiollm.http.exceptions.status import (
     RateLimitError,
 )
 from aiollm.http.exceptions.transport import APIStreamInterruptedError
+from aiollm.providers.openai.adapters.conversions import (
+    output_text,
+    reasoning_summary,
+)
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
 from aiollm.providers.openai.resolver import OpenAIErrorResolver
 from aiollm.providers.openai.types import (
-    ContentPartEvent,
-    OutputItemEvent,
     OutputMessage,
-    OutputRefusal,
-    OutputText,
-    OutputTextDeltaEvent,
-    OutputTextDoneEvent,
+    OutputTextContent,
     ReasoningItem,
-    RefusalDeltaEvent,
-    RefusalDoneEvent,
+    RefusalContent,
     Response,
-    ResponseStateEvent,
-    UnknownContent,
-    UnknownEvent,
-    UnknownOutputItem,
+    ResponseCompletedEvent,
+    ResponseContentPartAddedEvent,
+    ResponseCreatedEvent,
+    ResponseFailedEvent,
+    ResponseInProgressEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputTextAnnotationAddedEvent,
+    ResponseRefusalDeltaEvent,
+    ResponseRefusalDoneEvent,
+    ResponseTextDeltaEvent,
+    ResponseTextDoneEvent,
 )
+from aiollm.providers.openai.types.shared import UnknownVariant
 from aiollm.response.buffered import BufferedResponse
 from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import (
@@ -159,7 +165,13 @@ STREAM: list[dict[str, Any]] = [
         "output_index": 0,
         "content_index": 0,
         "annotation_index": 0,
-        "annotation": None,
+        "annotation": {
+            "type": "url_citation",
+            "url": "https://example.com/",
+            "title": "Example",
+            "start_index": 0,
+            "end_index": 2,
+        },
         "sequence_number": 5,
     },
     {
@@ -181,16 +193,13 @@ def test_response_reads_the_reference_example() -> None:
     assert response.id == RESPONSE["id"]
     assert response.status == "completed"
     assert response.created_at == 1741476777
-    assert response.output == [
-        OutputMessage(
-            id=MESSAGE["id"],
-            status="completed",
-            content=[
-                OutputText(text=MESSAGE["content"][0]["text"], logprobs=[])
-            ],
-        )
-    ]
-    assert response.output_text == MESSAGE["content"][0]["text"]
+    (message,) = response.output
+    assert isinstance(message, OutputMessage)
+    assert message.id == MESSAGE["id"]
+    (part,) = message.content
+    assert isinstance(part, OutputTextContent)
+    assert part.text == MESSAGE["content"][0]["text"]
+    assert output_text(response) == MESSAGE["content"][0]["text"]
     assert response.usage is not None
     assert response.usage.total_tokens == 380
     assert response.usage.input_tokens_details is not None
@@ -198,19 +207,13 @@ def test_response_reads_the_reference_example() -> None:
 
 
 def test_response_keeps_unknown_items_and_parts_whole() -> None:
-    reasoning = {
-        "type": "function_call",
-        "id": "fc_1",
-        "call_id": "call_1",
-        "name": "lookup",
-        "arguments": "{}",
-    }
+    reasoning = {"type": "future_item", "id": "fu_1", "payload": {"a": 1}}
     message = MESSAGE | {
         "content": [
-            {"type": "output_text", "text": "Hel"},
+            {**PART, "text": "Hel"},
             {"type": "refusal", "refusal": "No"},
             {"type": "reasoning_text", "text": "hidden"},
-            {"type": "output_text", "text": "lo"},
+            {**PART, "text": "lo"},
         ]
     }
     response = Response.model_validate(
@@ -218,14 +221,14 @@ def test_response_keeps_unknown_items_and_parts_whole() -> None:
     )
 
     first, second = response.output
-    assert isinstance(first, UnknownOutputItem)
+    assert isinstance(first, UnknownVariant)
     assert first.model_dump() == reasoning
     assert isinstance(second, OutputMessage)
-    assert isinstance(second.content[1], OutputRefusal)
-    assert isinstance(second.content[2], UnknownContent)
+    assert isinstance(second.content[1], RefusalContent)
+    assert isinstance(second.content[2], UnknownVariant)
     assert second.content[2].model_dump() == message["content"][2]
-    assert response.output_text == "Hello"
-    assert response.reasoning_summary is None
+    assert output_text(response) == "Hello"
+    assert reasoning_summary(response) is None
 
 
 def test_reasoning_summaries_are_joined() -> None:
@@ -242,7 +245,7 @@ def test_reasoning_summaries_are_joined() -> None:
     )
 
     assert isinstance(response.output[0], ReasoningItem)
-    assert response.reasoning_summary == "First, then."
+    assert reasoning_summary(response) == "First, then."
 
 
 def test_an_item_without_a_type_is_rejected() -> None:
@@ -250,21 +253,10 @@ def test_an_item_without_a_type_is_rejected() -> None:
         Response.model_validate(RESPONSE | {"output": [{"id": "x"}]})
 
 
-def test_text_without_logprobs_is_read() -> None:
-    # The schema allows null; the documentation examples always send [].
-    message = MESSAGE | {
-        "content": [{**MESSAGE["content"][0], "logprobs": None}]
-    }
-
-    response = Response.model_validate(RESPONSE | {"output": [message]})
-
-    assert response.output_text == MESSAGE["content"][0]["text"]
-
-
 def test_response_without_text_has_no_output_text() -> None:
     response = Response.model_validate(RESPONSE | {"output": []})
 
-    assert response.output_text is None
+    assert output_text(response) is None
 
 
 def test_failed_response_carries_its_error() -> None:
@@ -302,7 +294,7 @@ async def test_create_response_sends_and_parses(
         )
     )
 
-    assert response.output_text == MESSAGE["content"][0]["text"]
+    assert output_text(response) == MESSAGE["content"][0]["text"]
     assert recorder.last.method == "POST"
     assert recorder.last.raw_path == "/v1/responses"
     assert json.loads(recorder.last.body) == {
@@ -331,14 +323,14 @@ async def test_stream_response_yields_typed_events(
         received = [event async for event in events]
 
     assert [type(event) for event in received] == [
-        ResponseStateEvent,
-        ResponseStateEvent,
-        OutputItemEvent,
-        ContentPartEvent,
-        OutputTextDeltaEvent,
-        UnknownEvent,
-        OutputTextDoneEvent,
-        ResponseStateEvent,
+        ResponseCreatedEvent,
+        ResponseInProgressEvent,
+        ResponseOutputItemAddedEvent,
+        ResponseContentPartAddedEvent,
+        ResponseTextDeltaEvent,
+        ResponseOutputTextAnnotationAddedEvent,
+        ResponseTextDoneEvent,
+        ResponseCompletedEvent,
     ]
     assert json.loads(recorder.last.body) == {
         "model": "gpt-6-astra",
@@ -347,22 +339,44 @@ async def test_stream_response_yields_typed_events(
     }
 
     delta = received[4]
-    assert isinstance(delta, OutputTextDeltaEvent)
+    assert isinstance(delta, ResponseTextDeltaEvent)
     assert (delta.delta, delta.item_id, delta.sequence_number) == (
         "Hi",
         ITEM_ID,
         4,
     )
 
-    unknown = received[5]
-    assert isinstance(unknown, UnknownEvent)
-    assert unknown.model_dump() == STREAM[5]
+    annotation = received[5]
+    assert isinstance(annotation, ResponseOutputTextAnnotationAddedEvent)
+    assert annotation.model_dump(mode="json", exclude_unset=True) == STREAM[5]
 
     completed = received[-1]
-    assert isinstance(completed, ResponseStateEvent)
-    assert completed.type == "response.completed"
+    assert isinstance(completed, ResponseCompletedEvent)
     assert completed.response.usage is not None
     assert completed.response.usage.total_tokens == 380
+
+
+async def test_an_unknown_event_is_kept_whole() -> None:
+    future = {
+        "type": "response.future.event",
+        "item_id": ITEM_ID,
+        "payload": {"new": True},
+        "sequence_number": 1,
+    }
+    chunks = [frame(future), frame(state("response.completed", 2))]
+    transport = FakeTransport(
+        stream_responses=[FakeStreamResponse(chunks, headers=SSE)],
+        error_resolver=OpenAIErrorResolver(),
+    )
+
+    async with transport.stream(
+        StreamResponse(model="m", input="Hi")
+    ) as events:
+        unknown, completed = [event async for event in events]
+
+    assert isinstance(unknown, UnknownVariant)
+    assert unknown.model_dump() == future
+    assert isinstance(completed, ResponseCompletedEvent)
 
 
 async def test_refusal_events_are_regular_events() -> None:
@@ -397,10 +411,10 @@ async def test_refusal_events_are_regular_events() -> None:
         received = [event async for event in events]
 
     delta, done, completed = received
-    assert isinstance(delta, RefusalDeltaEvent)
-    assert isinstance(done, RefusalDoneEvent)
+    assert isinstance(delta, ResponseRefusalDeltaEvent)
+    assert isinstance(done, ResponseRefusalDoneEvent)
     assert done.refusal == "No"
-    assert isinstance(completed, ResponseStateEvent)
+    assert isinstance(completed, ResponseCompletedEvent)
 
 
 async def test_failed_event_raises_by_its_code() -> None:
@@ -431,8 +445,7 @@ async def test_failed_event_raises_by_its_code() -> None:
     assert caught.value.provider is Provider.OPENAI
     assert "Failed" in str(caught.value)
     raw = caught.value.raw
-    assert isinstance(raw, ResponseStateEvent)
-    assert raw.type == "response.failed"
+    assert isinstance(raw, ResponseFailedEvent)
     assert raw.response.status == "failed"
 
 
@@ -470,7 +483,7 @@ async def test_event_after_the_terminal_event_raises() -> None:
         with pytest.raises(APIResponseError, match="after its terminal"):
             await anext(events)
 
-    assert isinstance(first, ResponseStateEvent)
+    assert isinstance(first, ResponseCompletedEvent)
 
 
 FAILED = RESPONSE | {

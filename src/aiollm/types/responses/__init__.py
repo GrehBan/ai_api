@@ -14,6 +14,9 @@ from aiollm.types.responses.events import (
     RawResponseEvent,
     ReasoningDeltaEvent,
     TextDeltaEvent,
+    ToolCallDeltaEvent,
+    ToolCallDoneEvent,
+    ToolCallStartEvent,
 )
 from aiollm.types.responses.generation import (
     GenerationResponse,
@@ -32,4 +35,7 @@ __all__ = [
     "ReasoningDeltaEvent",
     "TextDeltaEvent",
     "TokenUsage",
+    "ToolCallDeltaEvent",
+    "ToolCallDoneEvent",
+    "ToolCallStartEvent",
 ]

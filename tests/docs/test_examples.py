@@ -35,11 +35,13 @@ from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.client import (
     session_factory as anthropic_session_factory,
 )
+from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.client import session_factory
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
 from aiollm.types.requests import GenerationRequest
 from tests.conftest import LocalAPI, Recorder, Reply
+from tests.providers.test_openai_responses import RESPONSE as OPENAI_EXAMPLE
 
 ROOT = Path(__file__).parents[2]
 HISTORICAL: Final = frozenset({"testing-plan.md", "sse-ndjson-plan.md"})
@@ -103,10 +105,34 @@ AUTH: Final = "auth.py"
 CALL_OPTIONS: Final = "call_options.py"
 RETRY_POLICY: Final = "retry_policy.py"
 CLIENT: Final = "client.py"
+def openai_message(text: str, status: str = "completed") -> dict[str, Any]:
+    """An OpenAI output message with one text part."""
+    return {
+        "type": "message",
+        "id": "msg_1",
+        "status": status,
+        "role": "assistant",
+        "content": [
+            {
+                "type": "output_text",
+                "text": text,
+                "annotations": [],
+                "logprobs": [],
+            }
+        ],
+    }
+
+
+def openai_response(**changes: Any) -> dict[str, Any]:
+    """A whole OpenAI response: the documented example, changed."""
+    return OPENAI_EXAMPLE | {"id": "resp_1", "model": "gpt-6-astra"} | changes
+
+
 OPENAI_RESPONSES: Final = "openai_responses.py"
 ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
 SHARED_GENERATION: Final = "shared_generation.py"
 PROVIDER_OPTIONS: Final = "provider_options.py"
+TOOLS: Final = "tools.py"
 RESOURCES: Final = "resources.py"
 
 TESTED: Final = (
@@ -131,6 +157,7 @@ TESTED: Final = (
     ANTHROPIC_MESSAGES,
     SHARED_GENERATION,
     PROVIDER_OPTIONS,
+    TOOLS,
     RESOURCES,
 )
 """The title of every example a test below runs."""
@@ -643,27 +670,15 @@ async def test_openai_responses(
     session: AiohttpSession,
 ) -> None:
     await examples.run(QUICK_START, CLIENT, OPENAI_RESPONSES)
-    message = {
-        "type": "message",
-        "id": "msg_1",
-        "status": "completed",
-        "role": "assistant",
-        "content": [{"type": "output_text", "text": "Hello!"}],
-    }
     delta = {
         "type": "response.output_text.delta",
         "item_id": "msg_1",
         "output_index": 0,
         "content_index": 0,
         "sequence_number": 0,
+        "logprobs": [],
     }
-    response = {
-        "id": "resp_1",
-        "object": "response",
-        "created_at": 1741476777,
-        "model": "gpt-6-astra",
-        "output": [message],
-    }
+    response = openai_response(output=[openai_message("Hello!")])
     completed = {
         "type": "response.completed",
         "sequence_number": 2,
@@ -718,7 +733,7 @@ async def test_anthropic_messages(
                 .encode()
                 for data in [
                     delta | {"delta": {"type": "text_delta", "text": "He"}},
-                    delta | {"delta": {"type": "signature_delta"}},
+                    delta | {"delta": {"type": "signature_delta", "signature": "s"}},
                     delta | {"delta": {"type": "text_delta", "text": "y"}},
                 ]
             ]
@@ -755,39 +770,26 @@ async def test_shared_generation(
         "output_index": 0,
         "content_index": 0,
         "sequence_number": 0,
+        "logprobs": [],
     }
     completed = {
         "type": "response.completed",
         "sequence_number": 2,
-        "response": {
-            "id": "resp_2",
-            "created_at": 1741476777,
-            "status": "completed",
-            "model": "gpt-6-astra",
-        },
+        "response": openai_response(id="resp_2", output=[]),
+    }
+    usage = OPENAI_EXAMPLE["usage"] | {
+        "input_tokens": 5,
+        "output_tokens": 64,
+        "total_tokens": 69,
     }
     recorder.reply(
         Reply(
-            json={
-                "id": "resp_1",
-                "created_at": 1741476777,
-                "status": "incomplete",
-                "incomplete_details": {"reason": "max_output_tokens"},
-                "model": "gpt-6-astra",
-                "output": [
-                    {
-                        "type": "message",
-                        "id": "msg_1",
-                        "status": "incomplete",
-                        "content": [{"type": "output_text", "text": "Hel"}],
-                    }
-                ],
-                "usage": {
-                    "input_tokens": 5,
-                    "output_tokens": 64,
-                    "total_tokens": 69,
-                },
-            }
+            json=openai_response(
+                status="incomplete",
+                incomplete_details={"reason": "max_output_tokens"},
+                output=[openai_message("Hel", "incomplete")],
+                usage=usage,
+            )
         ),
         Reply(
             chunks=[
@@ -835,20 +837,7 @@ async def test_shared_generation_continues_a_conversation(
 ) -> None:
     await examples.run(QUICK_START, CLIENT, SHARED_GENERATION)
     monkeypatch.setattr(session_factory, "api", api)
-    answer = {
-        "id": "resp_1",
-        "created_at": 1741476777,
-        "status": "completed",
-        "model": "gpt-6-astra",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_1",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": "Hello!"}],
-            }
-        ],
-    }
+    answer = openai_response(output=[openai_message("Hello!")])
     recorder.reply(Reply(json=answer), Reply(json=answer))
 
     async with examples.OpenAIClient("sk-...") as client:
@@ -897,6 +886,57 @@ async def test_shared_generation_works_with_anthropic(
     }
 
 
+async def test_tools(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, TOOLS)
+    monkeypatch.setattr(session_factory, "api", api)
+    call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+        "status": "completed",
+    }
+    recorder.reply(
+        Reply(json=openai_response(output=[call])),
+        Reply(json=openai_response(output=[openai_message("15 C in Paris")])),
+    )
+
+    async with OpenAIClient("sk-...") as client:
+        response = await examples.ask_with_tools(client, "Weather in Paris?")
+
+    assert response.text == "15 C in Paris"
+    first, second = recorder.requests
+    assert json.loads(first.body)["tools"] == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Current weather in a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    ]
+    assert json.loads(second.body)["input"] == [
+        {"role": "user", "content": "Weather in Paris?"},
+        call,
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"city": "Paris", "celsius": 15}',
+        },
+    ]
+
+
 async def test_provider_options(
     examples: Examples,
     recorder: Recorder,
@@ -906,15 +946,7 @@ async def test_provider_options(
     await examples.run(QUICK_START, PROVIDER_OPTIONS)
     monkeypatch.setattr(session_factory, "api", api)
     recorder.reply(
-        Reply(
-            json={
-                "id": "resp_1",
-                "created_at": 1741476777,
-                "status": "completed",
-                "model": "gpt-6-astra",
-                "output": [],
-            }
-        )
+        Reply(json=openai_response(output=[]))
     )
 
     async with examples.OpenAIClient("sk-...") as client:

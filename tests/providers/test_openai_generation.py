@@ -21,10 +21,17 @@ from aiollm.http.exceptions.status import (
 )
 from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.adapters.conversions import output_text
 from aiollm.providers.openai.client import session_factory
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
 from aiollm.providers.openai.types import Response, ResponseStreamEvent
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    ToolCall,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
@@ -106,7 +113,7 @@ def test_the_schema_name_comes_from_the_adapter() -> None:
     )
     named = OpenAIGenerationAdapter(schema_name="answer")
 
-    assert named.to_method(request).text == {
+    assert named.to_method(request).get_body_map()["text"] == {
         "format": {
             "type": "json_schema",
             "name": "answer",
@@ -193,14 +200,51 @@ def test_completed_response_is_converted() -> None:
     assert converted.raw is raw
 
 
-def test_usage_details_are_optional() -> None:
+def test_a_turn_of_calls_without_text_sends_only_the_calls() -> None:
+    call = ToolCall(id="call_1", name="f", arguments="{}")
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="call_1", output="ok"),
+            ]
+        }
+    )
+
+    sent = adapter.to_method(request).get_body_map()["input"]
+
+    assert sent[1:] == [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "f",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+    ]
+
+
+async def test_arguments_without_their_call_raise() -> None:
+    delta = {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "fc_9",
+        "output_index": 0,
+        "delta": "{",
+        "sequence_number": 1,
+    }
+
+    with pytest.raises(APIResponseError, match="item fc_9 without its"):
+        await convert([delta])
+
+
+def test_usage_without_its_details_is_refused() -> None:
+    # OpenAI's schema requires both details objects in a response's
+    # usage, so a body without them is not a Response.
     usage = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 
-    converted = adapter.to_response(response(usage=usage), REQUEST)
-
-    assert converted.usage == TokenUsage(
-        input_tokens=1, output_tokens=2, total_tokens=3
-    )
+    with pytest.raises(ValidationError, match="input_tokens_details"):
+        response(usage=usage)
 
 
 def test_response_without_text_or_usage_is_kept_empty() -> None:
@@ -298,7 +342,10 @@ async def test_stream_events_are_converted() -> None:
     delta = converted[4]
     assert delta.text == "Hi"
     assert delta.raw.sequence_number == 4
-    assert converted[5].raw.model_dump() == STREAM[5]
+    assert (
+        converted[5].raw.model_dump(mode="json", exclude_unset=True)
+        == (STREAM[5])
+    )
     completed = converted[-1]
     assert completed.usage == TokenUsage(
         input_tokens=328,
@@ -315,7 +362,7 @@ async def test_stream_events_are_converted() -> None:
     assert completed.id == completed.raw.response.id
     assert completed.model == completed.raw.response.model
     # The text of the final response, as OpenAI sends it in the event.
-    assert completed.text == completed.raw.response.output_text
+    assert completed.text == output_text(completed.raw.response)
 
 
 REASONING = {
@@ -362,11 +409,13 @@ def test_reasoning_options_merge_with_the_shared_effort() -> None:
     request = REQUEST.model_copy(update={"effort": Effort.HIGH})
     tuned = adapter.with_options({"reasoning": {"summary": "auto"}})
 
-    assert tuned.to_method(request).reasoning == {
+    assert tuned.to_method(request).get_body_map()["reasoning"] == {
         "effort": "high",
         "summary": "auto",
     }
-    assert tuned.to_method(REQUEST).reasoning == {"summary": "auto"}
+    assert tuned.to_method(REQUEST).get_body_map()["reasoning"] == {
+        "summary": "auto"
+    }
 
 
 def test_an_option_that_sets_a_shared_path_is_refused() -> None:

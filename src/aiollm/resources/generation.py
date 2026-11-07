@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, Unpack, overload
 
@@ -26,10 +26,15 @@ from aiollm.types.responses.events import (
 from aiollm.types.responses.generation import GenerationResponse
 
 if TYPE_CHECKING:
-    from aiollm.enums import Effort
+    from aiollm.enums import Effort, ToolChoice
     from aiollm.http.protocols import HeadersType
     from aiollm.session.retry.policy import RetryPolicy
-    from aiollm.types.requests.generation import JSONSchema, Turn
+    from aiollm.types.requests.generation import (
+        ForcedTool,
+        InputItem,
+        JSONSchema,
+        Tool,
+    )
 
 
 class GenerationResource[
@@ -90,12 +95,15 @@ class GenerationResource[
         /,
         *,
         model: str,
-        input: str | list[Turn],
+        input: str | Sequence[InputItem],
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         end_user_id: str | MISSING = MISSING,
         effort: Effort | MISSING = MISSING,
         output_schema: JSONSchema | MISSING = MISSING,
+        tools: list[Tool] | MISSING = MISSING,
+        tool_choice: ToolChoice | ForcedTool | MISSING = MISSING,
+        parallel_tool_calls: bool | MISSING = MISSING,
         provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> GenerationResponse[RawT]: ...
@@ -166,12 +174,15 @@ class GenerationResource[
         /,
         *,
         model: str,
-        input: str | list[Turn],
+        input: str | Sequence[InputItem],
         instructions: str | MISSING = MISSING,
         max_output_tokens: int | MISSING = MISSING,
         end_user_id: str | MISSING = MISSING,
         effort: Effort | MISSING = MISSING,
         output_schema: JSONSchema | MISSING = MISSING,
+        tools: list[Tool] | MISSING = MISSING,
+        tool_choice: ToolChoice | ForcedTool | MISSING = MISSING,
+        parallel_tool_calls: bool | MISSING = MISSING,
         provider_options: OptionsT | MISSING = MISSING,
         **options: Unpack[CallOptions],
     ) -> AbstractAsyncContextManager[GenerationStream[RawItemT]]: ...

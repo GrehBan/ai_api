@@ -19,6 +19,7 @@ from aiollm.http.exceptions.response import APIResponseError
 from aiollm.http.exceptions.status import ServiceUnavailableError
 from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.adapters.conversions import StreamState
 from aiollm.providers.anthropic.client import session_factory
 from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
 from aiollm.providers.anthropic.types import Message, MessageStreamEvent
@@ -26,7 +27,13 @@ from aiollm.providers.anthropic.types.options import (
     AnthropicGenerationOptions,
 )
 from aiollm.resources.generation import GenerationResource
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    ToolCall,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.responses import (
     CompletedEvent,
     OtherEvent,
@@ -139,9 +146,7 @@ def test_too_long_user_id_is_rejected() -> None:
     assert caught.value.field == "end_user_id"
     assert isinstance(caught.value, ValueError)
     assert isinstance(caught.value.__cause__, ValidationError)
-    assert "end_user_id.user_id: String should have at most 512" in str(
-        caught.value
-    )
+    assert "user_id is longer than 512 characters" in str(caught.value)
 
 
 def test_method_fields_are_reported_by_their_shared_name() -> None:
@@ -217,12 +222,28 @@ def test_finished_message_is_converted() -> None:
     assert converted.raw is raw
 
 
-def test_stop_sequence_is_a_finished_message() -> None:
+@pytest.mark.parametrize("reason", ["stop_sequence", "tool_use"])
+def test_stop_sequence_and_tool_use_finish_the_message(reason: str) -> None:
+    # tool_use is a normal end, as a completed OpenAI response with
+    # function calls: the model waits for the results.
     converted = adapter.to_response(
-        message(stop_reason="stop_sequence", stop_sequence="END"), REQUEST
+        message(stop_reason=reason, stop_sequence=None), REQUEST
     )
 
     assert converted.incomplete_reason is None
+    assert converted.raw_incomplete_reason is None
+
+
+async def test_stream_stopped_by_tool_use_finishes() -> None:
+    payloads = stream_with(
+        delta={"stop_reason": "tool_use"}, usage={"output_tokens": 2}
+    )
+
+    completed = (await convert(payloads))[-1]
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.incomplete_reason is None
+    assert completed.raw_incomplete_reason is None
 
 
 @pytest.mark.parametrize(
@@ -232,7 +253,6 @@ def test_stop_sequence_is_a_finished_message() -> None:
         ("refusal", IncompleteReason.REFUSAL),
         ("model_context_window_exceeded", IncompleteReason.OTHER),
         ("pause_turn", IncompleteReason.OTHER),
-        ("tool_use", IncompleteReason.OTHER),
         ("new_reason", IncompleteReason.OTHER),
     ],
 )
@@ -356,6 +376,90 @@ def test_thinking_becomes_the_reasoning() -> None:
     assert adapter.to_response(message(), REQUEST).reasoning is None
 
 
+async def test_a_stream_gives_its_content_back_whole() -> None:
+    # Thinking with its signature, text and a tool_use, each from its
+    # start and its pieces, as a message would hold them.
+    def delta(index: int, **fields: Any) -> dict[str, Any]:
+        return {"type": "content_block_delta", "index": index, "delta": fields}
+
+    def start(index: int, block: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": block,
+        }
+
+    use = {"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}
+    payloads = [
+        STREAM[0],
+        start(0, {"type": "thinking", "thinking": "", "signature": ""}),
+        delta(0, type="thinking_delta", thinking="Weigh"),
+        delta(0, type="thinking_delta", thinking="ing."),
+        delta(0, type="signature_delta", signature="sig"),
+        start(1, {"type": "text", "text": ""}),
+        delta(1, type="text_delta", text="Calling."),
+        start(2, use),
+        delta(2, type="input_json_delta", partial_json='{"a": '),
+        delta(2, type="input_json_delta", partial_json="1}"),
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 9},
+        },
+        STREAM[-1],
+    ]
+
+    completed = (await convert(payloads))[-1]
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.native is not None
+    assert completed.native.items == [
+        {"type": "thinking", "thinking": "Weighing.", "signature": "sig"},
+        {"type": "text", "text": "Calling."},
+        use | {"input": {"a": 1}},
+    ]
+    turn = completed.to_turn()
+    assert isinstance(turn, ToolCallTurn)
+    assert turn.text == "Calling."
+
+
+async def test_a_stream_without_content_has_no_native_output() -> None:
+    end = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn"},
+        "usage": {"output_tokens": 0},
+    }
+
+    completed = (await convert([STREAM[0], end, STREAM[-1]]))[-1]
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.native is None
+    assert completed.tool_calls == []
+
+
+async def test_arguments_that_join_into_no_object_raise() -> None:
+    use = {"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}
+    payloads = [
+        STREAM[0],
+        {"type": "content_block_start", "index": 0, "content_block": use},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"a": '},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "max_tokens"},
+            "usage": {"output_tokens": 9},
+        },
+        STREAM[-1],
+    ]
+
+    with pytest.raises(APIResponseError, match="toolu_1 are not JSON"):
+        await convert(payloads)
+
+
 async def test_thinking_deltas_become_reasoning_deltas() -> None:
     # An empty thinking delta (display omitted) is no summary.
     def thinking(text: str) -> dict[str, Any]:
@@ -381,7 +485,7 @@ def test_thinking_options_reach_the_method() -> None:
         {"thinking": {"type": "adaptive", "display": "summarized"}}
     )
 
-    assert tuned.to_method(REQUEST).thinking == {
+    assert tuned.to_method(REQUEST).get_body_map()["thinking"] == {
         "type": "adaptive",
         "display": "summarized",
     }
@@ -406,7 +510,7 @@ async def test_usage_takes_the_last_cumulative_counts() -> None:
                 "output_tokens_details": {"thinking_tokens": 3},
             },
         },
-        {"type": "message_delta", "delta": {}},
+        {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 9}},
         STREAM[-1],
     ]
 
@@ -442,14 +546,86 @@ async def test_stream_stopped_early_completes_with_its_reason() -> None:
     assert completed.refusal == "cyber"
 
 
-async def test_stream_without_message_start_raises() -> None:
-    payloads = [
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
-        STREAM[-1],
+async def test_arguments_without_their_tool_use_raise() -> None:
+    delta = {
+        "type": "content_block_delta",
+        "index": 3,
+        "delta": {"type": "input_json_delta", "partial_json": "{}"},
+    }
+
+    with pytest.raises(APIResponseError, match="block 3 without its tool"):
+        await convert([STREAM[0], delta])
+
+
+def test_a_user_turn_after_results_joins_their_message() -> None:
+    # Anthropic wants tool_result blocks first in the user message that
+    # follows the calls; text after them goes in the same message.
+    call = ToolCall(id="toolu_1", name="f", arguments='{"a": 1}')
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="toolu_1", output="ok"),
+                Turn.user("Now sum up"),
+            ]
+        }
+    )
+
+    messages = adapter.to_method(request).get_body_map()["messages"]
+
+    assert messages[1:] == [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "f",
+                    "input": {"a": 1},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "ok",
+                },
+                {"type": "text", "text": "Now sum up"},
+            ],
+        },
     ]
 
+
+def test_calls_whose_arguments_are_no_object_are_refused() -> None:
+    call = ToolCall(id="toolu_1", name="f", arguments="[1]")
+    request = REQUEST.model_copy(
+        update={
+            "input": [
+                Turn.user("Hi"),
+                ToolCallTurn(tool_calls=[call]),
+                ToolResult(call_id="toolu_1", output="ok"),
+            ]
+        }
+    )
+
+    with pytest.raises(
+        RequestValidationError, match="not an object"
+    ) as caught:
+        adapter.to_method(request)
+
+    assert caught.value.field == "input"
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_stream_state_without_message_start_raises() -> None:
+    # A message_delta always carries counts, so the stream fails there
+    # first (below); the state still refuses to make up a message.
     with pytest.raises(APIResponseError, match="without message_start"):
-        await convert(payloads)
+        StreamState().message()
 
 
 async def test_counts_before_message_start_raise() -> None:

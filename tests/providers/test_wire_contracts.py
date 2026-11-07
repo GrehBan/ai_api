@@ -14,36 +14,55 @@ the library only once the snapshot is refreshed.
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
+import pkgutil
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final, Literal, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Final,
+    Literal,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import pytest
 from jsonschema import Draft202012Validator
 from pydantic import MISSING, BaseModel, TypeAdapter
 
 from aiollm.adapters import ICompositeAdapter
+from aiollm.enums import Effort, ToolChoice
 from aiollm.methods import BaseAPIMethod, BaseStreamMethod
 from aiollm.providers.anthropic.adapters import AnthropicGenerationAdapter
+from aiollm.providers.anthropic.adapters.conversions import message_text
 from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
 from aiollm.providers.anthropic.types import Message, MessageStreamEvent
-from aiollm.providers.anthropic.types import events as anthropic_events
-from aiollm.providers.anthropic.types import messages as anthropic_messages
+from aiollm.providers.anthropic.types.options import (
+    AnthropicGenerationOptions,
+)
 from aiollm.providers.openai.adapters import OpenAIGenerationAdapter
+from aiollm.providers.openai.adapters.conversions import output_text
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
 from aiollm.providers.openai.types import Response, ResponseStreamEvent
-from aiollm.providers.openai.types import events as openai_events
-from aiollm.providers.openai.types import responses as openai_responses
+from aiollm.providers.openai.types.options import OpenAIGenerationOptions
 from aiollm.response.parse.stream import StreamResponseParser
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
 from aiollm.types.matchers import AnyOf, EventTypes
-from aiollm.types.requests import GenerationRequest, Turn
+from aiollm.types.requests import (
+    GenerationRequest,
+    Tool,
+    ToolCallTurn,
+    ToolResult,
+    Turn,
+)
 from aiollm.types.unknown import BaseUnknown
 from tests.conftest import Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
@@ -51,6 +70,26 @@ from tests.providers import test_openai_responses as openai
 from tests.providers.contracts.update import event_tags, type_tags
 
 CONTRACTS = Path(__file__).parent / "contracts"
+
+
+def modules(
+    package: str, *, skip: frozenset[str] = frozenset()
+) -> tuple[ModuleType, ...]:
+    """Import every module of a package.
+
+    Args:
+        package: The package, such as ``aiollm.providers.openai.types``.
+        skip: Module names left out, such as the hand-written options.
+
+    Returns:
+        The modules, in name order.
+    """
+    root = importlib.import_module(package)
+    return tuple(
+        importlib.import_module(f"{package}.{info.name}")
+        for info in sorted(pkgutil.iter_modules(root.__path__))
+        if info.name not in skip
+    )
 
 
 @dataclass(frozen=True)
@@ -69,7 +108,9 @@ class Case:
         examples: The hand-written payloads of the other tests:
             responses and stream events.
         adapter: The shared generation adapter of the endpoint.
+        options: The adapter's provider options.
         models: The modules of the endpoint's response and event models.
+        params: The modules of the endpoint's request parameter models.
     """
 
     name: str
@@ -81,7 +122,9 @@ class Case:
     documented: dict[str, str]
     examples: tuple[list[dict[str, Any]], list[dict[str, Any]]]
     adapter: ICompositeAdapter[GenerationRequest, Any, Any, Any, Any]
+    options: type
     models: tuple[ModuleType, ...]
+    params: tuple[ModuleType, ...]
 
 
 OPENAI = Case(
@@ -117,13 +160,30 @@ OPENAI = Case(
         "store": False,
         "temperature": 0.5,
         "top_p": 0.9,
+        "include": ["reasoning.encrypted_content"],
+        "max_tool_calls": 3,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Current weather",
+                "parameters": {"type": "object", "properties": {}},
+                "strict": None,
+            }
+        ],
+        "tool_choice": {"type": "function", "name": "get_weather"},
+        "parallel_tool_calls": False,
     },
     response=Response,
     events=TypeAdapter(ResponseStreamEvent),
     documented={},
     examples=([openai.RESPONSE], openai.STREAM),
     adapter=OpenAIGenerationAdapter(),
-    models=(openai_responses, openai_events),
+    options=OpenAIGenerationOptions,
+    models=modules(
+        "aiollm.providers.openai.types", skip=frozenset({"options"})
+    ),
+    params=modules("aiollm.providers.openai.methods.params"),
 )
 
 ANTHROPIC = Case(
@@ -149,6 +209,19 @@ ANTHROPIC = Case(
         },
         "thinking": {"type": "adaptive", "display": "summarized"},
         "stop_sequences": ["END"],
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Current weather",
+                "input_schema": {"type": "object", "properties": {}},
+                "strict": True,
+            }
+        ],
+        "tool_choice": {
+            "type": "tool",
+            "name": "get_weather",
+            "disable_parallel_tool_use": True,
+        },
     },
     response=Message,
     events=TypeAdapter(MessageStreamEvent),
@@ -158,7 +231,11 @@ ANTHROPIC = Case(
     },
     examples=([anthropic.MESSAGE], anthropic.STREAM),
     adapter=AnthropicGenerationAdapter(),
-    models=(anthropic_messages, anthropic_events),
+    options=AnthropicGenerationOptions,
+    models=modules(
+        "aiollm.providers.anthropic.types", skip=frozenset({"options"})
+    ),
+    params=modules("aiollm.providers.anthropic.methods.params"),
 )
 
 CASES = [pytest.param(case, id=case.name) for case in (OPENAI, ANTHROPIC)]
@@ -271,13 +348,39 @@ def test_the_snapshot_has_examples() -> None:
         assert entry["events"] == len(examples(case, "events.json"))
 
 
+FULL_REQUEST = GenerationRequest(
+    model="m",
+    input="Hi",
+    instructions="Be brief",
+    max_output_tokens=64,
+    effort=Effort.HIGH,
+    output_schema={"type": "object"},
+    end_user_id="u-1",
+    tools=[Tool(name="f", parameters={"type": "object"})],
+    tool_choice=ToolChoice.REQUIRED,
+    parallel_tool_calls=False,
+)
+"""A shared request with every field set."""
+
+
 @pytest.mark.parametrize("case", CASES)
-def test_the_full_request_sets_every_field(case: Case) -> None:
+def test_the_full_request_sets_every_field_the_library_sends(
+    case: Case,
+) -> None:
+    # The methods take every field of the provider's schema (checked
+    # below); the full request covers the ones the shared adapter and the
+    # provider options fill, so the body checks see each of them.
+    adapter: Any = case.adapter
+    sent = {
+        name
+        for name, value in adapter._fields(FULL_REQUEST).items()
+        if value is not MISSING
+    }
     method = case.create(**case.request)
 
-    assert method.model_fields_set == set(type(method).model_fields) - {
-        "stream"
-    }
+    assert sent | get_type_hints(case.options).keys() <= (
+        method.model_fields_set
+    )
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -331,6 +434,79 @@ def test_shared_conversation_passes_the_request_schema(case: Case) -> None:
     ):
         body = json.loads(json.dumps(method.get_body_map()))
         assert errors(schema, body) == []
+
+
+@pytest.mark.parametrize("native", [True, False], ids=["native", "shared"])
+@pytest.mark.parametrize("case", CASES)
+def test_a_tool_loop_passes_the_request_schema(
+    case: Case, native: bool
+) -> None:
+    # The response's own output (or, from another provider, the shared
+    # calls) and the results that follow it make a valid body, so the
+    # second request of a loop is what the provider takes.
+    adapter: Any = case.adapter
+    called = adapter.to_response(
+        case.response.model_validate(LOOP[case.name]), CONVERSATION
+    )
+    turn = called.to_turn()
+    assert isinstance(turn, ToolCallTurn)
+    if not native:
+        turn = turn.model_copy(update={"native": MISSING})
+    request = GenerationRequest(
+        model="model-1",
+        input=[
+            Turn.user("Weather in Paris?"),
+            turn,
+            ToolResult(call_id=turn.tool_calls[0].id, output="15 C"),
+            Turn.user("And in short?"),
+        ],
+        tools=[Tool(name="get_weather", parameters={"type": "object"})],
+    )
+    schema = validator(case, "request.schema.json")
+
+    body = json.loads(json.dumps(adapter.to_method(request).get_body_map()))
+
+    assert errors(schema, body) == []
+
+
+LOOP: Final = {
+    "openai/responses": openai.RESPONSE
+    | {
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [],
+                "encrypted_content": "gAAAA",
+            },
+            openai.MESSAGE,
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ]
+    },
+    "anthropic/messages": anthropic.MESSAGE
+    | {
+        "content": [
+            {"type": "thinking", "thinking": "Weather.", "signature": "sig"},
+            {"type": "text", "text": "Checking.", "citations": None},
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "get_weather",
+                "input": {"city": "Paris"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "stop_details": None,
+    },
+}
+"""A response of each provider that calls a tool, with reasoning."""
 
 
 def request_definition(
@@ -489,7 +665,11 @@ def test_documented_responses_parse(case: Case) -> None:
     for body in examples(case, "responses.json"):
         model = case.response.model_validate(body)
         assert isinstance(model, Response | Message)
-        text = model.output_text if isinstance(model, Response) else model.text
+        text = (
+            output_text(model)
+            if isinstance(model, Response)
+            else message_text(model)
+        )
 
         assert model.id == body["id"]
         assert model.model == body["model"]
@@ -572,21 +752,31 @@ def test_hand_written_examples_pass_the_schemas(case: Case) -> None:
         assert errors(event_schema, body) == [], body["type"]
 
 
-def upstream_definitions(name: str) -> dict[str, Any]:
+RESPONSE_FILES: Final = ("response.schema.json", "stream.schema.json")
+"""The upstream schemas of the response and event models."""
+
+REQUEST_FILES: Final = ("request.schema.json",)
+"""The upstream schema of the request parameter models."""
+
+
+def upstream_definitions(
+    name: str, files: tuple[str, ...] = RESPONSE_FILES
+) -> dict[str, Any]:
     """Collect the definitions of an endpoint's upstream schemas.
 
     Args:
         name: Snapshot folder, ``<provider>/<endpoint>``.
+        files: The schemas to read: the response and stream ones, or
+            the request one.
 
     Returns:
-        Every ``$defs`` entry of the response and stream schemas, and
-        each root schema under its ``title`` (such as ``Response``),
-        and every object written inline in a property under
-        ``<Owner>.<property>``.
+        Every ``$defs`` entry of the schemas, and each root schema under
+        its ``title`` (such as ``Response``), and every object written
+        inline in a property under ``<Owner>.<property>``.
     """
     definitions: dict[str, Any] = {}
 
-    for file in ("response.schema.json", "stream.schema.json"):
+    for file in files:
         schema = load(name, file)
         definitions.update(schema.get("$defs", {}))
 
@@ -646,6 +836,10 @@ def allows_null(node: Any, definitions: dict[str, Any]) -> bool:
     if not isinstance(node, dict):
         return False
 
+    constrained = ("type", "anyOf", "oneOf", "allOf", "enum", "const")
+    if not any(key in node for key in constrained):
+        return True  # {} takes any value, null too
+
     kind = node.get("type")
 
     if kind == "null" or (isinstance(kind, list) and "null" in kind):
@@ -658,23 +852,30 @@ def allows_null(node: Any, definitions: dict[str, Any]) -> bool:
     )
 
 
-def provider_models(case: Case) -> Iterator[type[BaseAPIType]]:
-    """Find the response and event models of an endpoint.
+def provider_models(
+    case: Case, *, params: bool = False
+) -> Iterator[type[BaseAPIType]]:
+    """Find the models of an endpoint.
 
     Args:
         case: The endpoint.
+        params: Find the request parameter models instead of the
+            response and event ones.
 
     Yields:
         Every ``BaseAPIType`` subclass defined in the endpoint's model
         modules, except the ``BaseUnknown`` ones, which keep whatever an
-        unknown ``type`` sends.
+        unknown ``type`` sends, and the methods' own parameter mixins,
+        whose fields the method checks cover.
     """
-    for module in case.models:
+    mixins = {*case.create.__mro__, *case.stream.__mro__}
+    for module in case.params if params else case.models:
         for _, model in inspect.getmembers(module, inspect.isclass):
             if (
                 issubclass(model, BaseAPIType)
                 and model.__module__ == module.__name__
                 and not issubclass(model, BaseUnknown)
+                and model not in mixins
             ):
                 yield model
 
@@ -692,34 +893,77 @@ def upstream_names(model: type[BaseAPIType]) -> tuple[str, ...]:
     return (names,) if isinstance(names, str) else tuple(names)
 
 
+def is_constant(annotation: Any, default: Any) -> bool:
+    """Tell a single-value tag that defaults to its one value.
+
+    Such a field (``type: Literal["function"] = "function"``) is always
+    sent, so a schema that requires it is met without the caller.
+
+    Args:
+        annotation: The field's type.
+        default: Its default.
+
+    Returns:
+        Whether the type is a one-value ``Literal`` of the default.
+    """
+    while get_origin(annotation) is Annotated:
+        annotation = get_args(annotation)[0]
+    return get_origin(annotation) is Literal and get_args(annotation) == (
+        default,
+    )
+
+
+SIDES = [pytest.param(False, id="responses"), pytest.param(True, id="params")]
+"""The response and event models, and the request parameter models."""
+
+
+@pytest.mark.parametrize("params", SIDES)
 @pytest.mark.parametrize("case", CASES)
-def test_every_model_names_its_upstream_schema(case: Case) -> None:
-    definitions = upstream_definitions(case.name)
+def test_every_model_names_its_upstream_schema(
+    case: Case, params: bool
+) -> None:
+    definitions = upstream_definitions(
+        case.name, REQUEST_FILES if params else RESPONSE_FILES
+    )
+    models = list(provider_models(case, params=params))
     missing = [
         model.__name__
-        for model in provider_models(case)
+        for model in models
         if "__upstream_schema__" not in model.__dict__
     ]
     unknown = [
         f"{model.__name__}: {name}"
-        for model in provider_models(case)
+        for model in models
         if "__upstream_schema__" in model.__dict__
         for name in upstream_names(model)
         if name not in definitions
     ]
 
+    assert models
     assert not missing, f"set __upstream_schema__ on {missing}"
     assert not unknown, f"no such upstream definition: {unknown}"
 
 
+@pytest.mark.parametrize("params", SIDES)
 @pytest.mark.parametrize("case", CASES)
-def test_models_accept_what_upstream_allows(case: Case) -> None:
+def test_models_accept_what_upstream_allows(case: Case, params: bool) -> None:
     # Validation of examples sees only the values the docs happen to
     # show; this compares every modeled field with the schema itself.
-    definitions = upstream_definitions(case.name)
+    # A response field may only be laxer than the schema, to read what
+    # is sent; a request field follows it both ways: None only where null
+    # is allowed, required only where it is.
+    files = REQUEST_FILES if params else RESPONSE_FILES
+    definitions = upstream_definitions(case.name, files)
+    # upstream_definitions reads a nullable object as the object; its
+    # null is read from the definitions as they are.
+    nullable = {
+        name: definition
+        for file in files
+        for name, definition in load(case.name, file).get("$defs", {}).items()
+    }
     problems: list[str] = []
 
-    for model in provider_models(case):
+    for model in provider_models(case, params=params):
         for name in upstream_names(model):
             definition = resolve(definitions[name], definitions)
             properties = definition.get("properties", {})
@@ -733,13 +977,25 @@ def test_models_accept_what_upstream_allows(case: Case) -> None:
                     problems.append(f"{where}: not in the upstream schema")
                     continue
 
-                if allows_null(properties[wire], definitions) and not (
-                    field.annotation is Any
-                    or type(None) in get_args(field.annotation)
-                ):
+                takes_none = field.annotation is Any or type(None) in get_args(
+                    field.annotation
+                )
+                null = allows_null(
+                    properties[wire], nullable if params else definitions
+                )
+                if null and not takes_none:
                     problems.append(f"{where}: upstream allows null")
+                if params and takes_none and not null:
+                    problems.append(f"{where}: upstream takes no null")
 
                 if wire not in required and field.is_required():
                     problems.append(f"{where}: optional upstream")
+                if (
+                    params
+                    and wire in required
+                    and not field.is_required()
+                    and not is_constant(field.annotation, field.default)
+                ):
+                    problems.append(f"{where}: required upstream")
 
     assert not problems, "\n".join(problems)

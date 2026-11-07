@@ -95,6 +95,7 @@ nav:
       - Sessions: guide/sessions.md
       - Providers: guide/providers.md
       - Shared generation: guide/generation.md
+      - Tools: guide/tools.md
       - Resources and use cases: guide/resources.md
       - Extending: guide/extending.md
       - Design: guide/design.md

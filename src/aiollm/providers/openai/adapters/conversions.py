@@ -2,21 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, TypeIs
+
+from pydantic import MISSING
 
 from aiollm.adapters.base import BaseConversion
 from aiollm.adapters.stop import Stop
-from aiollm.enums import IncompleteReason
+from aiollm.enums import IncompleteReason, Role
 from aiollm.http.exceptions.response import APIResponseError
-from aiollm.providers.openai.types.responses import (
+from aiollm.providers.openai.api import PROVIDER
+from aiollm.providers.openai.types import (
+    FunctionToolCall,
     OutputMessage,
-    OutputRefusal,
+    OutputTextContent,
+    ReasoningItem,
+    RefusalContent,
     Response,
     ResponseUsage,
 )
-from aiollm.types.requests.generation import Turn
-from aiollm.types.responses.generation import TokenUsage
+from aiollm.types.requests.generation import (
+    InputItem,
+    NativeOutput,
+    ToolCallTurn,
+    Turn,
+)
+from aiollm.types.responses.generation import TokenUsage, ToolCall
 
 INCOMPLETE_REASONS: Final[Mapping[str, IncompleteReason]] = {
     "max_output_tokens": IncompleteReason.MAX_TOKENS,
@@ -29,31 +40,66 @@ none at all, a reason OpenAI adds later) is ``IncompleteReason.OTHER``.
 
 
 class InputConversion(
-    BaseConversion[str | list[Turn], str | list[dict[str, Any]]],
+    BaseConversion[str | Sequence[InputItem], str | list[dict[str, Any]]],
 ):
     """Converts the shared ``input`` into OpenAI's ``input``.
 
-    A text is sent as it is; a list of turns as ``EasyInputMessage``
-    items (``role``, ``content``).
+    A text is sent as it is. In a list, a text turn becomes an
+    ``EasyInputMessage`` (``role``, ``content``), a turn of calls its
+    OpenAI output items when it has them (``native``, reasoning items
+    with it), else an ``assistant`` message with its text and a
+    ``function_call`` per call, and a tool result a
+    ``function_call_output``.
     """
 
     def __call__(
-        self, source: str | list[Turn], /
+        self, source: str | Sequence[InputItem], /
     ) -> str | list[dict[str, Any]]:
         """Convert the input.
 
         Args:
-            source: The text or the turns of the shared request.
+            source: The text or the conversation of the shared request.
 
         Returns:
-            The text, or one input item per turn.
+            The text, or the input items.
         """
         if isinstance(source, str):
             return source
-        return [
-            {"role": turn.role.value, "content": turn.content}
-            for turn in source
-        ]
+        items: list[dict[str, Any]] = []
+        for item in source:
+            match item:
+                case Turn():
+                    items.append(
+                        {"role": item.role.value, "content": item.content}
+                    )
+                case ToolCallTurn() if _own(item.native):
+                    items += [dict(native) for native in item.native.items]
+                case ToolCallTurn():
+                    if item.text is not MISSING:
+                        items.append(
+                            {
+                                "role": Role.ASSISTANT.value,
+                                "content": item.text,
+                            }
+                        )
+                    items += [
+                        {
+                            "type": "function_call",
+                            "call_id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        }
+                        for call in item.tool_calls
+                    ]
+                case _:
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item.call_id,
+                            "output": item.output,
+                        }
+                    )
+        return items
 
 
 class UsageConversion(BaseConversion[ResponseUsage, TokenUsage]):
@@ -74,13 +120,9 @@ class UsageConversion(BaseConversion[ResponseUsage, TokenUsage]):
             input_tokens=source.input_tokens,
             output_tokens=source.output_tokens,
             total_tokens=source.total_tokens,
-            cache_read_tokens=None if inputs is None else inputs.cached_tokens,
-            cache_write_tokens=(
-                None if inputs is None else inputs.cache_write_tokens
-            ),
-            reasoning_tokens=(
-                None if outputs is None else outputs.reasoning_tokens
-            ),
+            cache_read_tokens=inputs.cached_tokens,
+            cache_write_tokens=inputs.cache_write_tokens,
+            reasoning_tokens=outputs.reasoning_tokens,
         )
 
 
@@ -126,7 +168,7 @@ def _refusal(response: Response) -> str | None:
         for item in response.output
         if isinstance(item, OutputMessage)
         for part in item.content
-        if isinstance(part, OutputRefusal)
+        if isinstance(part, RefusalContent)
     ]
     return "".join(parts) if parts else None
 
@@ -168,6 +210,97 @@ def _incomplete_reason(response: Response) -> IncompleteReason | None:
         return None
     reason = _raw_incomplete_reason(response)
     return INCOMPLETE_REASONS.get(reason or "", IncompleteReason.OTHER)
+
+
+def output_text(response: Response) -> str | None:
+    """Join the text of all output messages.
+
+    The Responses API sends no such field: its schema names
+    ``output_text`` as a property the SDKs compute, so ``Response``
+    reads it as ``None``. It is collected here the way the SDKs do,
+    from the ``output_text`` parts of the ``message`` items.
+
+    Args:
+        response: A response.
+
+    Returns:
+        The joined text, or ``None`` if the output has no text part.
+    """
+    parts = [
+        part.text
+        for item in response.output
+        if isinstance(item, OutputMessage)
+        for part in item.content
+        if isinstance(part, OutputTextContent)
+    ]
+    return "".join(parts) if parts else None
+
+
+def tool_calls(response: Response) -> list[ToolCall]:
+    """Collect the function calls of a response.
+
+    Args:
+        response: A response.
+
+    Returns:
+        A shared call per ``function_call`` item, in output order, with
+        its ``call_id``; empty without calls.
+    """
+    return [
+        ToolCall(id=item.call_id, name=item.name, arguments=item.arguments)
+        for item in response.output
+        if isinstance(item, FunctionToolCall)
+    ]
+
+
+def _own(native: NativeOutput | MISSING) -> TypeIs[NativeOutput]:
+    """Tell OpenAI's own output from another provider's or none.
+
+    Args:
+        native: The ``native`` of a turn of calls.
+
+    Returns:
+        Whether it is OpenAI's output, to be sent in place of the turn.
+    """
+    return native is not MISSING and native.provider is PROVIDER
+
+
+def native_output(response: Response) -> NativeOutput | None:
+    """Keep a response's output as OpenAI's next request takes it.
+
+    Args:
+        response: A response.
+
+    Returns:
+        Its output items with only the fields OpenAI sent, which are
+        valid input items (reasoning items with their ``id`` or
+        ``encrypted_content``, function calls, messages); ``None``
+        without output.
+    """
+    items = [
+        item.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        for item in response.output
+    ]
+    return NativeOutput(provider=PROVIDER, items=items) if items else None
+
+
+def reasoning_summary(response: Response) -> str | None:
+    """Join the summaries of all reasoning items.
+
+    Args:
+        response: A response.
+
+    Returns:
+        The joined summaries, or ``None`` if there are none (the
+        request did not ask for them).
+    """
+    summary = "".join(
+        part.text
+        for item in response.output
+        if isinstance(item, ReasoningItem)
+        for part in item.summary
+    )
+    return summary or None
 
 
 def check_status(response: Response) -> None:

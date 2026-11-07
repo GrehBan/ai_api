@@ -19,18 +19,19 @@ async def list_models() -> ModelList:
 
 ## OpenAI Responses API
 
-`aiollm.providers.openai.methods` has `CreateResponse` and `StreamResponse` for `POST /v1/responses`, with OpenAI's own types in `aiollm.providers.openai.types`:
+`aiollm.providers.openai.methods` has `CreateResponse` and `StreamResponse` for `POST /v1/responses`. Their request fields come from `aiollm.providers.openai.methods.params` and OpenAI's response and event types from `aiollm.providers.openai.types`; both are generated from OpenAI's official OpenAPI file (see [Provider types](#provider-types)):
 
 ```python title="openai_responses.py"
+from aiollm.providers.openai.adapters import output_text
 from aiollm.providers.openai.methods import CreateResponse, StreamResponse
-from aiollm.providers.openai.types import OutputTextDeltaEvent
+from aiollm.providers.openai.types import ResponseTextDeltaEvent
 
 
 async def ask(client: OpenAIClient) -> str | None:
     response = await client.send_request(
         CreateResponse(model="gpt-6-astra", input="Hi", instructions="Be brief")
     )
-    return response.output_text
+    return output_text(response)
 
 
 async def ask_streamed(client: OpenAIClient) -> str:
@@ -39,27 +40,29 @@ async def ask_streamed(client: OpenAIClient) -> str:
 
     async with client.stream(method) as events:
         async for event in events:
-            if isinstance(event, OutputTextDeltaEvent):
+            if isinstance(event, ResponseTextDeltaEvent):
                 text += event.delta
 
     return text
 ```
 
-- **`output_text` is computed.** The API sends no such field; like the official SDKs, `Response.output_text` joins the `output_text` parts of the `message` items, and is `None` when there are none.
-- **Nothing unknown is dropped or rejected.** Output items, content parts and stream events that the library does not model yet (reasoning, tool calls, new event types) arrive as `UnknownOutputItem`, `UnknownContent` and `UnknownEvent`, with every field the provider sent kept as an extra field.
+- **Text is joined by `output_text`.** The API sends no text field: OpenAI's schema names `Response.output_text` as a property the SDKs compute, so it reads as `None`. `output_text(response)` (`aiollm.providers.openai.adapters`) joins the `output_text` parts of the `message` items, as the SDKs do, and `reasoning_summary(response)` the reasoning summaries.
+- **Nothing unknown is dropped or rejected.** An output item, content part or stream event of a type the schema does not name yet arrives as `UnknownVariant` (`aiollm.providers.openai.types.shared`), with every field the provider sent kept.
 - **Failures are raised.** A `failed` response, buffered (`CreateResponse`) or as the stream's `response.failed` event, raises the `APIStatusError` that `OpenAIErrorResolver` builds from `response.error`, with the `Response` or the event in `raw`; so does the separate `error` event. `server_error` is an `InternalServerError`, `rate_limit_exceeded` a `RateLimitError`; a code without its own class, such as `invalid_prompt`, gives a plain `APIStatusError`. None of them is transient (see [Provider clients](#provider-clients)). This is stricter than the official SDK, which returns a failed response as a value.
-- **Retried like the SDK.** `CreateResponse` and `StreamResponse` set `__retryable__ = True`: a lost connection, a timeout, a 5xx or a 429 with `Retry-After` is retried, a stream only while it opens. `response.incomplete` stays a regular `ResponseStateEvent` with `response.incomplete_details`.
-- **Checked before sending.** `max_output_tokens` of at least 16, `temperature` from 0 to 2, and metadata of up to 16 pairs with keys up to 64 and values up to 512 characters, as OpenAI documents them.
-- **Only what is given is sent.** Every optional field is left out until it is given (it defaults to `MISSING`), and takes `None`, sent as `null`, since OpenAI's schema allows `null` for all of them. See [Optional fields](methods.md#optional-fields-missing-and-none).
+- **Retried like the SDK.** `CreateResponse` and `StreamResponse` set `__retryable__ = True`: a lost connection, a timeout, a 5xx or a 429 with `Retry-After` is retried, a stream only while it opens. `response.incomplete` stays a regular `ResponseIncompleteEvent` with `response.incomplete_details`.
+- **Checked before sending.** Every field follows the schema, and nested data is a model that refuses unknown keys. Dicts are taken and checked too, though type checkers want the models. On top of the schema, `metadata` takes up to 16 pairs with keys up to 64 and values up to 512 characters, limits OpenAI writes only in its description.
+- **Only what is given is sent.** Every optional field is left out until it is given (it defaults to `MISSING`), and takes `None`, sent as `null`, where OpenAI's schema allows `null`. See [Optional fields](methods.md#optional-fields-missing-and-none).
 
 ## Anthropic Messages API
 
-`aiollm.providers.anthropic.methods` has `CreateMessage` and `StreamMessage` for `POST /v1/messages`, with Anthropic's own types in `aiollm.providers.anthropic.types`:
+`aiollm.providers.anthropic.methods` has `CreateMessage` and `StreamMessage` for `POST /v1/messages`, with request fields in `aiollm.providers.anthropic.methods.params` and Anthropic's own types in `aiollm.providers.anthropic.types`, generated from the schemas of the offline documentation snapshot:
 
 ```python title="anthropic_messages.py"
 from aiollm.providers.anthropic import AnthropicClient
+from aiollm.providers.anthropic.adapters import message_text
 from aiollm.providers.anthropic.methods import CreateMessage, StreamMessage
-from aiollm.providers.anthropic.types import ContentBlockDeltaEvent, TextDelta
+from aiollm.providers.anthropic.methods.params import UserMessageParam
+from aiollm.providers.anthropic.types import RawContentBlockDeltaEvent, TextDelta
 
 
 async def ask_claude(client: AnthropicClient) -> str | None:
@@ -68,10 +71,10 @@ async def ask_claude(client: AnthropicClient) -> str | None:
             model="claude-opus-5-5",
             max_tokens=1024,
             system="Be brief",
-            messages=[{"role": "user", "content": "Hi"}],
+            messages=[UserMessageParam(role="user", content="Hi")],
         )
     )
-    return message.text
+    return message_text(message)
 
 
 async def ask_claude_streamed(client: AnthropicClient) -> str:
@@ -79,12 +82,12 @@ async def ask_claude_streamed(client: AnthropicClient) -> str:
     method = StreamMessage(
         model="claude-opus-5-5",
         max_tokens=1024,
-        messages=[{"role": "user", "content": "Hi"}],
+        messages=[UserMessageParam(role="user", content="Hi")],
     )
 
     async with client.stream(method) as events:
         async for event in events:
-            if isinstance(event, ContentBlockDeltaEvent) and isinstance(
+            if isinstance(event, RawContentBlockDeltaEvent) and isinstance(
                 event.delta, TextDelta
             ):
                 text += event.delta.text
@@ -94,7 +97,11 @@ async def ask_claude_streamed(client: AnthropicClient) -> str:
 
 - **Retried like the SDK.** `CreateMessage` and `StreamMessage` set `__retryable__ = True`: a lost connection, a timeout, a 5xx, the 529 `overloaded_error` or a 429 with `Retry-After` is retried, a stream only while it opens.
 - **The version is part of the method.** Both methods send `anthropic-version: 2026-10-21` (`VERSION_HEADERS`), the version their types follow, whatever session sends them. A method of your own for Anthropic sets `__request_headers__ = VERSION_HEADERS` too.
-- **`text` is computed.** `Message.text` joins the `text` blocks of the content, and is `None` when there are none.
-- **Nothing unknown is dropped or rejected.** Content blocks, deltas and stream events the library does not model yet (thinking, tool use, new event types) arrive as `UnknownBlock`, `UnknownDelta` and `UnknownEvent`, with every field kept. The `error` event is raised as an `APIStatusError` chosen by its type, such as `ServiceUnavailableError` for `overloaded_error`; like OpenAI's in-band failures, it is never transient.
-- **Checked before sending.** `max_tokens` is required; `messages` needs at least one turn, and a turn (a `MessageParam`, a `TypedDict`, so dict literals type-check) takes only `role` and `content`; `metadata` takes only `user_id`, up to 512 characters. There are no `temperature`, `top_p` and `top_k`: API version 2026-10-21 rejects them.
-- **Only what is given is sent.** `system`, `metadata` and `stop_sequences` are left out until they are given; Anthropic's schema takes no `null` for them, so they take no `None` either (`metadata.user_id` does).
+- **Text is joined by `message_text`.** `message_text(message)` (`aiollm.providers.anthropic.adapters`) joins the `text` blocks of the content and is `None` without them; `message_thinking(message)` joins the thinking.
+- **Nothing unknown is dropped or rejected.** Content blocks, deltas and stream events of a type the schema does not name (such as `ping`) arrive as `UnknownVariant` (`aiollm.providers.anthropic.types.shared`), with every field kept. The `error` event is raised as an `APIStatusError` chosen by its type, such as `ServiceUnavailableError` for `overloaded_error`; like OpenAI's in-band failures, it is never transient.
+- **Checked before sending.** Every field follows the schema, and nested data is a model that refuses unknown keys. Beyond the schema, which names no limits here, `messages` needs at least one turn, `max_tokens` at least 0 and `metadata.user_id` at most 512 characters (`MessageLimits`). There are no `temperature`, `top_p` and `top_k`: API version 2026-10-21 rejects them.
+- **Only what is given is sent.** An optional field is left out until it is given; it takes `None` only where Anthropic's schema allows `null`.
+
+## Provider types
+
+The provider types and request parameters are generated with aiollm-codegen by `scripts/generate_provider_types.py`: OpenAI's from its official OpenAPI file, Anthropic's from the snapshot of the documentation. Every class names the upstream schema it mirrors in `__upstream_schema__`, and `tests/providers/test_wire_contracts.py` checks each field against it. The method classes in `methods/` stay hand-written: they add what the schema does not say, such as retries, the parsing of a `failed` response and the limits above.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -11,10 +11,14 @@ from typing_extensions import is_typeddict
 
 from aiollm.enums import Role
 from aiollm.exceptions import RequestValidationError
+from aiollm.types.requests.generation import ToolCallTurn, ToolResult, Turn
 
 if TYPE_CHECKING:
     from aiollm.enums import Provider
-    from aiollm.types.requests.generation import GenerationRequest
+    from aiollm.types.requests.generation import (
+        GenerationRequest,
+        InputItem,
+    )
 
 
 def checked_options(
@@ -195,27 +199,72 @@ def request_errors(
         ) from error
 
 
-def check_last_turn(request: GenerationRequest, provider: Provider) -> None:
-    """Check that a conversation ends with a ``user`` turn.
+def check_conversation(request: GenerationRequest, provider: Provider) -> None:
+    """Check the order of a conversation that every provider requires.
 
     Anthropic rejects a last ``assistant`` turn (prefill) on current
-    models, and OpenAI gives it a meaning of its own, so no adapter
-    sends one.
+    models, and OpenAI gives it a meaning of its own, so a conversation
+    ends with a ``user`` turn or a tool result. Both answer 400 to a call
+    without its result and to a result without its call (seen in a live
+    check, 2026-11-06), and Anthropic to results that do not follow
+    their call at once, so the results of a turn of calls come right
+    after it, one per call.
 
     Args:
         request: The shared request.
         provider: Provider the request is for.
 
     Raises:
-        RequestValidationError: ``input`` is a list of turns whose last
-            turn is not a ``user`` one.
+        RequestValidationError: ``input`` breaks one of these rules.
     """
     if isinstance(request.input, str):
         return
+
+    problem = _order_problem(request.input)
     last = request.input[-1]
-    if last.role is not Role.USER:
-        message = (
-            f"the last turn must be a {Role.USER.value!r} turn, "
-            f"got {last.role.value!r}"
+    if (
+        problem is None
+        and isinstance(last, Turn)
+        and last.role is not Role.USER
+    ):
+        problem = (
+            f"the last turn must be a {Role.USER.value!r} turn or a tool "
+            f"result, got {last.role.value!r}"
         )
-        raise RequestValidationError(message, provider=provider, field="input")
+    if problem is not None:
+        raise RequestValidationError(problem, provider=provider, field="input")
+
+
+def _order_problem(items: Sequence[InputItem]) -> str | None:
+    """Find the first item out of order between calls and results.
+
+    Args:
+        items: The conversation.
+
+    Returns:
+        What is wrong, or ``None`` if every turn of calls is followed at
+        once by one result per call and no result stands elsewhere.
+    """
+    open_calls: set[str] = set()
+    for index, item in enumerate(items):
+        if isinstance(item, ToolResult):
+            if item.call_id not in open_calls:
+                return (
+                    f"item {index} answers tool call {item.call_id!r}, "
+                    "which the turn of calls before it did not make"
+                )
+            open_calls.discard(item.call_id)
+            continue
+        if open_calls:
+            return (
+                f"item {index} comes before the results of tool calls "
+                f"{sorted(open_calls)}"
+            )
+        if isinstance(item, ToolCallTurn):
+            ids = [call.id for call in item.tool_calls]
+            if len(set(ids)) != len(ids):
+                return f"item {index} has tool calls that share an id"
+            open_calls = set(ids)
+    if open_calls:
+        return f"tool calls {sorted(open_calls)} have no result"
+    return None

@@ -14,27 +14,30 @@ from pydantic import ValidationError
 
 from aiollm.http.exceptions.status import ServiceUnavailableError
 from aiollm.providers.anthropic import API_VERSION, AnthropicErrorResolver
+from aiollm.providers.anthropic.adapters.conversions import (
+    message_text,
+    message_thinking,
+)
 from aiollm.providers.anthropic.methods import (
     VERSION_HEADERS,
     CreateMessage,
     StreamMessage,
 )
 from aiollm.providers.anthropic.types import (
-    ContentBlockDeltaEvent,
-    ContentBlockStartEvent,
-    ContentBlockStopEvent,
+    InputJSONDelta,
     Message,
-    MessageDeltaEvent,
-    MessageStartEvent,
-    MessageStopEvent,
-    PingEvent,
+    RawContentBlockDeltaEvent,
+    RawContentBlockStartEvent,
+    RawContentBlockStopEvent,
+    RawMessageDeltaEvent,
+    RawMessageStartEvent,
+    RawMessageStopEvent,
+    RedactedThinkingBlock,
     TextBlock,
     TextDelta,
     ThinkingBlock,
-    UnknownBlock,
-    UnknownDelta,
-    UnknownEvent,
 )
+from aiollm.providers.anthropic.types.shared import UnknownVariant
 from aiollm.session.aiohttp import AiohttpSession
 from tests.conftest import (
     FakeStreamResponse,
@@ -166,13 +169,10 @@ def test_message_reads_the_reference_example() -> None:
     message = Message.model_validate(MESSAGE)
 
     assert message.id == MESSAGE["id"]
-    assert message.content == [
-        TextBlock(
-            text="Hi! My name is Claude.",
-            citations=MESSAGE["content"][0]["citations"],
-        )
-    ]
-    assert message.text == "Hi! My name is Claude."
+    (block,) = message.content
+    assert isinstance(block, TextBlock)
+    assert block.text == "Hi! My name is Claude."
+    assert message_text(message) == "Hi! My name is Claude."
     assert message.stop_reason == "end_turn"
     assert message.stop_details is not None
     assert message.stop_details.category == "cyber"
@@ -181,7 +181,7 @@ def test_message_reads_the_reference_example() -> None:
 
 
 def test_message_keeps_unknown_blocks_whole() -> None:
-    redacted = {"type": "redacted_thinking", "data": "EmwK..."}
+    redacted = {"type": "future_block", "data": "EmwK..."}
     message = Message.model_validate(
         MESSAGE
         | {
@@ -194,10 +194,25 @@ def test_message_keeps_unknown_blocks_whole() -> None:
     )
 
     block = message.content[1]
-    assert isinstance(block, UnknownBlock)
+    assert isinstance(block, UnknownVariant)
     assert block.model_dump() == redacted
-    assert message.text == "Hello"
-    assert message.thinking is None
+    assert message_text(message) == "Hello"
+    assert message_thinking(message) is None
+
+
+def test_redacted_thinking_is_no_summary() -> None:
+    message = Message.model_validate(
+        MESSAGE
+        | {
+            "content": [
+                {"type": "redacted_thinking", "data": "EmwK..."},
+                {"type": "text", "text": "Hi"},
+            ]
+        }
+    )
+
+    assert isinstance(message.content[0], RedactedThinkingBlock)
+    assert message_thinking(message) is None
 
 
 def test_thinking_blocks_are_joined_and_empty_ones_dropped() -> None:
@@ -216,14 +231,14 @@ def test_thinking_blocks_are_joined_and_empty_ones_dropped() -> None:
     )
 
     assert isinstance(message.content[1], ThinkingBlock)
-    assert message.thinking == "Let me think"
-    assert message.text == "Hi"
+    assert message_thinking(message) == "Let me think"
+    assert message_text(message) == "Hi"
 
 
 def test_message_without_text_has_no_text() -> None:
     message = Message.model_validate(MESSAGE | {"content": []})
 
-    assert message.text is None
+    assert message_text(message) is None
 
 
 def test_a_block_without_a_type_is_rejected() -> None:
@@ -247,7 +262,7 @@ async def test_create_message_sends_the_version_and_parses(
         )
     )
 
-    assert message.text == "Hi! My name is Claude."
+    assert message_text(message) == "Hi! My name is Claude."
     assert recorder.last.method == "POST"
     assert recorder.last.raw_path == "/v1/messages"
     assert recorder.last.headers["anthropic-version"] == API_VERSION
@@ -282,28 +297,28 @@ async def test_stream_message_yields_typed_events(
         received = [event async for event in events]
 
     assert [type(event) for event in received] == [
-        MessageStartEvent,
-        ContentBlockStartEvent,
-        PingEvent,
-        ContentBlockDeltaEvent,
-        ContentBlockDeltaEvent,
-        ContentBlockStopEvent,
-        MessageDeltaEvent,
-        MessageStopEvent,
+        RawMessageStartEvent,
+        RawContentBlockStartEvent,
+        UnknownVariant,
+        RawContentBlockDeltaEvent,
+        RawContentBlockDeltaEvent,
+        RawContentBlockStopEvent,
+        RawMessageDeltaEvent,
+        RawMessageStopEvent,
     ]
     assert json.loads(recorder.last.body) == request(stream=True)
     assert recorder.last.headers["anthropic-version"] == API_VERSION
 
     start = received[0]
-    assert isinstance(start, MessageStartEvent)
+    assert isinstance(start, RawMessageStartEvent)
     assert start.message.usage.input_tokens == 25
     delta = received[3]
-    assert isinstance(delta, ContentBlockDeltaEvent)
-    assert delta.delta == TextDelta(text="Hello")
+    assert isinstance(delta, RawContentBlockDeltaEvent)
+    assert isinstance(delta.delta, TextDelta)
+    assert delta.delta.text == "Hello"
     end = received[6]
-    assert isinstance(end, MessageDeltaEvent)
+    assert isinstance(end, RawMessageDeltaEvent)
     assert end.delta.stop_reason == "end_turn"
-    assert end.usage is not None
     assert end.usage.output_tokens == 15
 
 
@@ -316,18 +331,19 @@ async def test_unknown_deltas_and_events_are_kept_whole() -> None:
             "partial_json": '{"location": "San Fra',
         },
     }
-    new_event = {"type": "message_checkpoint", "id": "c-1"}
-    no_usage = {
-        "type": "message_delta",
-        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+    future_delta = {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "future_delta", "value": 1},
     }
+    new_event = {"type": "message_checkpoint", "id": "c-1"}
     transport = FakeTransport(
         stream_responses=[
             FakeStreamResponse(
                 [
                     frame(tool_delta),
+                    frame(future_delta),
                     frame(new_event),
-                    frame(no_usage),
                     frame({"type": "message_stop"}),
                 ],
                 headers=SSE,
@@ -337,15 +353,15 @@ async def test_unknown_deltas_and_events_are_kept_whole() -> None:
     )
 
     async with transport.stream(StreamMessage(**request())) as events:
-        delta, unknown, end, _ = [event async for event in events]
+        delta, future, unknown, _ = [event async for event in events]
 
-    assert isinstance(delta, ContentBlockDeltaEvent)
-    assert isinstance(delta.delta, UnknownDelta)
-    assert delta.delta.model_dump() == tool_delta["delta"]
-    assert isinstance(unknown, UnknownEvent)
+    assert isinstance(delta, RawContentBlockDeltaEvent)
+    assert isinstance(delta.delta, InputJSONDelta)
+    assert isinstance(future, RawContentBlockDeltaEvent)
+    assert isinstance(future.delta, UnknownVariant)
+    assert future.delta.model_dump() == future_delta["delta"]
+    assert isinstance(unknown, UnknownVariant)
     assert unknown.model_dump() == new_event
-    assert isinstance(end, MessageDeltaEvent)
-    assert end.usage is None
 
 
 async def test_error_event_raises_by_its_type() -> None:
@@ -377,7 +393,6 @@ async def test_error_event_raises_by_its_type() -> None:
         {"metadata": {"user_id": "u", "team": "t"}},
         {"metadata": {"user_id": "u" * 513}},
         {"messages": []},
-        {"messages": [{"role": "system", "content": "x"}]},
         {"messages": [{"role": "user", "content": "x", "name": "n"}]},
         {"max_tokens": -1},
     ],
@@ -386,7 +401,6 @@ async def test_error_event_raises_by_its_type() -> None:
         "metadata-key",
         "user-id-length",
         "no-messages",
-        "role",
         "message-field",
         "max-tokens",
     ],
