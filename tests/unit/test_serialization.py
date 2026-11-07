@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import Field
+from pydantic import AnyUrl, Field, HttpUrl, TypeAdapter
+from pydantic_core import MultiHostUrl, Url
 
 from aiollm.serialization.json import dumps, loads
 from aiollm.serialization.normalize import BodyNormalizer
@@ -99,6 +100,25 @@ def test_none_is_kept_as_null(normalizer: BodyNormalizer) -> None:
         "b": {"c": None, "d": 1},
         "e": [None, 2, {"f": None}],
         "g": [None],
+    }
+
+
+def test_urls_are_sent_as_their_text(normalizer: BodyNormalizer) -> None:
+    # A generated parameter types a URL as AnyUrl, which no JSON encoder
+    # writes; a data: URL comes back as it was given.
+    data = "data:image/png;base64,iVBORw0K+/="
+    body = {
+        "any": TypeAdapter(AnyUrl).validate_python(data),
+        "http": [TypeAdapter(HttpUrl).validate_python("https://a.io/x")],
+        "core": Url("https://a.io/y"),
+        "hosts": MultiHostUrl("postgres://a:1,b:2/db"),
+    }
+
+    assert normalizer.normalize_mapping(body, ISO) == {
+        "any": data,
+        "http": ["https://a.io/x"],
+        "core": "https://a.io/y",
+        "hosts": "postgres://a:1,b:2/db",
     }
 
 
