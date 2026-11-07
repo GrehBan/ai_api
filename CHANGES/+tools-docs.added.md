@@ -1,1 +1,0 @@
-The guide has a [Tools](https://grehban.github.io/aiollm/guide/tools/) page: a tool loop that works with any provider, how calls, results and reasoning travel, and streaming; the shared generation, design and providers pages and `docs/unification.md` describe tools and the generated provider types.

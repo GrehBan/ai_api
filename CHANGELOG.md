@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- towncrier release notes start -->
 
+## [0.10.0] - 2026-11-07
+
+### Added
+
+- A conversation can carry a tool loop: `GenerationRequest.input` takes
+  `ToolCallTurn`s (the model's calls, with its text) and `ToolResult`s
+  (`call_id`, `output`) next to `Turn`s, as `InputItem`s.
+  `GenerationResponse.to_turn()` gives a `ToolCallTurn` for a response with
+  calls, holding the response's own output in `native`
+  (`GenerationResponse.native`), so the provider gets its reasoning back
+  (OpenAI's reasoning items, Anthropic's signed thinking); another provider
+  gets the shared calls. Every adapter refuses a conversation out of order (a
+  call without its result, a result without its call, text between them) before
+  sending, and Anthropic's adapter calls whose arguments are not a JSON object.
+- The guide has a [Tools](https://grehban.github.io/aiollm/guide/tools/) page:
+  a tool loop that works with any provider, how calls, results and reasoning
+  travel, and streaming; the shared generation, design and providers pages and
+  `docs/unification.md` describe tools and the generated provider types.
+- `GenerationRequest` and `client.generation.create()` / `stream()` take
+  `tools` (a list of `Tool`: name, description, JSON Schema `parameters`,
+  `strict`), `tool_choice` (a `ToolChoice`: `AUTO`, `NONE`, `REQUIRED`, or a
+  `ForcedTool` naming one tool) and `parallel_tool_calls`, sent to OpenAI as
+  function tools and to Anthropic as custom tools; settings no provider takes
+  (a choice without tools, a forced tool that is not one of them, duplicate
+  names, parallel calls with `NONE`) are refused before sending. OpenAI's
+  provider options gain `include` and `max_tool_calls`.
+- `GenerationResponse.tool_calls` and `CompletedEvent.tool_calls` list the
+  model's calls of the request's tools as `ToolCall`s (`id`, `name`,
+  `arguments` as JSON text; `parse_arguments()` gives the object and raises
+  `ValueError` for text that is not one), from OpenAI's `function_call` items
+  and Anthropic's `tool_use` blocks, buffered or streamed.
+  `output_text`/`reasoning_summary`/`tool_calls` (OpenAI) and
+  `message_text`/`message_thinking`/`message_tool_calls` (Anthropic) do the
+  same for the providers' own responses.
+- `client.generation.stream()` yields `ToolCallStartEvent` (`call_id`, `name`),
+  `ToolCallDeltaEvent` (a piece of the arguments) and `ToolCallDoneEvent` (the
+  whole `ToolCall`, before the response ends) for each tool call, from OpenAI's
+  function call items and Anthropic's `tool_use` blocks. `CompletedEvent`
+  carries `native`, the stream's own output put together from its events
+  (Anthropic's thinking with its signature among it), and `to_turn()`, so a
+  streamed tool loop continues as a buffered one does.
+
+### Changed
+
+- **Breaking:** OpenAI's and Anthropic's own types are now generated from their
+  schemas (OpenAI's official OpenAPI file, Anthropic's documentation snapshot)
+  and cover the whole of each endpoint: every output item, content block, tool
+  and stream event the schema names, with request parameters in the new
+  `aiollm.providers.openai.methods.params` and
+  `aiollm.providers.anthropic.methods.params`. Names follow the schemas, so
+  code that imports provider types migrates: OpenAI `OutputText` →
+  `OutputTextContent`, `OutputRefusal` → `RefusalContent`,
+  `OutputTextDeltaEvent` → `ResponseTextDeltaEvent`, `ResponseStateEvent` →
+  `ResponseCompletedEvent`, `ResponseIncompleteEvent` and the others of its
+  kind, `UnknownOutputItem`, `UnknownContent` and `UnknownEvent` →
+  `UnknownVariant`; Anthropic `MessageStartEvent`, `ContentBlockDeltaEvent` and
+  the other events → `RawMessageStartEvent`, `RawContentBlockDeltaEvent`, ...,
+  `MessageDelta` → `Delta`, `StopDetails` → `RefusalStopDetails`,
+  `UnknownBlock`, `UnknownDelta` and `UnknownEvent` → `UnknownVariant`, and a
+  `ping` is an `UnknownVariant`; `MessageParam`, `ResponseParams`, `Reasoning`,
+  `TextConfig` and the other request `TypedDict`s give way to the generated
+  models, which take dicts at run time and refuse unknown keys.
+  `Response.output_text`, `Response.reasoning_summary`, `Message.text` and
+  `Message.thinking` are gone: OpenAI's `output_text` is a schema field the API
+  leaves out, so use `output_text()` and `reasoning_summary()` from
+  `aiollm.providers.openai.adapters` and `message_text()` and
+  `message_thinking()` from `aiollm.providers.anthropic.adapters`. The types
+  follow the schemas strictly: OpenAI's `usage` needs its
+  `input_tokens_details` and `output_tokens_details` and an `output_text` part
+  its `annotations` and `logprobs`, Anthropic's `message_delta` its `usage`,
+  and an Anthropic turn may be a `system` one. The early checks the schemas do
+  not state stay: OpenAI's `metadata` limits, and Anthropic's at least one
+  turn, `max_tokens` from 0 and `metadata.user_id` up to 512 characters.
+- **Breaking:** `Turn` has a `type` field (`"text"`), which shows in its `repr`
+  and `model_dump()`; a dict without `type` still reads as a `Turn`.
+  `GenerationResponse.to_turn()` returns `Turn | ToolCallTurn` and raises
+  `ValueError` for a response with calls that stopped early. The adapters'
+  `input_conversion` takes a list of `InputItem`s instead of `Turn`s, so a
+  custom conversion handles the new items; `GenerationRequest.input` and the
+  `input` of `create()` / `stream()` are typed `str | Sequence[InputItem]`, so
+  a `list[Turn]` still type-checks. `ToolCall` moved to `aiollm.types.requests`
+  (it is still in `aiollm`).
+- An Anthropic message that stops with `stop_reason: "tool_use"` now finishes
+  normally: `incomplete_reason` and `raw_incomplete_reason` are `None`, as for
+  a `completed` OpenAI response with function calls, since the model is waiting
+  for the tool results.
+
 ## [0.9.0] - 2026-11-05
 
 ### Added
@@ -1019,7 +1106,8 @@ new locations:
 | `ai_api.providers.openai.client.api.openai` | `ai_api.providers.openai.api` |
 | `ai_api.providers.openai.client.exceptions.error_resolver.openai` | `ai_api.providers.openai.resolver` |
 
-[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/GrehBan/aiollm/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/GrehBan/aiollm/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/GrehBan/aiollm/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/GrehBan/aiollm/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/GrehBan/aiollm/compare/v0.6.0...v0.7.0
