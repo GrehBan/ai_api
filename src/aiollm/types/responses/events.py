@@ -105,10 +105,16 @@ class ToolCallDeltaEvent[RawT](RawResponseEvent[RawT]):
 
 
 class ToolCallDoneEvent[RawT](RawResponseEvent[RawT]):
-    """A tool call is complete and may be run.
+    """The arguments of one tool call are complete.
 
     It comes before the end of the response, so a tool can start while
-    the model writes on. A response that stops early (see
+    the model writes on. It says that this call is whole, not that the
+    generation succeeded: the stream can still fail after it (an error
+    event, a cut connection) and then ends with that error instead of a
+    ``CompletedEvent``. Start early only a tool that is safe to run for
+    a generation that then fails, such as one that only reads; run a
+    tool with side effects after the ``CompletedEvent``, from its
+    ``tool_calls``. A response that stops early (see
     ``CompletedEvent.incomplete_reason``) cuts its last call before this
     event.
 

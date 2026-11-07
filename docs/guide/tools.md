@@ -54,7 +54,52 @@ async def ask_with_tools(
 - **The calls.** `response.tool_calls` lists the calls as `ToolCall`s: `id`, `name` and `arguments`, the JSON text the model wrote. `parse_arguments()` gives the object and raises `ValueError` for text that is not one, which a model can write without `strict`. A response with calls has finished normally (`incomplete_reason` is `None`) and waits for their results. When it stopped early, at the token limit for example, its last call may be cut off: `to_turn()` raises `ValueError` then, so retry with a higher `max_output_tokens` instead of running the calls.
 - **The results.** `response.to_turn()` is the model's turn of calls, a `ToolCallTurn`, and a `ToolResult(call_id=call.id, output=...)` answers each call, in the order you like, right after it. `output` is text: describe a failure in it, since OpenAI has no error flag. Before sending, every adapter checks the order both providers require and raises `RequestValidationError` for a call without its result, a result without its call, or a turn between them.
 - **Reasoning comes back.** The turn of calls keeps the response's own output (`ToolCallTurn.native`, from `GenerationResponse.native`): OpenAI's reasoning items, Anthropic's thinking with its signature. The same provider gets it back whole, so the model goes on from its own reasoning instead of thinking again. A turn from another provider sends only the shared calls and text. With OpenAI's `store: False`, its reasoning items carry their content only when the call asks for it: `provider_options={"store": False, "include": ["reasoning.encrypted_content"]}`.
-- **Streaming.** `stream(...)` yields, for each call, a `ToolCallStartEvent` (`call_id`, `name`), `ToolCallDeltaEvent`s with pieces of the arguments and a `ToolCallDoneEvent` with the whole `ToolCall`, before the response ends, so a tool can start early. `events.final()` gives the `CompletedEvent` with `tool_calls`, and its `to_turn()` continues the conversation as `response.to_turn()` does.
+- **Streaming.** `stream(...)` yields, for each call, a `ToolCallStartEvent` (`call_id`, `name`), `ToolCallDeltaEvent`s with pieces of the arguments and a `ToolCallDoneEvent` with the whole `ToolCall`, before the response ends, so a tool can start early. That event says the call is whole, not that the generation succeeded: the stream can still fail after it (an error event, a cut connection) and then raises that error instead of ending with a `CompletedEvent`. Start early only a tool that is safe to run for a failed generation, such as one that only reads, and run a tool with side effects after the `CompletedEvent`, from its `tool_calls` (see the example below). `events.final()` gives the `CompletedEvent` with `tool_calls`, and its `to_turn()` continues the conversation as `response.to_turn()` does.
 - **Not shared.** OpenAI's built-in tools (web search, file search, code interpreter, MCP, ...), Anthropic's server tools, results with images or files, and the providers' own tool fields (such as Anthropic's `cache_control`) are reached through the provider's own methods, `CreateResponse` and `CreateMessage`. There is no runner that calls your functions for you: the loop above is yours to shape (how many rounds, what to do with a failing tool, whether to run calls in parallel).
+
+A streamed call can start a tool before the response ends. Start that way only the tools that are safe to run for a generation that then fails, and run the others once the stream has ended with its `CompletedEvent`:
+
+```python title="tools_stream.py"
+import asyncio
+
+from aiollm import ToolCall, ToolCallDoneEvent
+
+READ_ONLY = {"get_weather"}
+
+
+def run(call: ToolCall) -> str:
+    if call.name == "get_weather":
+        return get_weather(str(call.parse_arguments()["city"]))
+    return json.dumps({"error": f"unknown tool {call.name}"})
+
+
+async def stream_round(
+    client: IGenerationClient, conversation: list[InputItem]
+) -> list[InputItem]:
+    early: dict[str, asyncio.Task[str]] = {}
+    try:
+        async with client.generation.stream(
+            model="gpt-6-astra", input=conversation, tools=[WEATHER]
+        ) as events:
+            async for event in events:
+                if (
+                    isinstance(event, ToolCallDoneEvent)
+                    and event.call.name in READ_ONLY
+                ):
+                    early[event.call.id] = asyncio.create_task(
+                        asyncio.to_thread(run, event.call)
+                    )
+            completed = await events.final()
+    except BaseException:
+        for task in early.values():
+            task.cancel()
+        raise
+    # The generation succeeded: now the tools with side effects run.
+    results: list[InputItem] = [completed.to_turn()]
+    for call in completed.tool_calls:
+        output = await early[call.id] if call.id in early else run(call)
+        results.append(ToolResult(call_id=call.id, output=output))
+    return [*conversation, *results]
+```
 
 What each field becomes for each provider is listed in [Shared field mapping](../unification.md).

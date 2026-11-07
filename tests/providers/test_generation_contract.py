@@ -874,6 +874,27 @@ async def test_tool_calls_stream_as_start_pieces_and_done(
         assert opened < closed
 
 
+async def test_a_stream_can_fail_after_its_calls_are_done(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    # A done call is a complete call, not a successful generation: the
+    # stream can still fail before its CompletedEvent.
+    recorder.reply(events([*case.called_stream[:-1], case.overloaded]))
+    request = REQUEST.model_copy(update={"tools": TOOLS})
+    received: list[Any] = []
+
+    async with client, client.generation.stream(request) as stream:
+        with pytest.raises(ServiceUnavailableError):
+            async for event in stream:
+                received.append(event)  # noqa: PERF401 (kept on error)
+
+    done = [e.call for e in received if isinstance(e, ToolCallDoneEvent)]
+    assert [call.id for call in done] == [call_id for call_id, _, _ in CALLS]
+    assert not any(isinstance(e, CompletedEvent) for e in received)
+
+
 async def test_a_streamed_tool_loop_continues_with_the_results(
     case: Case,
     client: Any,
