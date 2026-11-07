@@ -35,6 +35,7 @@ from aiollm.providers.anthropic import AnthropicClient
 from aiollm.providers.anthropic.client import (
     session_factory as anthropic_session_factory,
 )
+from aiollm.providers.openai import OpenAIClient
 from aiollm.providers.openai.client import session_factory
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.base import BaseAPIType
@@ -131,6 +132,7 @@ OPENAI_RESPONSES: Final = "openai_responses.py"
 ANTHROPIC_MESSAGES: Final = "anthropic_messages.py"
 SHARED_GENERATION: Final = "shared_generation.py"
 PROVIDER_OPTIONS: Final = "provider_options.py"
+TOOLS: Final = "tools.py"
 RESOURCES: Final = "resources.py"
 
 TESTED: Final = (
@@ -155,6 +157,7 @@ TESTED: Final = (
     ANTHROPIC_MESSAGES,
     SHARED_GENERATION,
     PROVIDER_OPTIONS,
+    TOOLS,
     RESOURCES,
 )
 """The title of every example a test below runs."""
@@ -881,6 +884,57 @@ async def test_shared_generation_works_with_anthropic(
         "max_tokens": 64,
         "system": "Be brief",
     }
+
+
+async def test_tools(
+    examples: Examples,
+    recorder: Recorder,
+    api: LocalAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await examples.run(QUICK_START, TOOLS)
+    monkeypatch.setattr(session_factory, "api", api)
+    call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+        "status": "completed",
+    }
+    recorder.reply(
+        Reply(json=openai_response(output=[call])),
+        Reply(json=openai_response(output=[openai_message("15 C in Paris")])),
+    )
+
+    async with OpenAIClient("sk-...") as client:
+        response = await examples.ask_with_tools(client, "Weather in Paris?")
+
+    assert response.text == "15 C in Paris"
+    first, second = recorder.requests
+    assert json.loads(first.body)["tools"] == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Current weather in a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    ]
+    assert json.loads(second.body)["input"] == [
+        {"role": "user", "content": "Weather in Paris?"},
+        call,
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"city": "Paris", "celsius": 15}',
+        },
+    ]
 
 
 async def test_provider_options(

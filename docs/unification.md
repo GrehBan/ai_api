@@ -154,8 +154,7 @@ These are reached only through the provider's own methods and types, or, where l
 
 - sampling parameters (`temperature`, `top_p`, `top_k`): Anthropic API version `2026-10-21` removed them; OpenAI's are provider options;
 - system or developer turns inside `input` (use `instructions`), images, audio and files;
-- tools, tool calls and tool results, server tools;
-- reasoning and thinking settings and their content;
-- structured output (JSON schemas);
+- OpenAI's built-in tools (web search, file search, code interpreter, MCP, ...), Anthropic's server tools, OpenAI's `allowed_tools`, and tool results with images or files;
+- reasoning and thinking settings and their content, beyond `effort` and the summaries;
 - continuing a stored response (`previous_response_id`, `store`) and stop sequences, which are provider options;
 - background responses, cancellation and polling.
