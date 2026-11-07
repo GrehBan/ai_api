@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Annotated, Final, Literal, Self, get_args
+from typing import Annotated, Final, Literal, Self, TypeIs, get_args
 
 from pydantic import (
     MISSING,
@@ -37,6 +37,19 @@ URL_PATTERN: Final = (
 )
 """An ``http`` or ``https`` URL with a host, after any user and before
 any port."""
+
+
+def _is_image_media_type(value: str | None) -> TypeIs[ImageMediaType]:
+    """Tell whether a media type is one of ``ImageMediaType``.
+
+    Args:
+        value: The media type, or ``None`` when none was guessed.
+
+    Returns:
+        Whether it is a format both providers take.
+    """
+    return value in IMAGE_MEDIA_TYPES
+
 
 _CONFIG: Final = ConfigDict(
     extra="forbid",
@@ -160,13 +173,13 @@ class ImagePart(_SourcePart):
         path = Path(path)
         if media_type is MISSING:
             guessed = guess_content_type(path.name)
-            if guessed not in IMAGE_MEDIA_TYPES:
+            if not _is_image_media_type(guessed):
                 message = (
                     f"cannot tell the image format of {path.name!r}; "
                     "give media_type"
                 )
                 raise ValueError(message)
-            media_type = guessed  # type: ignore[assignment]
+            media_type = guessed
         data = await asyncio.to_thread(path.read_bytes)
         return cls(data=data, media_type=media_type)
 
