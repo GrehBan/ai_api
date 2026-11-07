@@ -30,8 +30,13 @@ IMAGE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
 )
 """The values of ``ImageMediaType``."""
 
-URL_PATTERN: Final = r"^https?://[^/?#\s]+\S*$"
-"""An ``http`` or ``https`` URL with a host."""
+URL_PATTERN: Final = (
+    r"^https?://(?:[^/?#\s@]*@)?"
+    r"(?:\[[0-9A-Fa-f:.]+\]|[^/?#\s@:\[\]]+)"
+    r"(?::\d*)?(?:[/?#]\S*)?$"
+)
+"""An ``http`` or ``https`` URL with a host, after any user and before
+any port."""
 
 _CONFIG: Final = ConfigDict(
     extra="forbid",
@@ -134,7 +139,10 @@ class ImagePart(_SourcePart):
         path: str | Path,
         media_type: ImageMediaType | MISSING = MISSING,
     ) -> Self:
-        """Read an image file, in a worker thread.
+        """Read an image file whole, in a worker thread.
+
+        The format is not checked against the file's content, and the
+        bytes are kept in the part (base64 in the request body).
 
         Args:
             path: The file.
@@ -203,7 +211,11 @@ class DocumentPart(_SourcePart):
 
     @classmethod
     async def load(cls, path: str | Path) -> Self:
-        """Read a PDF file, in a worker thread.
+        """Read a PDF file whole, in a worker thread.
+
+        The content is not checked: any file is sent as a PDF, and the
+        provider refuses one that is not. The bytes are kept in the part
+        (base64 in the request body).
 
         Args:
             path: The file; its name becomes ``filename``.

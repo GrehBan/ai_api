@@ -29,6 +29,8 @@ PNG = b"\x89PNG\r\n"
         ),
         ({"url": "file:///etc/passwd"}, "should match pattern"),
         ({"url": "https:///cat.png"}, "should match pattern"),
+        ({"url": "https://:443/cat.png"}, "should match pattern"),
+        ({"url": "https://@/cat.png"}, "should match pattern"),
         ({"data": PNG, "media_type": "image/bmp"}, "image/jpeg"),
     ],
     ids=[
@@ -39,12 +41,32 @@ PNG = b"\x89PNG\r\n"
         "url-type",
         "scheme",
         "no-host",
+        "port-only",
+        "user-only",
         "bmp",
     ],
 )
 def test_an_image_has_one_source(fields: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         ImagePart(**fields)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://a.io",
+        "https://a.io?page=2",
+        "https://user:key@a.io:8443/r.pdf#p=1",
+        "http://[::1]:8080/r.pdf",
+    ],
+)
+def test_a_url_with_a_host_is_taken(url: str) -> None:
+    assert ImagePart(url=url).url == DocumentPart(url=url).url == url
+
+
+def test_a_document_url_needs_a_host() -> None:
+    with pytest.raises(ValidationError, match="should match pattern"):
+        DocumentPart(url="https://:443/r.pdf")
 
 
 def test_a_document_takes_a_filename_with_data_only() -> None:
