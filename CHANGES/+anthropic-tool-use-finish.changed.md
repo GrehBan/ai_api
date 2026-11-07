@@ -1,1 +1,0 @@
-An Anthropic message that stops with `stop_reason: "tool_use"` now finishes normally: `incomplete_reason` and `raw_incomplete_reason` are `None`, as for a `completed` OpenAI response with function calls, since the model is waiting for the tool results.
