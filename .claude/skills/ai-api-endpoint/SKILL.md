@@ -40,17 +40,20 @@ provider's types and is reached through `raw`.
 ## 3. Types and request parameters
 
 They are generated, never written by hand: `scripts/generate_provider_types.py`
-runs aiollm-codegen (`../aiollm_codegen`) for each provider, OpenAI from its
-official OpenAPI file restricted to the endpoints' operations, Anthropic from
-the docs-lite snapshot, and replaces `providers/<name>/types/<family>.py` and
+runs the pinned aiollm-codegen (the `codegen` dependency group; `--codegen
+DIR` for a local checkout) for each provider, OpenAI from its official OpenAPI
+file (pinned by URL and SHA-256 in the script, the same file as the contract
+snapshot) restricted to the endpoints' operations, Anthropic from the
+docs-lite snapshot, and replaces `providers/<name>/types/<family>.py` and
 `methods/params/`. A new endpoint adds its operation to the script. The
 generated models already follow the rules the tests check:
 `__upstream_schema__` on every model, `Literal` for constants and closed
 request enumerations, `str` for response enumerations that grow, `MISSING`
 for optional request fields and `None` only where upstream allows `null`,
 unknown variants as `UnknownVariant`, request models with `extra="forbid"`.
-A defect in them is fixed in aiollm-codegen (its own project), then
-regenerated. `types/options.py` stays hand-written: its `TypedDict`s mirror
+A defect in them is fixed in aiollm-codegen (its own project), then the
+pin in `pyproject.toml` moves to that commit (`uv lock`) and they are
+regenerated; CI fails when the committed files differ from a regeneration. `types/options.py` stays hand-written: its `TypedDict`s mirror
 the method fields (`test_provider_options.py`), so dict literals type-check.
 
 ## 4. Methods
