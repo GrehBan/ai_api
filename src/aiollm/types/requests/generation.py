@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Annotated, Final, Literal, Self
+from typing import Annotated, Final, Literal, Self, overload
 
 from pydantic import (
     MISSING,
+    BaseModel,
     ConfigDict,
     Discriminator,
     Field,
@@ -119,6 +120,47 @@ class Tool(BaseAPIType):
     parameters: JSONSchema
     strict: bool | MISSING = MISSING
 
+    @classmethod
+    def from_model(
+        cls,
+        name: str,
+        model: type[BaseModel],
+        *,
+        description: str | MISSING = MISSING,
+        strict: bool | MISSING = MISSING,
+    ) -> Self:
+        """Create a tool whose arguments are a Pydantic model.
+
+        ``parameters`` is the model's JSON Schema
+        (``model.model_json_schema()``), sent as it is, and
+        ``ToolCall.parse_arguments(model)`` reads the arguments back
+        into the model. For ``strict=True`` the model forbids extra
+        fields (``extra="forbid"``) and every field is required, or the
+        providers answer 400.
+
+        Args:
+            name: Name the model calls it by.
+            model: The model of the arguments.
+            description: What the tool does and when to use it.
+            strict: Whether the arguments must follow the schema
+                exactly.
+
+        Returns:
+            The tool.
+
+        Example:
+            >>> class City(BaseModel):
+            ...     model_config = ConfigDict(extra="forbid")
+            ...     city: str
+            >>> tool = Tool.from_model("get_weather", City, strict=True)
+        """
+        return cls(
+            name=name,
+            description=description,
+            parameters=model.model_json_schema(),
+            strict=strict,
+        )
+
 
 class ForcedTool(BaseAPIType):
     """Make the model call this tool.
@@ -164,11 +206,50 @@ class ToolCall(BaseAPIType):
     name: str
     arguments: str
 
-    def parse_arguments(self) -> dict[str, JSONValue]:
-        """Parse the arguments.
+    @overload
+    def parse_arguments(self) -> dict[str, JSONValue]: ...
+
+    @overload
+    def parse_arguments[ModelT: BaseModel](
+        self, model: type[ModelT]
+    ) -> ModelT: ...
+
+    def parse_arguments(
+        self, model: type[BaseModel] | None = None
+    ) -> dict[str, JSONValue] | BaseModel:
+        """Parse the arguments, and validate them with a model if given.
+
+        Without a model only the JSON is checked, not the tool's
+        ``parameters``: a model may write other arguments unless the
+        tool is ``strict``. With one (the model of
+        ``Tool.from_model``), the arguments are validated by it.
+
+        Args:
+            model: The Pydantic model the arguments must follow.
 
         Returns:
-            The arguments as a JSON object.
+            The arguments as a JSON object, or the model made from them.
+
+        Raises:
+            ValueError: The arguments are not a JSON object, or do not
+                follow the model (a ``pydantic.ValidationError``, which
+                is a ``ValueError``).
+
+        Example:
+            >>> call.parse_arguments(City).city
+            'Paris'
+        """
+        value = self._parse_object()
+        if model is None:
+            return value
+        # From the text, so JSON's rules apply (a date from its string).
+        return model.model_validate_json(self.arguments)
+
+    def _parse_object(self) -> dict[str, JSONValue]:
+        """Parse the arguments as a JSON object.
+
+        Returns:
+            The arguments.
 
         Raises:
             ValueError: The arguments are not a JSON object.

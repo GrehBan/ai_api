@@ -30,6 +30,7 @@ from aiollm import (
     RateLimitError,
     ResponseFormat,
     ServiceUnavailableError,
+    ToolCall,
     Turn,
 )
 from aiollm.providers.anthropic import AnthropicClient
@@ -140,6 +141,7 @@ SHARED_GENERATION: Final = "shared_generation.py"
 PROVIDER_OPTIONS: Final = "provider_options.py"
 TOOLS: Final = "tools.py"
 TOOLS_STREAM: Final = "tools_stream.py"
+TOOLS_MODEL: Final = "tools_model.py"
 RESOURCES: Final = "resources.py"
 
 TESTED: Final = (
@@ -166,6 +168,7 @@ TESTED: Final = (
     PROVIDER_OPTIONS,
     TOOLS,
     TOOLS_STREAM,
+    TOOLS_MODEL,
     RESOURCES,
 )
 """The title of every example a test below runs."""
@@ -943,6 +946,31 @@ async def test_tools(
             "output": '{"city": "Paris", "celsius": 15}',
         },
     ]
+
+
+async def test_tools_model(examples: Examples) -> None:
+    await examples.run(QUICK_START, TOOLS, TOOLS_STREAM, TOOLS_MODEL)
+
+    assert examples.CITY_WEATHER.parameters == {
+        "type": "object",
+        "title": "City",
+        "properties": {"city": {"type": "string", "title": "City"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    good = examples.answer(
+        ToolCall(id="c1", name="get_weather", arguments='{"city": "Paris"}')
+    )
+    bad = examples.answer(
+        ToolCall(id="c2", name="get_weather", arguments='{"town": "Paris"}')
+    )
+
+    assert (good.call_id, good.output) == (
+        "c1",
+        '{"city": "Paris", "celsius": 15}',
+    )
+    assert bad.call_id == "c2"
+    assert "city" in json.loads(bad.output)["error"]
 
 
 async def test_tools_stream(

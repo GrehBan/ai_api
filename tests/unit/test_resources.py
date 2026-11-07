@@ -9,6 +9,9 @@ from typing import Any, Self, Unpack
 import pytest
 from pydantic import (
     MISSING,
+    BaseModel,
+    ConfigDict,
+    Field,
     PydanticSchemaGenerationError,
     TypeAdapter,
     ValidationError,
@@ -60,6 +63,7 @@ from aiollm.types.requests.generation import (
     GenerationRequest,
     InputItem,
     NoProviderOptions,
+    Tool,
     Turn,
 )
 from aiollm.types.responses.events import (
@@ -1033,3 +1037,54 @@ async def test_generation_resource_keeps_the_session_options_by_default(
         "timeout": None,
         "retry_policy": None,
     }
+
+
+class City(BaseModel):
+    """Arguments of a strict tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    city: str
+    days: int = Field(gt=0)
+
+
+def test_a_tool_from_a_model_sends_its_schema() -> None:
+    tool = Tool.from_model(
+        "get_weather", City, description="Weather.", strict=True
+    )
+
+    assert tool.parameters == City.model_json_schema()
+    assert tool.parameters["additionalProperties"] is False
+    assert (tool.name, tool.description, tool.strict) == (
+        "get_weather",
+        "Weather.",
+        True,
+    )
+    assert Tool.from_model("f", City).strict is MISSING
+
+
+def test_tool_call_arguments_are_validated_by_a_model() -> None:
+    call = ToolCall(
+        id="c1", name="f", arguments='{"city": "Paris", "days": 2}'
+    )
+
+    assert call.parse_arguments(City) == City(city="Paris", days=2)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "match"),
+    [
+        ('{"city": "Paris", "days": 0}', "greater than 0"),
+        ('{"city": "Paris", "days": 1, "x": 1}', "Extra inputs"),
+        ("[1]", "tool call c1 are not an object"),
+        ('{"city', "tool call c1 are not JSON"),
+    ],
+    ids=["invalid", "extra", "not-an-object", "cut"],
+)
+def test_tool_call_arguments_against_a_model_raise(
+    arguments: str, match: str
+) -> None:
+    call = ToolCall(id="c1", name="f", arguments=arguments)
+
+    with pytest.raises(ValueError, match=match):
+        call.parse_arguments(City)

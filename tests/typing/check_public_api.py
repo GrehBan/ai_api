@@ -87,7 +87,10 @@ from aiollm.session import CallOptions, ISession, ISessionFactory
 from aiollm.session.aiohttp import AiohttpSession
 from aiollm.types.requests import (
     GenerationRequest,
+    JSONValue,
     NoProviderOptions,
+    Tool,
+    ToolCall,
     ToolCallTurn,
     Turn,
 )
@@ -701,3 +704,16 @@ def no_provider_options_is_closed(other: StoreOptions) -> None:
     keyed: NoProviderOptions = {"store": True}  # type: ignore[typeddict-unknown-key]
     taken: NoProviderOptions = other  # type: ignore[assignment]
     assert none == keyed == taken
+
+
+class CityArguments(BaseAPIType):
+    city: str
+
+
+def tool_arguments_take_a_model(call: ToolCall) -> None:
+    tool = Tool.from_model("get_weather", CityArguments, strict=True)
+    assert_type(tool, Tool)
+    assert_type(call.parse_arguments(), dict[str, JSONValue])
+    assert_type(call.parse_arguments(CityArguments), CityArguments)
+    call.parse_arguments(dict)  # type: ignore[type-var]
+    Tool.from_model("f", dict)  # type: ignore[arg-type]
