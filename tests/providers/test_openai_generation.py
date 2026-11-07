@@ -225,6 +225,19 @@ def test_a_turn_of_calls_without_text_sends_only_the_calls() -> None:
     ]
 
 
+async def test_arguments_without_their_call_raise() -> None:
+    delta = {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "fc_9",
+        "output_index": 0,
+        "delta": "{",
+        "sequence_number": 1,
+    }
+
+    with pytest.raises(APIResponseError, match="item fc_9 without its"):
+        await convert([delta])
+
+
 def test_usage_without_its_details_is_refused() -> None:
     # OpenAI's schema requires both details objects in a response's
     # usage, so a body without them is not a Response.

@@ -61,6 +61,9 @@ from aiollm.types.responses import (
     CompletedEvent,
     TextDeltaEvent,
     TokenUsage,
+    ToolCallDeltaEvent,
+    ToolCallDoneEvent,
+    ToolCallStartEvent,
 )
 from tests.conftest import TEST_TOKEN, LocalAPI, Recorder, Reply
 from tests.providers import test_anthropic_messages as anthropic
@@ -276,6 +279,7 @@ class Case:
         continued: The body's conversation after its first turn, when
             ``called`` comes back with its results.
         continued_shared: The same from the shared calls only.
+        continued_streamed: The same when ``called_stream`` comes back.
     """
 
     provider: Provider
@@ -309,6 +313,7 @@ class Case:
     input_field: str
     continued: list[Any]
     continued_shared: list[Any]
+    continued_streamed: list[Any]
 
     @property
     def delta(self) -> dict[str, Any]:
@@ -422,6 +427,17 @@ OPENAI = Case(
         "incomplete_details": {"reason": "max_output_tokens"},
     },
     input_field="input",
+    continued_streamed=[
+        *openai_called()["output"],
+        *(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": f"result of {name}",
+            }
+            for call_id, name, _ in CALLS
+        ),
+    ],
     continued=[
         *openai_called()["output"],
         *(
@@ -531,6 +547,31 @@ ANTHROPIC = Case(
     called_stream=anthropic_called_stream(),
     cut_off={"stop_reason": "max_tokens"},
     input_field="messages",
+    continued_streamed=[
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": arguments,
+                }
+                for call_id, name, arguments in CALLS
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": f"result of {name}",
+                }
+                for call_id, name, _ in CALLS
+            ],
+        },
+    ],
     continued=[
         {"role": "assistant", "content": anthropic_called()["content"]},
         {
@@ -788,6 +829,80 @@ async def test_tool_calls_come_back_alike(
     ] == CALLS
     assert result.incomplete_reason is None
     assert result.raw_incomplete_reason is None
+
+
+async def test_tool_calls_stream_as_start_pieces_and_done(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    recorder.reply(events(case.called_stream))
+    request = REQUEST.model_copy(update={"tools": TOOLS})
+
+    async with client, client.generation.stream(request) as stream:
+        received = [event async for event in stream]
+
+    starts = [e for e in received if isinstance(e, ToolCallStartEvent)]
+    done = [e.call for e in received if isinstance(e, ToolCallDoneEvent)]
+    assert [(e.call_id, e.name) for e in starts] == [
+        (call_id, name) for call_id, name, _ in CALLS
+    ]
+    assert [
+        (call.id, call.name, call.parse_arguments()) for call in done
+    ] == CALLS
+    for call in done:
+        pieces = [
+            e.arguments
+            for e in received
+            if isinstance(e, ToolCallDeltaEvent) and e.call_id == call.id
+        ]
+        assert not pieces or "".join(pieces) == call.arguments
+    completed = received[-1]
+    assert isinstance(completed, CompletedEvent)
+    assert completed.tool_calls == done
+    for call in done:
+        opened = next(
+            n
+            for n, e in enumerate(received)
+            if isinstance(e, ToolCallStartEvent) and e.call_id == call.id
+        )
+        closed = next(
+            n
+            for n, e in enumerate(received)
+            if isinstance(e, ToolCallDoneEvent) and e.call.id == call.id
+        )
+        assert opened < closed
+
+
+async def test_a_streamed_tool_loop_continues_with_the_results(
+    case: Case,
+    client: Any,
+    recorder: Recorder,
+) -> None:
+    # The completed event's turn carries the stream's own output, put
+    # together from its events, and the second request sends it back.
+    recorder.reply(events(case.called_stream), Reply(json=case.response))
+    request = REQUEST.model_copy(update={"tools": TOOLS})
+
+    async with client:
+        async with client.generation.stream(request) as stream:
+            completed = await stream.final()
+        turn = completed.to_turn()
+        results = [
+            ToolResult(call_id=call.id, output=f"result of {call.name}")
+            for call in completed.tool_calls
+        ]
+        await client.generation.create(
+            request.model_copy(
+                update={"input": [Turn.user("Hi"), turn, *results]}
+            )
+        )
+
+    assert isinstance(turn, ToolCallTurn)
+    assert turn.native is not MISSING
+    assert turn.native.provider is case.provider
+    sent = json.loads(recorder.last.body)
+    assert sent[case.input_field][1:] == case.continued_streamed
 
 
 async def test_a_tool_loop_continues_with_the_results(

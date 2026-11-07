@@ -376,6 +376,90 @@ def test_thinking_becomes_the_reasoning() -> None:
     assert adapter.to_response(message(), REQUEST).reasoning is None
 
 
+async def test_a_stream_gives_its_content_back_whole() -> None:
+    # Thinking with its signature, text and a tool_use, each from its
+    # start and its pieces, as a message would hold them.
+    def delta(index: int, **fields: Any) -> dict[str, Any]:
+        return {"type": "content_block_delta", "index": index, "delta": fields}
+
+    def start(index: int, block: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": block,
+        }
+
+    use = {"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}
+    payloads = [
+        STREAM[0],
+        start(0, {"type": "thinking", "thinking": "", "signature": ""}),
+        delta(0, type="thinking_delta", thinking="Weigh"),
+        delta(0, type="thinking_delta", thinking="ing."),
+        delta(0, type="signature_delta", signature="sig"),
+        start(1, {"type": "text", "text": ""}),
+        delta(1, type="text_delta", text="Calling."),
+        start(2, use),
+        delta(2, type="input_json_delta", partial_json='{"a": '),
+        delta(2, type="input_json_delta", partial_json="1}"),
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 9},
+        },
+        STREAM[-1],
+    ]
+
+    completed = (await convert(payloads))[-1]
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.native is not None
+    assert completed.native.items == [
+        {"type": "thinking", "thinking": "Weighing.", "signature": "sig"},
+        {"type": "text", "text": "Calling."},
+        use | {"input": {"a": 1}},
+    ]
+    turn = completed.to_turn()
+    assert isinstance(turn, ToolCallTurn)
+    assert turn.text == "Calling."
+
+
+async def test_a_stream_without_content_has_no_native_output() -> None:
+    end = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn"},
+        "usage": {"output_tokens": 0},
+    }
+
+    completed = (await convert([STREAM[0], end, STREAM[-1]]))[-1]
+
+    assert isinstance(completed, CompletedEvent)
+    assert completed.native is None
+    assert completed.tool_calls == []
+
+
+async def test_arguments_that_join_into_no_object_raise() -> None:
+    use = {"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}
+    payloads = [
+        STREAM[0],
+        {"type": "content_block_start", "index": 0, "content_block": use},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"a": '},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "max_tokens"},
+            "usage": {"output_tokens": 9},
+        },
+        STREAM[-1],
+    ]
+
+    with pytest.raises(APIResponseError, match="toolu_1 are not JSON"):
+        await convert(payloads)
+
+
 async def test_thinking_deltas_become_reasoning_deltas() -> None:
     # An empty thinking delta (display omitted) is no summary.
     def thinking(text: str) -> dict[str, Any]:

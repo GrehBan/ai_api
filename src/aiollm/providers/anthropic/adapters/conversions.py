@@ -321,7 +321,10 @@ class StreamState:
     counts are replaced, never added up. At the end the state gives a
     real ``Usage`` and ``Delta``, so a stream goes through the
     same conversions as a message, and the message's id, model and
-    whole text.
+    whole text. It also keeps every content block, from its
+    ``content_block_start`` and its deltas, to give the message's
+    content back as ``native`` (thinking with its ``signature`` among
+    it) and each tool call once its block stops.
 
     Attributes:
         delta: The stop reason and details sent so far.
@@ -336,6 +339,14 @@ class StreamState:
     )
     _arguments: dict[int, list[str]] = field(
         default_factory=dict[int, list[str]], init=False, repr=False
+    )
+    _blocks: dict[int, dict[str, Any]] = field(
+        default_factory=dict[int, dict[str, Any]], init=False, repr=False
+    )
+    _pieces: dict[int, dict[str, list[str]]] = field(
+        default_factory=dict[int, dict[str, list[str]]],
+        init=False,
+        repr=False,
     )
 
     def start(self, event: RawMessageStartEvent) -> None:
@@ -354,22 +365,106 @@ class StreamState:
         """
         self._texts.append(text)
 
-    def start_call(self, index: int, block: ToolUseBlock) -> None:
-        """Keep a ``tool_use`` block that a ``content_block_start`` opened.
+    def start_block(self, index: int, block: BaseModel) -> None:
+        """Keep a block that a ``content_block_start`` opened.
 
         Args:
             index: The block's index in the message.
-            block: The block, its ``input`` empty until the deltas.
+            block: The block as it starts: a ``tool_use`` with an empty
+                ``input``, text and thinking without their deltas yet.
         """
-        self._calls[index] = block
-        self._arguments[index] = []
+        self._blocks[index] = block.model_dump(
+            mode="json", by_alias=True, exclude_unset=True
+        )
+        self._pieces[index] = {}
+        if isinstance(block, ToolUseBlock):
+            self._calls[index] = block
+            self._arguments[index] = []
 
-    def add_arguments(self, index: int, partial: str) -> None:
+    def add_piece(self, index: int, key: str, piece: str) -> None:
+        """Keep a piece of a block's text, thinking or signature.
+
+        A block whose ``content_block_start`` did not come (some of the
+        documented streams leave it out) is opened from the piece: a
+        ``text`` block for text, a ``thinking`` block for thinking or a
+        signature, so its content still comes back whole.
+
+        Args:
+            index: The block's index.
+            key: The field the piece belongs to: ``text``, ``thinking``
+                or ``signature``.
+            piece: The piece.
+        """
+        if index not in self._pieces:
+            kind = "text" if key == "text" else "thinking"
+            self._blocks[index] = {"type": kind}
+            self._pieces[index] = {}
+        self._pieces[index].setdefault(key, []).append(piece)
+
+    def call(self, index: int) -> ToolCall | None:
+        """Give the tool call of a block, once its block stops.
+
+        Args:
+            index: The block's index.
+
+        Returns:
+            The call, or ``None`` if the block is no ``tool_use``.
+        """
+        if index not in self._calls:
+            return None
+        return self._call(index)
+
+    def _call(self, index: int) -> ToolCall:
+        """Build the call of a ``tool_use`` block.
+
+        Args:
+            index: The block's index.
+
+        Returns:
+            The call, its arguments the pieces joined, or the block's own
+            ``input`` when no piece came.
+        """
+        block = self._calls[index]
+        pieces = self._arguments[index]
+        if not pieces:
+            return tool_call(block)
+        return ToolCall(
+            id=block.id, name=block.name, arguments="".join(pieces)
+        )
+
+    def native(self) -> NativeOutput | None:
+        """Give the streamed content as Anthropic's next request takes it.
+
+        Returns:
+            Each block as it started, with its text, thinking and
+            signature pieces joined into it and a ``tool_use`` block's
+            ``input`` parsed from its pieces; ``None`` without blocks.
+
+        Raises:
+            APIResponseError: A ``tool_use`` block's pieces do not join
+                into a JSON object.
+        """
+        if not self._blocks:
+            return None
+        blocks: list[dict[str, Any]] = []
+        for index in sorted(self._blocks):
+            block = dict(self._blocks[index])
+            for key, pieces in self._pieces[index].items():
+                block[key] = block.get(key, "") + "".join(pieces)
+            if index in self._calls:
+                block["input"] = _input(self._call(index))
+            blocks.append(block)
+        return NativeOutput(provider=PROVIDER, items=blocks)
+
+    def add_arguments(self, index: int, partial: str) -> str:
         """Keep a piece of a call's arguments.
 
         Args:
             index: The index of the call's block.
             partial: The ``partial_json`` of an ``input_json_delta``.
+
+        Returns:
+            The id of the call the piece belongs to.
 
         Raises:
             APIResponseError: No ``tool_use`` block opened at the index.
@@ -381,6 +476,7 @@ class StreamState:
             )
             raise APIResponseError(message)
         self._arguments[index].append(partial)
+        return self._calls[index].id
 
     def tool_calls(self) -> list[ToolCall]:
         """Give the tool calls streamed so far.
@@ -390,18 +486,7 @@ class StreamState:
             arguments the pieces joined, or the block's own ``input``
             when no piece came.
         """
-        calls: list[ToolCall] = []
-        for index in sorted(self._calls):
-            block = self._calls[index]
-            pieces = self._arguments[index]
-            if not pieces:
-                calls.append(tool_call(block))
-                continue
-            arguments = "".join(pieces)
-            calls.append(
-                ToolCall(id=block.id, name=block.name, arguments=arguments)
-            )
-        return calls
+        return [self._call(index) for index in sorted(self._calls)]
 
     def add_thinking(self, thinking: str) -> None:
         """Keep a thinking delta for the whole reasoning.
@@ -475,6 +560,24 @@ class StreamState:
             ``message_text`` gives for a message without text.
         """
         return "".join(self._texts) if self._texts else None
+
+
+def _input(call: ToolCall) -> dict[str, Any]:
+    """Parse a streamed call's arguments into ``tool_use.input``.
+
+    Args:
+        call: The call.
+
+    Returns:
+        Its arguments as an object.
+
+    Raises:
+        APIResponseError: The arguments are not a JSON object.
+    """
+    try:
+        return call.parse_arguments()
+    except ValueError as error:
+        raise APIResponseError(str(error)) from error
 
 
 def _sent(model: BaseModel) -> dict[str, object]:

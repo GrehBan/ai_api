@@ -76,6 +76,9 @@
     "TokenUsage",
     "Tool",
     "ToolCall",
+    "ToolCallDeltaEvent",
+    "ToolCallDoneEvent",
+    "ToolCallStartEvent",
     "ToolCallTurn",
     "ToolChoice",
     "ToolResult",
@@ -1144,6 +1147,9 @@
     "RawResponseEvent",
     "ReasoningDeltaEvent",
     "TextDeltaEvent",
-    "TokenUsage"
+    "TokenUsage",
+    "ToolCallDeltaEvent",
+    "ToolCallDoneEvent",
+    "ToolCallStartEvent"
   ]
 }

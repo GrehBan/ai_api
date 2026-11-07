@@ -140,6 +140,10 @@ class GenerationEventType(StrEnum):
         TEXT_DELTA: A piece of generated text, ``TextDeltaEvent``.
         REASONING_DELTA: A piece of a reasoning summary,
             ``ReasoningDeltaEvent``.
+        TOOL_CALL_START: A tool call begins, ``ToolCallStartEvent``.
+        TOOL_CALL_DELTA: A piece of a call's arguments,
+            ``ToolCallDeltaEvent``.
+        TOOL_CALL_DONE: A tool call is complete, ``ToolCallDoneEvent``.
         COMPLETED: The end of the generation, ``CompletedEvent``.
         OTHER: A provider event without a shared counterpart,
             ``OtherEvent``.
@@ -147,5 +151,8 @@ class GenerationEventType(StrEnum):
 
     TEXT_DELTA = "text_delta"
     REASONING_DELTA = "reasoning_delta"
+    TOOL_CALL_START = "tool_call_start"
+    TOOL_CALL_DELTA = "tool_call_delta"
+    TOOL_CALL_DONE = "tool_call_done"
     COMPLETED = "completed"
     OTHER = "other"

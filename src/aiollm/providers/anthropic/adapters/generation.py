@@ -38,9 +38,11 @@ from aiollm.providers.anthropic.types import (
     MessageStreamEvent,
     RawContentBlockDeltaEvent,
     RawContentBlockStartEvent,
+    RawContentBlockStopEvent,
     RawMessageDeltaEvent,
     RawMessageStartEvent,
     RawMessageStopEvent,
+    SignatureDelta,
     TextDelta,
     ThinkingDelta,
     ToolUseBlock,
@@ -59,6 +61,9 @@ from aiollm.types.responses.events import (
     OtherEvent,
     ReasoningDeltaEvent,
     TextDeltaEvent,
+    ToolCallDeltaEvent,
+    ToolCallDoneEvent,
+    ToolCallStartEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
 
@@ -253,10 +258,13 @@ class AnthropicGenerationAdapter(
         """Convert the events of a message stream.
 
         Text deltas become ``TextDeltaEvent`` and non-empty thinking
-        deltas ``ReasoningDeltaEvent``; ``message_stop`` becomes
+        deltas ``ReasoningDeltaEvent``; a ``tool_use`` block becomes
+        ``ToolCallStartEvent``, a ``ToolCallDeltaEvent`` per
+        ``input_json_delta`` and ``ToolCallDoneEvent`` at its
+        ``content_block_stop``; ``message_stop`` becomes
         ``CompletedEvent`` with the counts and stop reason collected from
-        ``message_start`` and ``message_delta``; every other event is an
-        ``OtherEvent``.
+        ``message_start`` and ``message_delta`` and the content as
+        ``native``; every other event is an ``OtherEvent``.
 
         Args:
             items: The events Anthropic sent.
@@ -267,34 +275,17 @@ class AnthropicGenerationAdapter(
 
         Raises:
             APIResponseError: ``message_stop`` came without a stop
-                reason or without ``message_start``. The stream's end is
+                reason or without ``message_start``, or arguments came
+                for a block no ``tool_use`` opened. The stream's end is
                 checked by ``StreamMessage`` and by the use case.
         """
         state = StreamState()
         async for item in items:
+            event = _block_event(state, item)
+            if event is not None:
+                yield event
+                continue
             match item:
-                case RawContentBlockDeltaEvent(delta=TextDelta() as delta):
-                    state.add_text(delta.text)
-                    yield TextDeltaEvent[MessageStreamEvent](
-                        text=delta.text, raw=item
-                    )
-                    continue
-                case RawContentBlockDeltaEvent(
-                    delta=ThinkingDelta(thinking=str(thinking))
-                ) if thinking:
-                    state.add_thinking(thinking)
-                    yield ReasoningDeltaEvent[MessageStreamEvent](
-                        text=thinking, raw=item
-                    )
-                    continue
-                case RawContentBlockStartEvent(
-                    content_block=ToolUseBlock() as block
-                ):
-                    state.start_call(item.index, block)
-                case RawContentBlockDeltaEvent(
-                    delta=InputJSONDelta() as delta
-                ):
-                    state.add_arguments(item.index, delta.partial_json)
                 case RawMessageStartEvent():
                     state.start(item)
                 case RawMessageDeltaEvent():
@@ -313,6 +304,7 @@ class AnthropicGenerationAdapter(
                         refusal=stop.refusal,
                         reasoning=state.thinking(),
                         tool_calls=state.tool_calls(),
+                        native=state.native(),
                         raw=item,
                     )
                     continue
@@ -361,6 +353,64 @@ class AnthropicGenerationAdapter(
             "tool_choice": _tool_choice(request),
         }
         return merge_options(fields, self.provider_options, self.provider)
+
+
+def _block_event(
+    state: StreamState,
+    item: MessageStreamEvent,
+) -> GenerationEvent[MessageStreamEvent] | None:
+    """Keep a content block event in the state and convert it.
+
+    Args:
+        state: The stream's state.
+        item: An event of the stream.
+
+    Returns:
+        The shared event of a text, thinking or tool call event; ``None``
+        for an event that is no block event or has no shared
+        counterpart (a signature, an empty thinking delta, a block that
+        is no call starting or stopping), which becomes ``OtherEvent``.
+
+    Raises:
+        APIResponseError: Arguments came for a block that is no
+            ``tool_use``.
+    """
+    match item:
+        case RawContentBlockStartEvent(content_block=block):
+            state.start_block(item.index, block)
+            if isinstance(block, ToolUseBlock):
+                return ToolCallStartEvent[MessageStreamEvent](
+                    call_id=block.id, name=block.name, raw=item
+                )
+        case RawContentBlockDeltaEvent(delta=TextDelta() as delta):
+            state.add_piece(item.index, "text", delta.text)
+            state.add_text(delta.text)
+            return TextDeltaEvent[MessageStreamEvent](
+                text=delta.text, raw=item
+            )
+        case RawContentBlockDeltaEvent(delta=ThinkingDelta() as delta):
+            state.add_piece(item.index, "thinking", delta.thinking)
+            if delta.thinking:
+                state.add_thinking(delta.thinking)
+                return ReasoningDeltaEvent[MessageStreamEvent](
+                    text=delta.thinking, raw=item
+                )
+        case RawContentBlockDeltaEvent(delta=SignatureDelta() as delta):
+            state.add_piece(item.index, "signature", delta.signature)
+        case RawContentBlockDeltaEvent(delta=InputJSONDelta() as delta):
+            call_id = state.add_arguments(item.index, delta.partial_json)
+            return ToolCallDeltaEvent[MessageStreamEvent](
+                call_id=call_id, arguments=delta.partial_json, raw=item
+            )
+        case RawContentBlockStopEvent():
+            call = state.call(item.index)
+            if call is not None:
+                return ToolCallDoneEvent[MessageStreamEvent](
+                    call=call, raw=item
+                )
+        case _:
+            pass
+    return None
 
 
 def _check_arguments(request: GenerationRequest) -> None:

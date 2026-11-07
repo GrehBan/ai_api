@@ -143,6 +143,9 @@ from aiollm.types.responses.events import (
     OtherEvent,
     ReasoningDeltaEvent,
     TextDeltaEvent,
+    ToolCallDeltaEvent,
+    ToolCallDoneEvent,
+    ToolCallStartEvent,
 )
 from aiollm.types.responses.generation import (
     GenerationResponse,
@@ -231,6 +234,9 @@ __all__ = [
     "TokenUsage",
     "Tool",
     "ToolCall",
+    "ToolCallDeltaEvent",
+    "ToolCallDoneEvent",
+    "ToolCallStartEvent",
     "ToolCallTurn",
     "ToolChoice",
     "ToolResult",

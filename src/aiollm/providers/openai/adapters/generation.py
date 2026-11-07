@@ -16,6 +16,7 @@ from aiollm.adapters.validation import (
     request_errors,
 )
 from aiollm.enums import ToolChoice
+from aiollm.http.exceptions.response import APIResponseError
 from aiollm.providers.openai.adapters.conversions import (
     INPUT_CONVERSION,
     STOP_CONVERSION,
@@ -32,9 +33,13 @@ from aiollm.providers.openai.methods.responses import (
     StreamResponse,
 )
 from aiollm.providers.openai.types import (
+    FunctionToolCall,
     Response,
     ResponseCompletedEvent,
+    ResponseFunctionCallArgumentsDeltaEvent,
     ResponseIncompleteEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
     ResponseReasoningSummaryTextDeltaEvent,
     ResponseStreamEvent,
     ResponseTextDeltaEvent,
@@ -45,6 +50,7 @@ from aiollm.types.requests.generation import (
     GenerationRequest,
     InputItem,
     Tool,
+    ToolCall,
 )
 from aiollm.types.responses.events import (
     CompletedEvent,
@@ -52,6 +58,9 @@ from aiollm.types.responses.events import (
     OtherEvent,
     ReasoningDeltaEvent,
     TextDeltaEvent,
+    ToolCallDeltaEvent,
+    ToolCallDoneEvent,
+    ToolCallStartEvent,
 )
 from aiollm.types.responses.generation import GenerationResponse
 
@@ -238,27 +247,64 @@ class OpenAIGenerationAdapter(
         Yields:
             One shared event per OpenAI event. The stream's end is
             checked by ``StreamResponse`` and by the use case.
+
+        Raises:
+            APIResponseError: Arguments came for an item that no
+                ``response.output_item.added`` opened as a function call.
         """
+        calls: dict[str, str] = {}
         async for item in items:
-            yield self._to_event(item)
+            yield self._to_event(item, calls)
 
     def _to_event(
         self,
         event: ResponseStreamEvent,
+        calls: dict[str, str],
     ) -> GenerationEvent[ResponseStreamEvent]:
         """Convert one event of a Responses stream.
 
         Args:
             event: The event OpenAI sent.
+            calls: The ``call_id`` of each function call item opened so
+                far, by the item's ``id``; the deltas name the item.
 
         Returns:
-            A text or reasoning summary delta, the completion (also of
-            an incomplete response), or ``OtherEvent`` for every other
+            A text or reasoning summary delta, the start, a piece or the
+            end of a function call, the completion (also of an
+            incomplete response), or ``OtherEvent`` for every other
             event.
             ``response.failed`` never gets here: ``StreamResponse``
             raises it as an ``APIStatusError``.
+
+        Raises:
+            APIResponseError: A delta names an item that is no open
+                function call.
         """
         match event:
+            case ResponseOutputItemAddedEvent(item=FunctionToolCall() as call):
+                calls[call.id or call.call_id] = call.call_id
+                return ToolCallStartEvent[ResponseStreamEvent](
+                    call_id=call.call_id, name=call.name, raw=event
+                )
+            case ResponseFunctionCallArgumentsDeltaEvent():
+                if event.item_id not in calls:
+                    message = (
+                        "OpenAI stream sent arguments for item "
+                        f"{event.item_id} without its function_call"
+                    )
+                    raise APIResponseError(message)
+                return ToolCallDeltaEvent[ResponseStreamEvent](
+                    call_id=calls[event.item_id],
+                    arguments=event.delta,
+                    raw=event,
+                )
+            case ResponseOutputItemDoneEvent(item=FunctionToolCall() as call):
+                done = ToolCall(
+                    id=call.call_id, name=call.name, arguments=call.arguments
+                )
+                return ToolCallDoneEvent[ResponseStreamEvent](
+                    call=done, raw=event
+                )
             case ResponseTextDeltaEvent():
                 return TextDeltaEvent[ResponseStreamEvent](
                     text=event.delta, raw=event
@@ -281,6 +327,7 @@ class OpenAIGenerationAdapter(
                     refusal=stop.refusal,
                     reasoning=reasoning_summary(response),
                     tool_calls=tool_calls(response),
+                    native=native_output(response),
                     raw=event,
                 )
             case _:

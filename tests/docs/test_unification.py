@@ -140,6 +140,7 @@ TAKEN_AS_IS = {
     "CompletedEvent.text",
     "CompletedEvent.reasoning",
     "CompletedEvent.tool_calls",
+    "CompletedEvent.native",
     "CompletedEvent.raw",
 }
 """The shared fields an adapter copies or sets without a conversion."""

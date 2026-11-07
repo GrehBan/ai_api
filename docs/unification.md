@@ -87,8 +87,11 @@ Server tool use, service tier, speed and inference region (Anthropic) and tool u
 | --- | --- | --- | --- |
 | `TextDeltaEvent` | `response.output_text.delta` | `content_block_delta` with a `text_delta` | — |
 | `ReasoningDeltaEvent` | `response.reasoning_summary_text.delta` | `content_block_delta` with a non-empty `thinking_delta` | Only when a summary was asked for, as `GenerationResponse.reasoning`; `GenerationStream.text()` skips it. |
+| `ToolCallStartEvent` | `response.output_item.added` with a `function_call` item: its `call_id` and `name` | `content_block_start` with a `tool_use` block: its `id` and `name` | One per call, before its deltas. |
+| `ToolCallDeltaEvent` | `response.function_call_arguments.delta`, the call found by the item's `id` | `content_block_delta` with an `input_json_delta`, the call found by the block's index | The pieces of a call joined are its arguments; Anthropic may send none for `{}`. A delta for an item or block that no call opened raises `APIResponseError`. |
+| `ToolCallDoneEvent` | `response.output_item.done` with a `function_call` item | `content_block_stop` of a `tool_use` block | The whole `ToolCall`, before the end of the response, so a tool can start early. A call cut off by the token limit gets none. |
 | `CompletedEvent` | `response.completed`, `response.incomplete` | `message_stop`, with the counts of `message_start` and the last (cumulative) `message_delta` | Exactly one, as the last event: a stream that ends without it raises `APIStreamInterruptedError`, an event after it raises `APIResponseError`. `response.failed` and `error` events raise an `APIStatusError`. |
-| `OtherEvent` | Every other event, refusal deltas included | Every other event, `signature_delta` included | The provider's event is in `raw`. |
+| `OtherEvent` | Every other event, refusal deltas and `response.function_call_arguments.done` included | Every other event, `signature_delta` included (kept in `CompletedEvent.native`) | The provider's event is in `raw`. |
 
 `CompletedEvent` carries the fields of the whole response that a stream has:
 
@@ -105,6 +108,7 @@ Server tool use, service tier, speed and inference region (Anthropic) and tool u
 | `CompletedEvent.refusal` | As `GenerationResponse.refusal` | As `GenerationResponse.refusal`, from `message_delta.delta.stop_details` | — |
 | `CompletedEvent.reasoning` | As `GenerationResponse.reasoning`, from the event's `response` | The `thinking_delta`s joined | `None` without a summary. |
 | `CompletedEvent.tool_calls` | As `GenerationResponse.tool_calls`, from the event's `response` | From the `tool_use` blocks of the stream: `content_block_start` and the `input_json_delta`s after it | An `input_json_delta` without its `tool_use` block raises `APIResponseError`. |
+| `CompletedEvent.native` | As `GenerationResponse.native`, from the event's `response` | The content blocks put together from the stream: each block as it started, its `text`, `thinking` and `signature` pieces joined in, a `tool_use` block's `input` parsed from its pieces | `CompletedEvent.to_turn()` follows the rule of `GenerationResponse.to_turn()`. A block whose start did not come is opened from its first piece. Arguments that do not join into a JSON object raise `APIResponseError`. |
 | `CompletedEvent.raw` | The terminal event | `message_stop` | — |
 
 ## Errors
